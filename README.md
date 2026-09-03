@@ -28,8 +28,17 @@
 ```bash
 git clone <repo>
 cd project-soma
-cp .env.example .env      # 값을 채워 넣으세요
+cp .env.example .env                 # 값을 채워 넣으세요
+
+python -m venv .venv
+source .venv/bin/activate            # Windows: .venv\Scripts\activate
+
+# 공통 + 본인 폴더 것만 설치합니다
+pip install -r requirements.txt -r <본인폴더>/requirements.txt
 ```
+
+**Python 3.10 ~ 3.12** 를 씁니다. 3.13 은 mediapipe 가 아직 지원하지 않습니다.
+프론트는 `web/dependencies.txt` 를 보세요 (npm 없이 정적 HTML).
 
 > **`.env` 는 절대 커밋하지 않습니다.** `.gitignore` 에 들어 있지만 `git add -f` 로 강제하지 마세요.
 > DB 는 `postgres` 슈퍼유저 대신 앱 전용 롤을 만들어 쓰세요.

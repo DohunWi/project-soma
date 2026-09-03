@@ -1,0 +1,10 @@
+# DB — 스키마 · 마이그레이션 · 보고서
+-r ../requirements.txt
+
+psycopg2-binary>=2.9
+pandas>=2.2                      # 30분 시연 데이터 집계
+requests>=2.31                   # POST /api/report
+
+# 깜빡임은 초 단위 사건입니다.
+# 5초 스로틀 + JSON blob 한 덩어리로는 보고서를 만들 수 없습니다.
+# 이벤트 테이블(blink_events)과 수치 컬럼으로 나누세요.

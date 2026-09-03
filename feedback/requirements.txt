@@ -1,0 +1,8 @@
+# 피드백 — 모니터 상단 LED + 의자 진동
+-r ../requirements.txt
+
+pyserial>=3.5                    # USB-A 연결 LED / 진동 명령 전송
+python-socketio[client]>=5.11    # 서버에서 feedback 이벤트 수신
+
+# LED 를 무선으로 붙이면 여기에 통신 라이브러리가 추가됩니다.
+# 연결 방식(무선 vs USB-A)이 아직 미정입니다.

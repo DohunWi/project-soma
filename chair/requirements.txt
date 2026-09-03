@@ -1,0 +1,9 @@
+# 의자 — 시리얼 브릿지
+-r ../requirements.txt
+
+pyserial>=3.5
+python-socketio[client]>=5.11
+
+# 포트는 .env 의 CHAIR_SERIAL_PORT 로 지정합니다. 코드에 박지 마세요.
+#   Windows: COM3        macOS: /dev/tty.usbmodem*
+# 목록 확인:  python -m serial.tools.list_ports

@@ -1,8 +1,10 @@
-# 공용 (전원)
-python-dotenv>=1.0
-jsonschema>=4.0
+# 전원 공통.  각 디렉터리의 requirements.txt 를 추가로 설치하세요.
+#
+#   python -m venv .venv
+#   source .venv/bin/activate        (Windows: .venv\Scripts\activate)
+#   pip install -r requirements.txt -r <본인폴더>/requirements.txt
+#
+# Python 3.10 ~ 3.12 를 씁니다. 3.13 은 mediapipe 가 아직 안 됩니다.
 
-# 계층별 의존성은 각 디렉터리의 requirements.txt 를 보세요.
-#   server/requirements.txt   flask, python-socketio, eventlet, psycopg2-binary
-#   vision/requirements.txt   opencv-python, mediapipe
-#   chair/requirements.txt    pyserial, python-socketio[client]
+python-dotenv>=1.0        # .env 로딩
+jsonschema>=4.20          # docs/contracts 검증

@@ -1,0 +1,11 @@
+# 백엔드 — Flask + Socket.IO + PostgreSQL
+-r ../requirements.txt
+
+flask>=3.0
+python-socketio>=5.11
+eventlet>=0.35
+psycopg2-binary>=2.9
+
+# 주의: psycopg2 는 C 확장이라 eventlet 이 monkey_patch 하지 못합니다.
+# DB 쓰기를 이벤트 루프에서 직접 하면 소켓 전체가 멈춥니다.
+# 큐 + 쓰기 전용 스레드로 분리하세요.

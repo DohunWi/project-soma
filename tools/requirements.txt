@@ -1,0 +1,7 @@
+# 공용 도구 — mock 스트림, 로그 재생, 검증
+-r ../requirements.txt
+
+python-socketio[client]>=5.11
+
+# 서버 없이 쓰려면 이것도 필요 없습니다:
+#   python tools/mock/stream.py --stdout

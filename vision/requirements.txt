@@ -1,0 +1,13 @@
+# 웹캠 — 얼굴 거리 + 눈 깜빡임
+-r ../requirements.txt
+
+opencv-python>=4.9
+mediapipe>=0.10.14
+numpy>=1.24
+
+# 눈 깜빡임에는 Face Mesh(468점)가 필요합니다.
+# Pose(33점)에는 눈 윤곽이 없어 EAR 을 계산할 수 없습니다.
+#
+# mediapipe 설치가 실패하면:
+#   - Python 3.13 인지 확인 (아직 미지원). 3.12 로 내리세요
+#   - numpy 충돌이면 `pip install "numpy<2"` 후 재시도

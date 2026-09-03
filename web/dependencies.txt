@@ -1,0 +1,23 @@
+# 프론트 — 브라우저 의존성
+#
+# 빌드 도구 없이 정적 HTML 로 굽니다. npm 은 쓰지 않습니다.
+#
+# ─── 발표 전 반드시 로컬로 내려받으세요 ───────────────────────
+# 발표장 네트워크가 막히면 화면이 통째로 깨집니다.
+# web/dashboard/vendor/ 에 받아두고 <script src> 를 로컬 경로로 바꾸세요.
+
+Chart.js            https://cdn.jsdelivr.net/npm/chart.js
+Tailwind (play CDN) https://cdn.tailwindcss.com
+Pretendard          https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css
+Noto Sans KR        https://fonts.googleapis.com/css2?family=Noto+Sans+KR
+
+# ─── 추가 필요 ────────────────────────────────────────────────
+socket.io-client    https://cdn.socket.io/4.7.5/socket.io.min.js
+
+# 현재 시안은 raw WebSocket(ws://127.0.0.1:8000/ws)을 쓰는데
+# 서버는 Socket.IO(:5000)입니다. 프로토콜이 달라 접속되지 않습니다.
+# socket.io-client 로 교체해야 합니다.
+
+# ─── 팝업 알림 ────────────────────────────────────────────────
+# Notification API + Service Worker. 외부 라이브러리 불필요.
+# 브라우저가 실행 중이어야 동작합니다 (탭은 백그라운드여도 됨).
