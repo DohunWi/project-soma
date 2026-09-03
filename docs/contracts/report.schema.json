@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "report",
+  "description": "db/report → 서버 (POST /api/report) → 프론트. 세션 종료 또는 일간 집계.",
+  "type": "object",
+  "required": ["v", "user_name", "period", "summary"],
+  "properties": {
+    "v":         { "const": 1 },
+    "user_name": { "type": "string" },
+    "kind":      { "enum": ["session", "daily"], "default": "session" },
+
+    "period": {
+      "type": "object",
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "number" },
+        "end":   { "type": "number" }
+      }
+    },
+
+    "summary": {
+      "type": "object",
+      "description": "숫자는 실제 측정값입니다. 임계값을 그대로 적지 마세요",
+      "properties": {
+        "seated_sec":        { "type": "number" },
+        "static_total_sec":  { "type": "number", "description": "거의 안 움직인 시간의 누적. 자리 비움 제외" },
+        "low_blink_sec":     { "type": "number" },
+        "avg_blink_rate":    { "type": "number" },
+        "close_distance_sec":{ "type": "number" },
+        "imbalance_sec":     { "type": "number" },
+        "state_seconds":     { "type": "object",
+                               "description": "상태별 체류 시간",
+                               "properties": {
+                                 "NORMAL":  { "type": "number" },
+                                 "CAUTION": { "type": "number" },
+                                 "RISK":    { "type": "number" },
+                                 "ABSENT":  { "type": "number" } } },
+        "feedback_count":    { "type": "integer" },
+        "feedback_accepted": { "type": "integer",
+                               "description": "피드백 후 60초 내 상태가 개선된 횟수" }
+      }
+    },
+
+    "timeseries": {
+      "type": "array",
+      "description": "그래프용 다운샘플. 원본은 DB 에 있고 여기엔 표시용만 담습니다",
+      "items": {
+        "type": "object",
+        "properties": {
+          "t":          { "type": "number" },
+          "state":      { "type": "string" },
+          "blink_rate": { "type": "number" },
+          "score":      { "type": "integer" }
+        }
+      }
+    }
+  },
+
+  "examples": [
+    { "v": 1, "user_name": "guest", "kind": "session",
+      "period": { "start": 1725345600, "end": 1725347400 },
+      "summary": { "seated_sec": 1730, "static_total_sec": 980, "low_blink_sec": 640,
+                   "avg_blink_rate": 7.8, "close_distance_sec": 410, "imbalance_sec": 220,
+                   "state_seconds": { "NORMAL": 900, "CAUTION": 700, "RISK": 130, "ABSENT": 70 },
+                   "feedback_count": 4, "feedback_accepted": 3 },
+      "timeseries": [ { "t": 1725345660, "state": "NORMAL", "blink_rate": 15.2, "score": 92 } ] }
+  ]
+}

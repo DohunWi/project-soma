@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "feedback",
+  "description": "서버 → 액추에이터. 아키텍처 슬라이드에 없던 역방향 경로입니다. chair/bridge 는 이 때문에 읽기 전용이 아니라 양방향이어야 합니다.",
+  "type": "object",
+  "required": ["v", "t", "target", "action"],
+  "properties": {
+    "v":      { "const": 1 },
+    "t":      { "type": "number" },
+    "target": { "enum": ["chair_vibration", "ambient_led", "web_popup"] },
+    "action": { "type": "object" }
+  },
+
+  "allOf": [
+    {
+      "if":   { "properties": { "target": { "const": "chair_vibration" } } },
+      "then": { "properties": { "action": {
+        "type": "object",
+        "required": ["pattern"],
+        "properties": {
+          "pattern":   { "enum": ["short2", "long1", "off"],
+                         "description": "패턴으로 의미를 구분하지 않습니다. 무엇이 문제인지는 LED 가 보여줍니다" },
+          "intensity": { "type": "integer", "minimum": 0, "maximum": 255 }
+        } } } }
+    },
+    {
+      "if":   { "properties": { "target": { "const": "ambient_led" } } },
+      "then": { "properties": { "action": {
+        "type": "object",
+        "description": "모니터 상단 유닛. 인형은 껍데기이고 받침 LED 바가 신호를 집니다. 인형은 바의 빛으로 밝히므로 sat 하나가 둘을 동시에 결정합니다",
+        "required": ["pos", "width", "sat"],
+        "properties": {
+          "pos":   { "type": "number", "minimum": 0, "maximum": 1,
+                     "description": "켜진 위치. 0=왼쪽 1=오른쪽. 좌우 균형을 나타냅니다" },
+          "width": { "type": "number", "minimum": 0, "maximum": 1,
+                     "description": "켜진 폭. 앞으로 나올수록 좁아집니다" },
+          "sat":   { "type": "number", "minimum": 0, "maximum": 1,
+                     "description": "채도·밝기. 오래 굳어 있을수록 낮아지고, 움직이면 돌아옵니다" },
+          "pulse": { "enum": ["none", "pos", "width", "sat"],
+                     "description": "강조할 축. 한 번에 하나만. 셋이 동시에 맥동하면 읽히지 않습니다" }
+        } } } }
+    },
+    {
+      "if":   { "properties": { "target": { "const": "web_popup" } } },
+      "then": { "properties": { "action": {
+        "type": "object",
+        "required": ["title", "body"],
+        "properties": {
+          "title": { "type": "string", "maxLength": 40 },
+          "body":  { "type": "string", "maxLength": 80,
+                     "description": "사용자가 모르는 숫자를 하나 이상 포함합니다. '자세가 안 좋아요' 는 정보량이 0입니다" },
+          "level": { "enum": ["info", "caution", "risk"] }
+        } } } }
+    }
+  ],
+
+  "examples": [
+    { "v": 1, "t": 1725345600.3, "target": "ambient_led",
+      "action": { "pos": 0.62, "width": 0.4, "sat": 0.35, "pulse": "sat" } },
+    { "v": 1, "t": 1725345600.3, "target": "chair_vibration",
+      "action": { "pattern": "short2", "intensity": 180 } },
+    { "v": 1, "t": 1725345600.3, "target": "web_popup",
+      "action": { "title": "눈 깜빡임이 줄었어요", "body": "23분째 분당 6회예요. 잠깐 먼 곳을 볼까요?", "level": "caution" } }
+  ]
+}

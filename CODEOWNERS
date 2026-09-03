@@ -1,0 +1,19 @@
+# 디렉터리 하나 = 담당자 한 명.
+# 본인 폴더 밖은 건드리지 않습니다.
+# 아래 @이름 을 실제 GitHub 계정으로 바꾸세요.
+
+# ─── 계약: 전원 리뷰 ──────────────────────────────────────────
+/docs/contracts/    @dohun @backend @vision @db @frontend @hardware
+
+# ─── 담당별 ───────────────────────────────────────────────────
+/chair/             @hardware
+/vision/            @vision
+/fusion/            @vision @hardware
+/feedback/          @dohun
+/server/            @backend
+/db/                @db
+/web/               @frontend
+/tools/             @dohun
+
+# ─── 문서 ─────────────────────────────────────────────────────
+/docs/              @dohun

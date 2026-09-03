@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Project-Soma: 스마트 자세 교정 대시보드</title>
+
+<!-- 외부 라이브러리 및 폰트 -->
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');</style>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+
+<style>
+  /* 기본 리셋 및 레이아웃 */
+  body { font-family: 'Pretendard', 'Noto Sans KR', sans-serif; margin: 0; padding: 0; background-color: #f4f7f6; color: #333; }
+  .app-container { display: flex; height: 100vh; overflow: hidden; }
+
+  /* 좌측 사이드바 */
+  .sidebar { width: 240px; background-color: #ffffff; border-right: 1px solid #e5e7eb; padding: 20px 10px; display: flex; flex-direction: column; z-index: 10; }
+  .sidebar-logo { padding: 10px 20px; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px; color: #2c3e50; }
+  .menu-item { padding: 12px 20px; margin-bottom: 4px; border-radius: 8px; color: #4b5563; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 10px; }
+  .menu-item:hover { background-color: #f3f4f6; }
+  .menu-item.active { background-color: #f3f4f6; color: #111827; font-weight: 600; }
+
+  /* 우측 콘텐츠 영역 */
+  .main-content { flex: 1; padding: 30px 40px; overflow-y: auto; background-color: #f4f7f6; }
+  .view-section { display: none; }
+  .view-section.active { display: block; animation: fadeIn 0.3s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+  /* 대시보드 내부 컨텐츠 스타일 */
+  :root {
+      --bg-color: #f4f7f6;
+      --card-bg: #ffffff;
+      --text-main: #2c3e50;
+      --text-sub: #7f8c8d;
+      --good-color: #2ecc71;
+      --warn-color: #e67e22;
+      --danger-color: #e74c3c;
+      --neutral-color: #95a5a6;
+      --border-color: #ecf0f1;
+      --blue-color: #4a9eff;
+  }
+  .dashboard-container { max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
+  .header, .section-title { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; background: var(--card-bg); padding: 20px 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+  .header h1 { margin: 0; font-size: 1.3rem; font-weight: bold; }
+  .section-title { margin-top: 10px; background: transparent; box-shadow: none; padding: 0 10px; border-bottom: 2px solid var(--border-color); border-radius: 0; }
+  .connection-status { font-weight: bold; color: var(--neutral-color); display: flex; align-items: center; gap: 8px; }
+  .status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--neutral-color); }
+
+  .card { background: var(--card-bg); padding: 24px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); display: flex; flex-direction: column; justify-content: center; }
+  .card h3 { margin: 0 0 10px 0; color: var(--text-sub); font-size: 0.95rem; font-weight: 600;}
+  .status-card { grid-column: 1 / -1; text-align: center; padding: 40px 20px; border: 2px solid transparent; transition: all 0.3s ease; }
+  .status-card h2 { font-size: 2.2rem; margin: 10px 0; font-weight: bold; }
+  .status-card p { font-size: 1.1rem; color: var(--text-sub); margin: 0; }
+  .data-value { font-size: 1.8rem; font-weight: bold; }
+  .data-unit { font-size: 0.9rem; font-weight: normal; color: var(--text-sub); }
+  .chart-card { grid-column: 1 / -1; height: 350px; }
+
+  .feedback-card { grid-column: 1 / -1; background: rgba(46, 204, 113, 0.1); border-left: 5px solid var(--good-color); padding: 20px; border-radius: 8px; display: flex; align-items: center; gap: 15px; }
+  .feedback-icon { font-size: 2rem; }
+  .feedback-text h4 { margin: 0 0 5px 0; color: var(--text-main); font-size: 1.1rem; font-weight: bold; }
+  .feedback-text p { margin: 0; color: var(--text-sub); font-size: 0.95rem; }
+
+  .half-chart { grid-column: span 1; height: 300px; }
+  .half-chart-wide { grid-column: span 2; height: 300px; }
+  .chart-container { position: relative; height: 100%; width: 100%; }
+
+  .score-circle { width: 120px; height: 120px; border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 8px solid var(--neutral-color); transition: border-color 0.3s; background: white; }
+
+  /* 설정 화면 등 기타 뷰 스타일 */
+  .settings-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.02); }
+  .settings-card h3 { margin-top: 0; margin-bottom: 20px; font-size: 1.1rem; font-weight: bold; }
+  .setting-row { display: flex; justify-content: space-between; align-items: center; padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid #f3f4f6; }
+  .setting-row:last-child { border-bottom: none; padding-bottom: 0; margin-bottom: 0; }
+  select { padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; outline: none; }
+</style>
+</head>
+<body>
+
+<div class="app-container">
+  
+  <!-- 사이드바 -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">Project-Soma</div>
+    <!-- data-i18n 속성 추가 -->
+    <div class="menu-item active" onclick="switchView('monitoring', this)" data-i18n="menu_monitoring">실시간 모니터링</div>
+    <div class="menu-item" onclick="switchView('dashboard', this)" data-i18n="menu_dashboard">대시보드</div>
+    <div class="menu-item" onclick="switchView('settings', this)" data-i18n="menu_settings">설정</div>
+    <div class="menu-item" onclick="switchView('info', this)" data-i18n="menu_info">정보</div>
+  </aside>
+
+  <!-- 메인 콘텐츠 -->
+  <main class="main-content">
+    
+    <!-- 뷰 A: 실시간 모니터링 -->
+    <section id="view-monitoring" class="view-section active">
+      <div class="max-w-[1200px] mx-auto mb-6">
+          <nav class="flex justify-between items-center py-2 bg-transparent mb-4">
+              <h2 class="text-2xl font-bold text-gray-800" data-i18n="title_monitoring">실시간 모니터링</h2>
+              <div class="flex gap-2">
+                  <button class="px-4 py-2 text-sm text-gray-600 bg-white shadow-sm rounded-md hover:bg-gray-50 border border-gray-200 transition-colors" data-i18n="btn_pause">일시정지</button>
+                  <button class="px-4 py-2 text-sm text-white bg-blue-500 rounded-md hover:bg-blue-600 shadow-sm transition-colors" data-i18n="btn_login">로그인</button>
+              </div>
+          </nav>
+
+          <div class="grid grid-cols-3 gap-6 mb-6">
+              <div class="col-span-2 flex items-center gap-8 bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                  <div id="scoreRing" class="score-circle">
+                      <span id="currentScore" class="text-4xl font-bold text-gray-800">-</span>
+                      <span class="text-[10px] text-gray-500 font-semibold tracking-wide mt-1">SCORE</span>
+                  </div>
+                  <div>
+                      <div class="flex items-center gap-2 mb-1">
+                          <span id="topStatusDot" class="w-2 h-2 rounded-full bg-gray-400"></span>
+                          <span id="topStatusLabel" class="text-sm font-medium text-gray-500" data-i18n="status_waiting">대기 중</span>
+                      </div>
+                      <h1 id="topStatusMessage" class="text-3xl font-bold mb-1 text-gray-800" data-i18n="cam_wait">카메라 연결을 기다립니다</h1>
+                      <p id="topDetailFeedback" class="text-sm text-gray-500" data-i18n="cam_wait_sub">잠시만 기다려주세요...</p>
+                  </div>
+              </div>
+
+              <div class="col-span-1 bg-black rounded-xl overflow-hidden relative shadow-sm aspect-video flex items-center justify-center">
+                  <video id="webcamPreview" autoplay playsinline muted class="w-full h-full object-cover opacity-80"></video>
+                  <div class="absolute bottom-2 left-2 bg-black bg-opacity-60 text-white text-[10px] px-2 py-1 rounded" data-i18n="live_detecting">
+                      🔴 실시간 감지 중
+                  </div>
+              </div>
+          </div>
+      </div>
+
+      <div class="dashboard-container">
+          <div class="header">
+              <h1 data-i18n="conn_title">🪑 실시간 자세 데이터 백엔드 연동 현황</h1>
+              <div class="connection-status" id="conn-status">
+                  <div class="status-dot" id="conn-dot"></div>
+                  <span id="conn-text" data-i18n="server_wait">서버 연결 대기 중...</span>
+              </div>
+          </div>
+
+          <div class="card status-card" id="main-status-card">
+              <h3 data-i18n="current_posture">현재 실시간 자세 상태</h3>
+              <h2 id="posture-msg" data-i18n="data_wait">데이터 대기 중</h2>
+              <p id="posture-sub" data-i18n="analyzing">사용자의 상태를 분석하고 있습니다.</p>
+          </div>
+
+          <div class="card">
+              <h3 data-i18n="neck_angle">목 전방 기울기 (Neck Angle)</h3>
+              <div class="data-value"><span id="val-neck">0.0</span><span class="data-unit"> °</span></div>
+          </div>
+          <div class="card">
+              <h3 data-i18n="head_pitch">머리 숙임 (Head Pitch)</h3>
+              <div class="data-value"><span id="val-pitch">0.0</span><span class="data-unit"> °</span></div>
+          </div>
+          <div class="card">
+              <h3 data-i18n="shoulder_tilt">어깨 기울기 (Shoulder Tilt)</h3>
+              <div class="data-value"><span id="val-shoulder">0.00</span><span class="data-unit"> Ratio</span></div>
+          </div>
+      </div>
+    </section>
+
+    <!-- 뷰 B: 대시보드 -->
+    <section id="view-dashboard" class="view-section">
+      <div class="max-w-[1200px] mx-auto mb-6">
+          <nav class="flex justify-between items-center py-2 bg-transparent mb-4">
+              <h2 class="text-2xl font-bold text-gray-800" data-i18n="menu_dashboard">대시보드</h2>
+          </nav>
+      </div>
+
+      <div class="dashboard-container">
+          <div class="card chart-card">
+              <h3 data-i18n="recent_history">최근 자세 이력 (목 기울기 실시간 변화)</h3>
+              <div class="chart-container"><canvas id="realtimeChart"></canvas></div>
+          </div>
+
+          <div class="section-title">
+              <h2 style="margin: 0; color: var(--text-main); font-size: 1.2rem; font-weight: bold;" data-i18n="daily_report">일간 통계 리포트</h2>
+          </div>
+
+          <div class="feedback-card">
+              <div class="feedback-icon">🌟</div>
+              <div class="feedback-text">
+                  <h4 data-i18n="excellent">훌륭합니다!</h4>
+                  <p data-i18n="excellent_desc">오늘 하루 종일 바른 자세를 잘 유지하셨네요. 거북목 발생 빈도가 매우 낮습니다.</p>
+              </div>
+          </div>
+
+          <div class="card half-chart">
+              <h3 data-i18n="pie_title">오늘 하루 자세 비율</h3>
+              <div class="chart-container"><canvas id="pieChart"></canvas></div>
+          </div>
+
+          <div class="card half-chart-wide">
+              <h3 data-i18n="timeline_title">시간대별 자세 이력</h3>
+              <div class="chart-container"><canvas id="timelineChart"></canvas></div>
+          </div>
+      </div>
+    </section>
+
+    <!-- 뷰 C: 설정 화면 -->
+    <section id="view-settings" class="view-section">
+      <h2 class="text-2xl font-bold text-gray-800 mb-6" data-i18n="menu_settings">설정</h2>
+      
+      <div class="settings-card">
+        <h3 data-i18n="lang_setting">언어 설정</h3>
+        <!-- 이벤트 리스너(onchange) 추가 -->
+        <select id="langSelect" onchange="changeLanguage(this.value)">
+            <option value="ko">한국어</option>
+            <option value="en">English</option>
+        </select>
+      </div>
+
+      <div class="settings-card">
+        <h3 data-i18n="alert_setting">감지 및 알림 설정</h3>
+        <div class="setting-row">
+          <div>
+            <div style="font-weight: 600; color: #374151;" data-i18n="monitor_interval">모니터링 주기</div>
+            <div style="font-size: 0.85rem; color: #6b7280; margin-top: 4px;" data-i18n="interval_desc">자세를 분석하는 시간 간격을 설정합니다.</div>
+          </div>
+          <select>
+            <option data-i18n="sec_3">3초</option>
+            <option data-i18n="sec_5">5초</option>
+            <option data-i18n="sec_10">10초</option>
+          </select>
+        </div>
+        
+        <div class="setting-row">
+          <div>
+            <div style="font-weight: 600; color: #374151;" data-i18n="calib_title">캘리브레이션 (영점 조절)</div>
+            <div style="font-size: 0.85rem; color: #6b7280; margin-top: 4px;" data-i18n="calib_desc">자세 기준값을 현재 자세로 다시 설정합니다.</div>
+          </div>
+          <button style="padding: 8px 16px; border:1px solid #d1d5db; background:#fff; border-radius:6px; cursor:pointer; font-weight: 500; transition: background 0.2s;" onmouseover="this.style.background='#f9fafb'" onmouseout="this.style.background='#fff'" data-i18n="calib_btn">재설정 시작</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 뷰 D: 정보 -->
+    <section id="view-info" class="view-section">
+      <h2 class="text-2xl font-bold text-gray-800 mb-6" data-i18n="menu_info">정보</h2>
+      <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+        <h3 class="text-lg font-bold mb-2">Project-Soma</h3>
+        <p class="text-gray-600 mb-1" data-i18n="version">버전: 1.0.0</p>
+        <p class="text-gray-600" data-i18n="info_desc">스마트 자세 교정 솔루션 시스템입니다.</p>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+  /* =========================================
+     1. 다국어 (i18n) 번역 사전 객체
+     ========================================= */
+  const translations = {
+      ko: {
+          menu_monitoring: "실시간 모니터링", menu_dashboard: "대시보드", menu_settings: "설정", menu_info: "정보",
+          title_monitoring: "실시간 모니터링", btn_pause: "일시정지", btn_login: "로그인",
+          status_waiting: "대기 중", cam_wait: "카메라 연결을 기다립니다", cam_wait_sub: "잠시만 기다려주세요...",
+          live_detecting: "🔴 실시간 감지 중", conn_title: "🪑 실시간 자세 데이터 백엔드 연동 현황", server_wait: "서버 연결 대기 중...",
+          current_posture: "현재 실시간 자세 상태", data_wait: "데이터 대기 중", analyzing: "사용자의 상태를 분석하고 있습니다.",
+          neck_angle: "목 전방 기울기 (Neck Angle)", head_pitch: "머리 숙임 (Head Pitch)", shoulder_tilt: "어깨 기울기 (Shoulder Tilt)",
+          recent_history: "최근 자세 이력 (목 기울기 실시간 변화)", daily_report: "일간 통계 리포트",
+          excellent: "훌륭합니다!", excellent_desc: "오늘 하루 종일 바른 자세를 잘 유지하셨네요. 거북목 발생 빈도가 매우 낮습니다.",
+          pie_title: "오늘 하루 자세 비율", timeline_title: "시간대별 자세 이력",
+          lang_setting: "언어 설정", alert_setting: "감지 및 알림 설정", monitor_interval: "모니터링 주기", interval_desc: "자세를 분석하는 시간 간격을 설정합니다.",
+          sec_3: "3초", sec_5: "5초", sec_10: "10초",
+          calib_title: "캘리브레이션 (영점 조절)", calib_desc: "자세 기준값을 현재 자세로 다시 설정합니다.", calib_btn: "재설정 시작",
+          version: "버전: 1.0.0", info_desc: "스마트 자세 교정 솔루션 시스템입니다.", server_connected: "서버 연결됨", server_disconnected: "서버 연결 끊김"
+      },
+      en: {
+          menu_monitoring: "Real-time Monitoring", menu_dashboard: "Dashboard", menu_settings: "Settings", menu_info: "Info",
+          title_monitoring: "Real-time Monitoring", btn_pause: "Pause", btn_login: "Login",
+          status_waiting: "Waiting", cam_wait: "Waiting for camera connection", cam_wait_sub: "Please wait a moment...",
+          live_detecting: "🔴 Live Detecting", conn_title: "🪑 Real-time Backend Data Status", server_wait: "Waiting for server...",
+          current_posture: "Current Posture Status", data_wait: "Waiting for data", analyzing: "Analyzing user status.",
+          neck_angle: "Neck Angle", head_pitch: "Head Pitch", shoulder_tilt: "Shoulder Tilt",
+          recent_history: "Recent Posture History (Neck Angle)", daily_report: "Daily Report",
+          excellent: "Excellent!", excellent_desc: "You have maintained good posture all day. Forward head posture frequency is very low.",
+          pie_title: "Daily Posture Ratio", timeline_title: "Timeline History",
+          lang_setting: "Language Settings", alert_setting: "Detection & Alert Settings", monitor_interval: "Monitoring Interval", interval_desc: "Sets the time interval for analyzing posture.",
+          sec_3: "3 sec", sec_5: "5 sec", sec_10: "10 sec",
+          calib_title: "Calibration (Zero Point)", calib_desc: "Resets the posture baseline to your current posture.", calib_btn: "Start Reset",
+          version: "Version: 1.0.0", info_desc: "Smart Posture Correction Solution System.", server_connected: "Server Connected", server_disconnected: "Server Disconnected"
+      }
+  };
+
+  let currentLang = 'ko';
+  let lastServerStatus = false; // 서버 연결 상태 추적용
+  let lastPostureData = null; // 마지막 수신 데이터 추적용
+
+  // 언어 변경 함수
+  function changeLanguage(lang) {
+      currentLang = lang;
+      
+      // 1. 고정된 텍스트 번역 업데이트
+      document.querySelectorAll('[data-i18n]').forEach(el => {
+          const key = el.getAttribute('data-i18n');
+          if (translations[lang][key]) {
+              el.innerText = translations[lang][key];
+          }
+      });
+
+      // 2. 서버 연결 상태 메시지 업데이트
+      const connText = document.getElementById('conn-text');
+      if (lastServerStatus) {
+          connText.innerText = translations[lang].server_connected;
+      } else {
+          // 최초 대기 상태가 아닐 때만 '연결 끊김' 적용
+          if (connText.innerText !== translations['ko'].server_wait && connText.innerText !== translations['en'].server_wait) {
+              connText.innerText = translations[lang].server_disconnected;
+          }
+      }
+
+      // 3. 실시간으로 화면에 떠있는 자세 메시지 즉시 번역 업데이트
+      if (lastPostureData) {
+          updateDashboardUI(lastPostureData);
+      }
+  }
+
+  /* =========================================
+     화면 전환(탭) 로직
+     ========================================= */
+  function switchView(viewId, clickedMenu) {
+    document.querySelectorAll('.view-section').forEach(section => { section.classList.remove('active'); });
+    document.getElementById('view-' + viewId).classList.add('active');
+    document.querySelectorAll('.menu-item').forEach(menu => { menu.classList.remove('active'); });
+    clickedMenu.classList.add('active');
+  }
+
+  /* =========================================
+     웹캠 연동 로직
+     ========================================= */
+  const videoElement = document.getElementById('webcamPreview');
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({ video: true })
+          .then(stream => { videoElement.srcObject = stream; })
+          .catch(err => { console.error("웹캠 접근 권한이 없습니다.", err); });
+  }
+
+  /* =========================================
+     차트 초기화 및 업데이트 (Chart.js)
+     ========================================= */
+  const ctxRealtime = document.getElementById('realtimeChart').getContext('2d');
+  const MAX_POINTS = 30;
+  const realtimeChart = new Chart(ctxRealtime, {
+      type: 'line',
+      data: {
+          labels: Array(MAX_POINTS).fill(''),
+          datasets: [{ label: 'Neck Angle', data: Array(MAX_POINTS).fill(0), borderColor: '#4a9eff', backgroundColor: 'rgba(74, 158, 255, 0.1)', borderWidth: 2, fill: true, tension: 0.4, pointRadius: 0 }]
+      },
+      options: { responsive: true, maintainAspectRatio: false, scales: { y: { min: -10, max: 50 }, x: { display: false } }, animation: { duration: 0 } }
+  });
+  function updateRealtimeChart(val) {
+      const data = realtimeChart.data.datasets[0].data;
+      data.push(val);
+      if (data.length > MAX_POINTS) data.shift();
+      realtimeChart.update();
+  }
+
+  const ctxPie = document.getElementById('pieChart').getContext('2d');
+  new Chart(ctxPie, {
+      type: 'doughnut',
+      data: { labels: ['GOOD', 'BAD_NECK', 'ABSENT'], datasets: [{ data: [60, 30, 10], backgroundColor: ['#2ecc71', '#4a9eff', '#95a5a6'], borderWidth: 0 }] },
+      options: { responsive: true, maintainAspectRatio: false }
+  });
+
+  const ctxTimeline = document.getElementById('timelineChart').getContext('2d');
+  new Chart(ctxTimeline, {
+      type: 'bar',
+      data: {
+          labels: ['09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00'],
+          datasets: [{ label: 'Status', data: [1, 1, 1, 1, 1, 1, 1, 1, 1], backgroundColor: ['#2ecc71', '#2ecc71', '#2ecc71', '#2ecc71', '#2ecc71', '#4a9eff', '#2ecc71', '#4a9eff', '#95a5a6'], borderRadius: 4 }]
+      },
+      options: { responsive: true, maintainAspectRatio: false, scales: { y: { display: false } }, plugins: { tooltip: { callbacks: { label: function(context) { return 'Status'; } } } } }
+  });
+
+  /* =========================================
+     WebSocket 실시간 연동 로직 (다국어 지원)
+     ========================================= */
+  const POSTURE_MAP = {
+      "GOOD": { 
+          color: "var(--good-color)", bg: "rgba(46, 204, 113, 0.1)", score: 100,
+          ko: { msg: "✨ 아주 좋은 자세입니다!", sub: "균형이 잘 맞습니다.", topLabel: "양호", topMsg: "잘 앉아 있어요", topDetail: "안정적인 자세를 유지하고 있습니다. 계속 유지해주세요!" },
+          en: { msg: "✨ Excellent Posture!", sub: "Perfect balance.", topLabel: "Good", topMsg: "Sitting well", topDetail: "You are maintaining a stable posture. Keep it up!" }
+      },
+      "BAD_NECK": { 
+          color: "var(--blue-color)", bg: "rgba(74, 158, 255, 0.1)", score: 45,
+          ko: { msg: "⚠️ 거북목 주의!", sub: "목이 앞으로 많이 나왔습니다.", topLabel: "주의", topMsg: "자세가 무너졌어요!", topDetail: "거북목 자세가 감지되었습니다. 허리를 펴고 화면과 거리를 두세요." },
+          en: { msg: "⚠️ Forward Head Posture!", sub: "Your neck is protruding forward.", topLabel: "Warning", topMsg: "Posture broken!", topDetail: "Forward head posture detected. Straighten your back." }
+      },
+      "BAD_SHOULDER": { 
+          color: "var(--danger-color)", bg: "rgba(231, 76, 60, 0.1)", score: 60,
+          ko: { msg: "⚠️ 어깨 비대칭 주의!", sub: "어깨가 한쪽으로 기울어졌습니다.", topLabel: "주의", topMsg: "어깨 비대칭 발생!", topDetail: "한쪽으로 치우쳐 앉아있습니다. 양 어깨의 수평을 맞춰주세요." },
+          en: { msg: "⚠️ Shoulder Asymmetry!", sub: "Your shoulders are tilted.", topLabel: "Warning", topMsg: "Asymmetry detected!", topDetail: "You are leaning to one side. Balance your shoulders." }
+      },
+      "BAD_WEIGHT": { 
+          color: "var(--warn-color)", bg: "rgba(230, 126, 34, 0.1)", score: 75,
+          ko: { msg: "⚠️ 체중 편중 주의!", sub: "몸이 한쪽으로 치우쳐 있습니다.", topLabel: "경고", topMsg: "체중이 쏠려있어요", topDetail: "압력 센서가 한쪽 쏠림을 감지했습니다. 정자세로 앉아주세요." },
+          en: { msg: "⚠️ Weight Imbalance!", sub: "Your body is leaning to one side.", topLabel: "Warning", topMsg: "Weight unbalanced", topDetail: "Pressure sensor detected leaning. Please sit up straight." }
+      },
+      "BAD_COMPLEX": { 
+          color: "var(--danger-color)", bg: "rgba(231, 76, 60, 0.15)", score: 30,
+          ko: { msg: "🚨 복합 척추 불량 주의!", sub: "자세를 크게 고쳐앉아 주세요.", topLabel: "위험", topMsg: "자세 교정이 시급합니다", topDetail: "척추 측만과 거북목이 동시 감지되었습니다. 스트레칭을 해주세요." },
+          en: { msg: "🚨 Complex Bad Posture!", sub: "Please correct your posture immediately.", topLabel: "Danger", topMsg: "Urgent correction needed", topDetail: "Scoliosis and forward head detected. Please stretch." }
+      },
+      "ABSENT": { 
+          color: "var(--neutral-color)", bg: "var(--card-bg)", score: "-",
+          ko: { msg: "🪑 자리 비움", sub: "사용자가 감지되지 않습니다.", topLabel: "자리비움", topMsg: "잠깐 자리를 비웠어요", topDetail: "자리에 돌아오면 자동으로 다시 시작해요." },
+          en: { msg: "🪑 Absent", sub: "User not detected.", topLabel: "Absent", topMsg: "You stepped away", topDetail: "Will automatically restart when you return." }
+      },
+      "UNKNOWN": { 
+          color: "var(--text-main)", bg: "var(--card-bg)", score: "-",
+          ko: { msg: "데이터 분석 중...", sub: "", topLabel: "대기", topMsg: "자세를 감지하고 있습니다", topDetail: "..." },
+          en: { msg: "Analyzing data...", sub: "", topLabel: "Waiting", topMsg: "Detecting your posture", topDetail: "..." }
+      }
+  };
+
+  const ws = new WebSocket('ws://127.0.0.1:8000/ws');
+  
+  const connDot = document.getElementById('conn-dot');
+  const connText = document.getElementById('conn-text');
+  
+  ws.onopen = function() {
+      lastServerStatus = true;
+      connDot.style.background = 'var(--good-color)';
+      connText.innerText = translations[currentLang].server_connected;
+      connText.style.color = 'var(--good-color)';
+  };
+  ws.onclose = function() {
+      lastServerStatus = false;
+      connDot.style.background = 'var(--danger-color)';
+      connText.innerText = translations[currentLang].server_disconnected;
+      connText.style.color = 'var(--danger-color)';
+  };
+
+  ws.onmessage = function(event) {
+      try {
+          const data = JSON.parse(event.data);
+          lastPostureData = data; // 현재 데이터 캐싱 (언어 변경 시 재렌더링 용도)
+          updateDashboardUI(data); // 화면 업데이트 함수 호출
+      } catch (e) {
+          console.error("데이터 파싱 에러:", e);
+      }
+  };
+
+  // 실시간 UI 업데이트 함수 분리
+  function updateDashboardUI(data) {
+      document.getElementById('val-neck').innerText = data.neck_angle ? data.neck_angle.toFixed(1) : "0.0";
+      document.getElementById('val-pitch').innerText = data.head_pitch ? data.head_pitch.toFixed(1) : "0.0";
+      document.getElementById('val-shoulder').innerText = data.shoulder_tilt ? data.shoulder_tilt.toFixed(3) : "0.00";
+
+      const stateKey = data.posture_state || "UNKNOWN";
+      const stateInfo = POSTURE_MAP[stateKey] || POSTURE_MAP["UNKNOWN"];
+      const textInfo = stateInfo[currentLang]; // 현재 언어에 맞는 텍스트 세트 꺼내기
+
+      // 하단 카드 갱신
+      const postureMsg = document.getElementById('posture-msg');
+      postureMsg.innerText = textInfo.msg;
+      postureMsg.style.color = stateInfo.color;
+      document.getElementById('posture-sub').innerText = textInfo.sub;
+      const mainCard = document.getElementById('main-status-card');
+      mainCard.style.backgroundColor = stateInfo.bg;
+      mainCard.style.borderColor = stateInfo.color;
+
+      // 상단 점수 카드 갱신
+      document.getElementById('currentScore').innerText = stateInfo.score;
+      document.getElementById('scoreRing').style.borderColor = stateInfo.color;
+      document.getElementById('topStatusDot').style.backgroundColor = stateInfo.color;
+      document.getElementById('topStatusLabel').innerText = textInfo.topLabel;
+      document.getElementById('topStatusMessage').innerText = textInfo.topMsg;
+      document.getElementById('topDetailFeedback').innerText = textInfo.topDetail;
+
+      // 차트 갱신 (자리 비움 아닐 때만)
+      if (stateKey !== "ABSENT") updateRealtimeChart(data.neck_angle || 0);
+  }
+</script>
+
+</body>
+</html>

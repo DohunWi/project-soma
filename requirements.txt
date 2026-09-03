@@ -1,0 +1,8 @@
+# 공용 (전원)
+python-dotenv>=1.0
+jsonschema>=4.0
+
+# 계층별 의존성은 각 디렉터리의 requirements.txt 를 보세요.
+#   server/requirements.txt   flask, python-socketio, eventlet, psycopg2-binary
+#   vision/requirements.txt   opencv-python, mediapipe
+#   chair/requirements.txt    pyserial, python-socketio[client]

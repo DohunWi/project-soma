@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "state",
+  "description": "fusion → 서버 → 프론트/피드백. Socket.IO 이벤트명: 'state'. 판정은 여기서만 합니다 — 프론트에 점수 규칙을 넣지 마세요.",
+  "type": "object",
+  "required": ["v", "t", "user_name", "state", "confidence"],
+  "properties": {
+    "v":         { "const": 1 },
+    "t":         { "type": "number" },
+    "user_name": { "type": "string" },
+
+    "state":      { "enum": ["NORMAL", "CAUTION", "RISK", "ABSENT"] },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1,
+                    "description": "0.5 미만이면 피드백을 올리지 않습니다 (조용해지는 방향으로만)" },
+    "score":      { "type": "integer", "minimum": 0, "maximum": 100,
+                    "description": "대시보드 표시용. 계산은 fusion 이 합니다" },
+
+    "reasons": {
+      "type": "array",
+      "items": { "enum": ["low_blink", "close_distance", "imbalance", "static_hold", "no_backrest"] },
+      "description": "왜 그 상태인지. UI 문구와 피드백 채널 선택에 씁니다"
+    },
+
+    "metrics": {
+      "type": "object",
+      "description": "대시보드에 그대로 표시되는 값들",
+      "properties": {
+        "balance":          { "enum": ["LEFT", "CENTER", "RIGHT"] },
+        "seated":           { "type": "boolean" },
+        "blink_rate":       { "type": "number" },
+        "low_blink_sec":    { "type": "number", "description": "깜빡임이 임계 이하로 유지된 연속 초" },
+        "face_distance_cm": { "type": "number" },
+        "static_hold_sec":  { "type": "number", "description": "거의 안 움직인 연속 초" },
+        "session_sec":      { "type": "number" }
+      }
+    }
+  },
+
+  "examples": [
+    { "v": 1, "t": 1725345600.2, "user_name": "guest",
+      "state": "CAUTION", "confidence": 0.82, "score": 65,
+      "reasons": ["low_blink", "static_hold"],
+      "metrics": { "balance": "CENTER", "seated": true, "blink_rate": 6.1,
+                   "low_blink_sec": 420, "face_distance_cm": 47.0,
+                   "static_hold_sec": 1380, "session_sec": 4200 } }
+  ]
+}

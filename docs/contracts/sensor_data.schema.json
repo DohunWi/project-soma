@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "sensor_data",
+  "description": "수집 계층 → 서버. Socket.IO 이벤트명: 'sensor_data'. 소스마다 독립적으로 보냅니다.",
+  "type": "object",
+  "required": ["v", "t", "source", "user_name"],
+  "properties": {
+    "v":         { "const": 1 },
+    "t":         { "type": "number", "description": "측정 시각 (Unix epoch, 초, 소수 허용). 보내는 쪽이 측정 순간에 찍습니다" },
+    "source":    { "enum": ["chair", "vision"] },
+    "device_id": { "type": "string", "default": "smart_chair_01" },
+    "user_name": { "type": "string", "description": ".env 의 USER_NAME 또는 CLI 인자. 터미널 input() 금지" },
+
+    "chair": {
+      "type": "object",
+      "description": "source == 'chair' 일 때 필수",
+      "required": ["pressure"],
+      "properties": {
+        "pressure": {
+          "type": "array", "items": { "type": "integer" },
+          "minItems": 4, "maxItems": 4,
+          "description": "[전좌, 전우, 후좌, 후우] 순서. 순서를 바꾸지 마세요"
+        },
+        "ir": {
+          "type": "array", "items": { "type": "integer" },
+          "description": "적외선 거리. 현재 1채널(허리). -1 은 미감지"
+        }
+      }
+    },
+
+    "vision": {
+      "type": "object",
+      "description": "source == 'vision' 일 때 필수. 영상은 절대 보내지 않습니다 — 수치만",
+      "properties": {
+        "blink":            { "type": "boolean", "description": "이 프레임에서 깜빡임 사건 발생 여부" },
+        "blink_rate":       { "type": "number",  "description": "최근 60초 분당 깜빡임 수" },
+        "face_distance_cm": { "type": "number",  "description": "얼굴 ↔ 모니터 추정 거리" },
+        "face_detected":    { "type": "boolean" }
+      }
+    }
+  },
+
+  "examples": [
+    { "v": 1, "t": 1725345600.123, "source": "chair", "device_id": "smart_chair_01",
+      "user_name": "guest",
+      "chair": { "pressure": [900, 700, 1000, 910], "ir": [250] } },
+
+    { "v": 1, "t": 1725345600.150, "source": "vision", "user_name": "guest",
+      "vision": { "blink": true, "blink_rate": 8.4, "face_distance_cm": 48.2, "face_detected": true } }
+  ]
+}

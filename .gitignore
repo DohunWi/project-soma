@@ -1,0 +1,35 @@
+# 환경변수 — 절대 커밋 금지
+.env
+.env.local
+*.env
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# 로그 · 수집 데이터
+logs/
+data/raw/
+*.jsonl
+!tools/mock/*.jsonl
+
+# 캘리브레이션 (기기별)
+baseline.json
+
+# OS · 에디터
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Node
+node_modules/
+dist/
+
+# Arduino
+*.hex
+build/
