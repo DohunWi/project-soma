@@ -46,6 +46,9 @@ def main():
     else:
         spawn("mock", [PY, "tools/mock/stream.py", "--scenario", "fatigue", "--speed", "20"])
 
+    spawn("policy", [PY, "feedback/policy/policy.py"])
+    spawn("led",    [PY, "feedback/ambient_led/driver.py"])
+
     if not args.no_web:
         spawn("dashboard", [PY, "-m", "http.server", str(args.web_port),
                             "--directory", "web/dashboard"])
