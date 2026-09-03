@@ -33,3 +33,6 @@ dist/
 # Arduino
 *.hex
 build/
+
+# 웹캠 평가 녹화 — 얼굴 파생 데이터. 집계 결과만 문서에 남깁니다
+vision/eval/data/

@@ -38,11 +38,9 @@ try:
 except ImportError:
     sys.exit("opencv / mediapipe 가 없습니다.  pip install -r vision/requirements.txt")
 
-from calibrator import Calibrator          # vision/calibrator.py
-from ear import BlinkCounter, face_ear     # vision/blink/ear.py
-
-# 얼굴 폭: Face Mesh 좌우 얼굴 경계. 좌우 회전에 비교적 안정적입니다
-FACE_L, FACE_R = 234, 454
+from calibrator import Calibrator                       # vision/calibrator.py
+from ear import BlinkCounter, face_ear                  # vision/blink/ear.py
+from geometry import face_width_px, is_frontal, yaw_asymmetry   # vision/geometry.py
 
 SEND_HZ = 2.0     # 서버 전송 주기. 깜빡임 사건은 발생 즉시 별도로 보냅니다
 
@@ -109,21 +107,27 @@ def main():
             res = mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
 
             detected = bool(res.multi_face_landmarks)
-            ear = dist_cm = width_px = None
+            ear = dist_cm = width_px = yaw = None
+            frontal = False
             blinked = False
 
             if detected:
                 lm = res.multi_face_landmarks[0].landmark
                 pts = {i: (lm[i].x * w, lm[i].y * h) for i in range(len(lm))}
+
+                # 깜빡임은 좌우 회전에 견딥니다 — EAR 은 눈 안에서의 비율입니다
                 ear = face_ear(pts)
                 blinked = counter.update(ear, now)
 
-                lx, ly = pts[FACE_L]
-                rx, ry = pts[FACE_R]
-                width_px = ((rx - lx) ** 2 + (ry - ly) ** 2) ** 0.5
-                dist_cm = calib.distance_cm(width_px)
+                # 거리는 다릅니다. 고개를 돌리면 얼굴 폭이 투영상 줄어
+                # "멀어졌다" 고 오판합니다. 정면일 때만 씁니다 (geometry.py 참조)
+                yaw = yaw_asymmetry(pts)
+                frontal = is_frontal(pts)
+                width_px = face_width_px(pts)
+                if frontal:
+                    dist_cm = calib.distance_cm(width_px)
 
-                if calib.is_calibrating():
+                if calib.is_calibrating() and frontal:
                     calib.add_sample({"face_width_px": width_px,
                                       "blink_rate": counter.rate(now)})
 
@@ -147,7 +151,8 @@ def main():
 
             if args.preview:
                 txt = (f"EAR {ear:.3f}  " if ear else "no face  ") + \
-                      (f"{dist_cm:.0f}cm  " if dist_cm else "") + \
+                      (f"{dist_cm:.0f}cm  " if dist_cm
+                       else ("(고개 돌림)  " if detected and not frontal else "")) + \
                       f"blink {rate:.1f}/min"
                 if calib.is_calibrating():
                     txt = f"CALIBRATING {calib.progress()*100:.0f}%  " + txt
