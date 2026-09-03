@@ -9,7 +9,7 @@
     "t":         { "type": "number" },
     "user_name": { "type": "string" },
 
-    "state":      { "enum": ["NORMAL", "CAUTION", "RISK", "ABSENT"] },
+    "state":      { "enum": ["NORMAL", "CAUTION", "DANGER", "ABSENT"] },
     "confidence": { "type": "number", "minimum": 0, "maximum": 1,
                     "description": "0.5 미만이면 피드백을 올리지 않습니다 (조용해지는 방향으로만)" },
     "score":      { "type": "integer", "minimum": 0, "maximum": 100,

@@ -158,7 +158,7 @@
 ## 6. 상태
 
 ```
-NORMAL → CAUTION → RISK        (+ ABSENT: 자리 비움)
+NORMAL → CAUTION → DANGER        (+ ABSENT: 자리 비움)
 ```
 
 | 판정 근거 | 주의 | 위험 |

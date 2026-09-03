@@ -33,7 +33,7 @@
                                "properties": {
                                  "NORMAL":  { "type": "number" },
                                  "CAUTION": { "type": "number" },
-                                 "RISK":    { "type": "number" },
+                                 "DANGER":    { "type": "number" },
                                  "ABSENT":  { "type": "number" } } },
         "feedback_count":    { "type": "integer" },
         "feedback_accepted": { "type": "integer",
@@ -61,7 +61,7 @@
       "period": { "start": 1725345600, "end": 1725347400 },
       "summary": { "seated_sec": 1730, "static_total_sec": 980, "low_blink_sec": 640,
                    "avg_blink_rate": 7.8, "close_distance_sec": 410, "imbalance_sec": 220,
-                   "state_seconds": { "NORMAL": 900, "CAUTION": 700, "RISK": 130, "ABSENT": 70 },
+                   "state_seconds": { "NORMAL": 900, "CAUTION": 700, "DANGER": 130, "ABSENT": 70 },
                    "feedback_count": 4, "feedback_accepted": 3 },
       "timeseries": [ { "t": 1725345660, "state": "NORMAL", "blink_rate": 15.2, "score": 92 } ] }
   ]

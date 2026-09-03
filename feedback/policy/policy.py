@@ -94,7 +94,7 @@ class VibrationPolicy:
 
         if d.get("confidence", 0) < CONF_MIN:     # 불확실하면 조용히
             return None
-        if state != "RISK":                       # 진동은 RISK 에서만
+        if state != "DANGER":                       # 진동은 DANGER 에서만
             return None
         if now - (self.session_start or now) < SESSION_QUIET:
             return None

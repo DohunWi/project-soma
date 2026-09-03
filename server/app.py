@@ -148,8 +148,7 @@ def on_sensor_data(sid, payload):
             "face_distance_cm": v.get("face_distance_cm"),
             "face_detected":    v.get("face_detected"),
         })
-        if v.get("blink"):
-            db.put_blink(user, t)
+        # 깜빡임 사건은 raw_data 에 담겨 sensor_logs 로 들어갑니다
 
     now = max(t, time.time())
     sample = merged(sess, now)
@@ -159,16 +158,22 @@ def on_sensor_data(sid, payload):
 
     sio.emit("state", decision)
 
-    # DB 는 1초에 한 번만. 원본 해상도가 필요하면 blink_events 를 보세요
+    # sensor_logs 는 소스마다 매 샘플 넣습니다 (의자 1Hz, 웹캠 2Hz).
+    # fatigue_logs 는 상태 로그라 1초에 한 번이면 충분합니다.
+    db.put_sample(payload, decision)
     if now - sess.last_emit >= 1.0:
         sess.last_emit = now
-        db.put_sample(user, payload, decision)
+        db.put_state(decision)
 
 
 @sio.on("feedback")
 def on_feedback(sid, payload):
-    """액추에이터로 그대로 중계합니다. 정책은 feedback/policy 가 정합니다."""
+    """액추에이터로 중계하고 기록합니다. 정책은 feedback/policy 가 정합니다."""
     sio.emit("feedback", payload, skip_sid=sid)
+    # 앰비언트(LED)는 상시 미러링이라 개입이 아닙니다 — 기록하면 초당 수십 행이 쌓입니다.
+    # 명시 개입만 남깁니다.
+    if payload.get("target") in ("chair_vibration", "web_popup"):
+        db.put_feedback(payload)
 
 
 # ── HTTP ─────────────────────────────────────────────────────────────

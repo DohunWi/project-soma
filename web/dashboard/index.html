@@ -89,7 +89,7 @@
 const STATE_UI = {
   NORMAL:  { label: "정상",     color: "var(--normal)" },
   CAUTION: { label: "주의",     color: "var(--caution)" },
-  RISK:    { label: "위험",     color: "var(--risk)" },
+  DANGER:    { label: "위험",     color: "var(--risk)" },
   ABSENT:  { label: "자리 비움", color: "var(--absent)" },
 };
 const REASON_TEXT = {
@@ -169,7 +169,7 @@ socket.on("state", d => {
 
   // 팝업: 위험 상태에서만, 5분에 한 번까지.
   // 숫자 없는 알림은 내보내지 않습니다 — "자세가 안 좋아요" 는 정보량이 0입니다.
-  if (d.state === "RISK" && reasons && Date.now() - lastNotified > 300000) {
+  if (d.state === "DANGER" && reasons && Date.now() - lastNotified > 300000) {
     lastNotified = Date.now();
     notify("잠깐 쉬어갈까요?", reasons);
   }

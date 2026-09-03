@@ -157,7 +157,7 @@ def step(st: FusionState, s: dict, now: float):
     if close_dist >= LOW_BLINK_CAUTION:  reasons.append("close_distance"); level = max(level, 1)
     if imbalance_sec >= LOW_BLINK_CAUTION: reasons.append("imbalance");    level = max(level, 1)
 
-    state = ("NORMAL", "CAUTION", "RISK")[level]
+    state = ("NORMAL", "CAUTION", "DANGER")[level]
 
     # 웹캠이 없으면 신뢰도를 낮춥니다. 서버는 confidence < 0.5 면 승격하지 않습니다.
     confidence = 0.9 if s.get("face_detected") else 0.55
@@ -168,7 +168,7 @@ def step(st: FusionState, s: dict, now: float):
 
 
 def _decision(st, s, now, state, confidence, reasons):
-    score = {"NORMAL": 90, "CAUTION": 60, "RISK": 30, "ABSENT": 0}[state]
+    score = {"NORMAL": 90, "CAUTION": 60, "DANGER": 30, "ABSENT": 0}[state]
     return {
         "v": 1,
         "t": round(now, 3),

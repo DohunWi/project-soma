@@ -125,7 +125,7 @@ except (KeyError, ValueError) as e:
 | 단위가 있는 값 | **이름에 단위를 붙입니다** | `_cm`, `_sec`, `_ms` |
 | 시각 | `t` (Unix epoch 초) | `"t": 1725345600.123` |
 | 지속 시간 | `*_sec` | `static_hold_sec` |
-| 상태 문자열 | `UPPER_SNAKE` | `NORMAL` `CAUTION` `RISK` `ABSENT` |
+| 상태 문자열 | `UPPER_SNAKE` | `NORMAL` `CAUTION` `DANGER` `ABSENT` |
 
 **단위를 이름에 넣는 규칙이 실제로 사고를 막습니다.** 거리센서는 mm 를 내고
 화면에는 cm 로 표시합니다. `distance` 만 있으면 어느 쪽인지 알 수 없습니다.
