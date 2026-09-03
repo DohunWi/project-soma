@@ -43,13 +43,37 @@ pip install -r requirements.txt -r <본인폴더>/requirements.txt
 > **`.env` 는 절대 커밋하지 않습니다.** `.gitignore` 에 들어 있지만 `git add -f` 로 강제하지 마세요.
 > DB 는 `postgres` 슈퍼유저 대신 앱 전용 롤을 만들어 쓰세요.
 
+### 실행
+
+```bash
+python tools/demo/run_all.py          # 서버 + mock + 대시보드 (하드웨어 없이)
+python tools/demo/run_all.py --real   # 서버 + 의자 + 웹캠 + 대시보드
+```
+
+낱개로 띄우려면:
+
+```bash
+python server/app.py                              # 백엔드      :5000
+python -m http.server 5500 --directory web/dashboard   # 대시보드 :5500
+python chair/bridge/bridge.py                     # 의자
+python vision/run.py --preview                    # 웹캠
+```
+
 ### 하드웨어 없이 개발하기
 
 **의자는 1대이고 공용공간에 있습니다.** 기다리지 말고 mock 으로 개발하세요.
 
 ```bash
-python tools/mock/stream.py        # 가짜 센서 스트림
-python tools/replay/replay.py <로그파일>   # 녹화 로그 재생
+python tools/mock/stream.py                  # 가짜 센서 → 서버
+python tools/mock/stream.py --stdout         # 서버조차 없이 jsonl
+python chair/bridge/bridge.py --stdout       # 실제 의자, 서버 없이
+python vision/run.py --stdout                # 실제 웹캠, 서버 없이
+```
+
+### 테스트
+
+```bash
+pytest fusion/     # 상태 판정. 하드웨어 없이 돌아갑니다
 ```
 
 ---

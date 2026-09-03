@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Project Soma — 대시보드</title>
+<!-- CDN. 발표 전 vendor/ 로 내려받으세요. web/dependencies.txt 참조 -->
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<style>
+  :root{
+    --bg:#f4f6f8; --card:#fff; --line:#e3e8ee; --text:#1c2430; --muted:#7a8699;
+    --normal:#2f9e63; --caution:#e0a02c; --risk:#d1495b; --absent:#94a3b8; --accent:#2d6cdf;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{ --bg:#12161c; --card:#1a2029; --line:#28313d; --text:#e6ebf2; --muted:#8d99ab; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font-family:"Pretendard","Noto Sans KR",-apple-system,BlinkMacSystemFont,sans-serif}
+  header{display:flex;align-items:center;gap:12px;padding:18px 24px;
+         border-bottom:1px solid var(--line);background:var(--card)}
+  h1{font-size:17px;margin:0;font-weight:700;letter-spacing:-.2px}
+  .conn{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:13px;color:var(--muted)}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--absent)}
+  main{max-width:1100px;margin:0 auto;padding:24px;display:grid;gap:18px}
+  .row{display:grid;gap:18px;grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px}
+  .label{font-size:12px;color:var(--muted);margin-bottom:8px;font-weight:500}
+  .value{font-size:30px;font-weight:700;line-height:1.1;letter-spacing:-.5px}
+  .unit{font-size:14px;font-weight:500;color:var(--muted);margin-left:3px}
+  #stateCard{border-left:5px solid var(--absent)}
+  #stateName{font-size:26px;font-weight:700}
+  #stateWhy{color:var(--muted);font-size:14px;margin-top:6px;min-height:20px}
+  .chartbox{height:220px}
+  footer{padding:16px 24px;color:var(--muted);font-size:12px;text-align:center}
+  button{font:inherit;padding:8px 14px;border-radius:9px;border:1px solid var(--line);
+         background:transparent;color:var(--text);cursor:pointer}
+  button:hover{border-color:var(--accent);color:var(--accent)}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Project Soma</h1>
+  <button id="notifyBtn">알림 켜기</button>
+  <div class="conn"><span class="dot" id="dot"></span><span id="connText">연결 중…</span></div>
+</header>
+
+<main>
+  <div class="card" id="stateCard">
+    <div class="label">현재 상태</div>
+    <div id="stateName">—</div>
+    <div id="stateWhy"></div>
+  </div>
+
+  <div class="row">
+    <div class="card"><div class="label">눈 깜빡임</div>
+      <div class="value"><span id="mBlink">—</span><span class="unit">회/분</span></div></div>
+    <div class="card"><div class="label">모니터 거리</div>
+      <div class="value"><span id="mDist">—</span><span class="unit">cm</span></div></div>
+    <div class="card"><div class="label">좌우 균형</div>
+      <div class="value" id="mBalance">—</div></div>
+    <div class="card"><div class="label">안 움직인 시간</div>
+      <div class="value"><span id="mStatic">—</span><span class="unit">분</span></div></div>
+  </div>
+
+  <div class="card">
+    <div class="label">분당 깜빡임 추이</div>
+    <div class="chartbox"><canvas id="blinkChart"></canvas></div>
+  </div>
+
+  <div class="card">
+    <div class="label">세션 보고서</div>
+    <div id="reportBody" style="font-size:14px;color:var(--muted)">
+      아직 받은 보고서가 없습니다.
+    </div>
+  </div>
+</main>
+
+<footer>
+  판정은 서버(fusion)에서 옵니다. 이 화면은 표시만 합니다 —
+  점수·상태 규칙을 프론트에 넣지 마세요.
+</footer>
+
+<script>
+// ── 상태 표시 ─────────────────────────────────────────────────────
+// 문구만 여기 둡니다. 판정과 점수는 서버가 정합니다.
+const STATE_UI = {
+  NORMAL:  { label: "정상",     color: "var(--normal)" },
+  CAUTION: { label: "주의",     color: "var(--caution)" },
+  RISK:    { label: "위험",     color: "var(--risk)" },
+  ABSENT:  { label: "자리 비움", color: "var(--absent)" },
+};
+const REASON_TEXT = {
+  low_blink:      m => `깜빡임이 ${Math.round(m.low_blink_sec/60)}분째 적어요`,
+  static_hold:    m => `${Math.round(m.static_hold_sec/60)}분째 거의 안 움직이셨어요`,
+  close_distance: m => `화면과 ${Math.round(m.face_distance_cm)}cm 로 가까워요`,
+  imbalance:      m => `${m.balance === "LEFT" ? "왼" : "오른"}쪽으로 기울어 계세요`,
+};
+
+const $ = id => document.getElementById(id);
+const fmt = (v, d = 0) => (v === null || v === undefined) ? "—" : Number(v).toFixed(d);
+
+// ── 차트 ──────────────────────────────────────────────────────────
+const chart = new Chart($("blinkChart"), {
+  type: "line",
+  data: { labels: [], datasets: [{
+    data: [], borderColor: "#2d6cdf", backgroundColor: "rgba(45,108,223,.10)",
+    borderWidth: 2, pointRadius: 0, tension: .35, fill: true }] },
+  options: { responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: { y: { beginAtZero: true, suggestedMax: 25 },
+              x: { ticks: { maxTicksLimit: 8 } } },
+    animation: false },
+});
+
+// ── 소켓 ──────────────────────────────────────────────────────────
+// 서버는 Socket.IO 입니다. raw WebSocket 으로는 접속되지 않습니다.
+const SERVER = location.origin.startsWith("http") && location.port !== "5000"
+  ? "http://127.0.0.1:5000" : location.origin;
+
+const socket = io(SERVER, { transports: ["websocket", "polling"] });
+
+socket.on("connect", () => {
+  $("dot").style.background = "var(--normal)";
+  $("connText").textContent = "연결됨";
+});
+socket.on("disconnect", () => {
+  $("dot").style.background = "var(--risk)";
+  $("connText").textContent = "연결 끊김";
+});
+socket.on("connect_error", e => {
+  $("dot").style.background = "var(--risk)";
+  $("connText").textContent = "연결 실패";
+  console.error("소켓 연결 실패:", e.message);
+});
+
+// ── state 수신 — docs/contracts/state.schema.json ──────────────────
+let lastNotified = 0;
+
+socket.on("state", d => {
+  const ui = STATE_UI[d.state] || STATE_UI.ABSENT;
+  const m = d.metrics || {};
+
+  $("stateCard").style.borderLeftColor = ui.color;
+  $("stateName").textContent = ui.label;
+  $("stateName").style.color = ui.color;
+
+  const reasons = (d.reasons || [])
+    .map(r => REASON_TEXT[r] ? REASON_TEXT[r](m) : r)
+    .join(" · ");
+  $("stateWhy").textContent = reasons || (d.state === "NORMAL" ? "좋은 상태예요" : "");
+
+  $("mBlink").textContent   = fmt(m.blink_rate, 1);
+  $("mDist").textContent    = fmt(m.face_distance_cm);
+  $("mBalance").textContent = { LEFT: "왼쪽", RIGHT: "오른쪽", CENTER: "가운데" }[m.balance] || "—";
+  $("mStatic").textContent  = fmt((m.static_hold_sec || 0) / 60);
+
+  if (m.blink_rate != null && d.state !== "ABSENT") {
+    const t = new Date((d.t || Date.now() / 1000) * 1000);
+    chart.data.labels.push(t.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }));
+    chart.data.datasets[0].data.push(m.blink_rate);
+    if (chart.data.labels.length > 120) {
+      chart.data.labels.shift(); chart.data.datasets[0].data.shift();
+    }
+    chart.update("none");
+  }
+
+  // 팝업: 위험 상태에서만, 5분에 한 번까지.
+  // 숫자 없는 알림은 내보내지 않습니다 — "자세가 안 좋아요" 는 정보량이 0입니다.
+  if (d.state === "RISK" && reasons && Date.now() - lastNotified > 300000) {
+    lastNotified = Date.now();
+    notify("잠깐 쉬어갈까요?", reasons);
+  }
+});
+
+// ── report 수신 ───────────────────────────────────────────────────
+socket.on("report", r => {
+  const s = r.summary || {};
+  const min = v => Math.round((v || 0) / 60);
+  $("reportBody").innerHTML = `
+    <div style="color:var(--text);font-size:15px;font-weight:600;margin-bottom:10px">
+      ${r.user_name} — ${min(s.seated_sec)}분 앉으셨어요
+    </div>
+    <div>거의 안 움직인 시간 <b>${min(s.static_total_sec)}분</b></div>
+    <div>깜빡임이 적었던 시간 <b>${min(s.low_blink_sec)}분</b>
+         (평균 ${fmt(s.avg_blink_rate, 1)}회/분)</div>
+    <div>화면에 가까웠던 시간 <b>${min(s.close_distance_sec)}분</b></div>
+    <div>좌우로 기울었던 시간 <b>${min(s.imbalance_sec)}분</b></div>`;
+});
+
+// ── 알림 ──────────────────────────────────────────────────────────
+// Service Worker + Notification API.
+// 브라우저가 실행 중이어야 뜹니다 (탭은 백그라운드여도 됨).
+// 브라우저를 완전히 종료하면 동작하지 않습니다.
+let swReg = null;
+
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("./sw.js")
+    .then(r => { swReg = r; })
+    .catch(e => console.warn("Service Worker 등록 실패:", e));
+}
+
+$("notifyBtn").onclick = async () => {
+  const p = await Notification.requestPermission();
+  $("notifyBtn").textContent = p === "granted" ? "알림 켜짐" : "알림 거부됨";
+};
+
+function notify(title, body) {
+  if (Notification.permission !== "granted") return;
+  if (swReg) {
+    swReg.showNotification(title, { body, tag: "soma", icon: "./icon.png" });
+  } else {
+    new Notification(title, { body, tag: "soma" });
+  }
+}
+
+if (Notification.permission === "granted") $("notifyBtn").textContent = "알림 켜짐";
+</script>
+</body>
+</html>
