@@ -1,19 +1,20 @@
-# 디렉터리 하나 = 담당자 한 명.
+# 디렉터리 하나 = 담당자.
 # 본인 폴더 밖은 건드리지 않습니다.
-# 아래 @이름 을 실제 GitHub 계정으로 바꾸세요.
+#
+# 아래 경로가 바뀌면 해당 담당자에게 리뷰 요청이 자동으로 갑니다.
+# 나중 줄이 이깁니다. 더 좁은 경로를 아래에 두세요.
 
-# ─── 계약: 전원 리뷰 ──────────────────────────────────────────
-/docs/contracts/    @dohun @backend @vision @db @frontend @hardware
+# ─── 전원 ─────────────────────────────────────────────────────
+/feedback/          @DohunWi @RunPhase @hohyeon021003 @zxcds-qwer @moonseoyun1245 @sukjuning-ship-it
+/tools/             @DohunWi @RunPhase @hohyeon021003 @zxcds-qwer @moonseoyun1245 @sukjuning-ship-it
+/docs/              @DohunWi @RunPhase @hohyeon021003 @zxcds-qwer @moonseoyun1245 @sukjuning-ship-it
 
 # ─── 담당별 ───────────────────────────────────────────────────
-/chair/             @hardware
-/vision/            @vision
-/fusion/            @vision @hardware
-/feedback/          @dohun
-/server/            @backend
-/db/                @db
-/web/               @frontend
-/tools/             @dohun
+/vision/            @DohunWi @sukjuning-ship-it
+/chair/             @hohyeon021003 @zxcds-qwer
+/server/            @hohyeon021003 @zxcds-qwer
+/db/                @RunPhase
+/web/               @moonseoyun1245
 
-# ─── 문서 ─────────────────────────────────────────────────────
-/docs/              @dohun
+# 비전 + 하드웨어 합류 지점
+/fusion/            @DohunWi @sukjuning-ship-it @hohyeon021003 @zxcds-qwer
