@@ -19,6 +19,7 @@ vision/eval/distance_check.py
 얼굴(코 끝) 에서 카메라 렌즈까지를 잽니다.
 """
 import argparse
+import json
 import statistics
 import sys
 import time
@@ -80,6 +81,8 @@ def main():
     ap.add_argument("--cam", type=int, default=None, help=".env 의 WEBCAM_INDEX 를 씁니다")
     ap.add_argument("--list-cams", action="store_true", help="카메라 목록만 보고 종료")
     ap.add_argument("--calib-cm", type=float, default=60.0)
+    ap.add_argument("--json", default="vision/eval/data/distance_check.json",
+                    help="결과 저장 경로. 측정을 다시 하지 않으려면 남겨 두세요")
     ap.add_argument("--points", type=float, nargs="+",
                     default=[40, 50, 60, 70, 80])
     args = ap.parse_args()
@@ -97,7 +100,8 @@ def main():
         sys.exit("mediapipe 가 없습니다.  pip install -r vision/requirements.txt")
 
     try:
-        print("\n자로 재세요. 코끝에서 카메라 렌즈까지입니다.")
+        print("\n자로 재세요. **눈**에서 카메라 렌즈까지입니다.")
+        print("코끝이 아닙니다 — 거리의 기준자가 홍채이므로 눈이 있는 면을 잽니다.")
         print("노트북을 움직이지 마세요 — 각도가 바뀌면 상수가 흔들립니다.\n")
 
         rows = []
@@ -130,7 +134,14 @@ def main():
             spread = (max(f_list) - min(f_list)) / f_med * 100 if f_med else 0
             print(f"\nf_px(홍채) 중앙값 {f_med:.0f}   지점 간 편차 {spread:.1f}%"
                   f"   → 화각 {fov_deg_from_focal(img_w, f_med):.1f}°")
-            print("편차가 크면 자를 잘못 쟀거나 고개 각도가 흔들린 것입니다.")
+            if spread > 5.0:
+                # 편차는 거의 항상 자 쪽입니다. 홍채 px 는 프레임 간 표준편차가
+                # 1% 수준으로 안정적입니다.
+                print("⚠ 편차 5% 초과 — 지점 하나가 자로 잰 값과 다릅니다.")
+                worst = max(rows, key=lambda r: abs((r["f_iris"] or f_med) - f_med))
+                implied = f_med * IRIS_DIAMETER_CM / worst["iris_px"]
+                print(f"   {worst['cm']:.0f}cm 지점이 실제로는 {implied:.1f}cm 였을 수 있습니다.")
+                print("   지점을 3개 이상으로 늘리면 어느 쪽이 틀렸는지 드러납니다.")
 
             # 이 값으로 각 지점을 되짚어 오차를 봅니다
             print(f"\n{'실제':>6} {'홍채추정':>9} {'오차':>7} {'상대오차':>9}")
@@ -158,6 +169,21 @@ def main():
         if f_list:
             print(f"\n.env 에 넣으세요:  VISION_FOCAL_PX={statistics.median(f_list):.0f}")
             print("이 값은 카메라 고유값이라 사람이 바뀌어도 유효합니다.")
+
+        # 화면에만 찍고 끝내지 않습니다. 자를 들고 다시 앉는 것은 비싼 측정이고,
+        # 출력이 스크롤로 사라지면 그 비용을 다시 치러야 합니다.
+        if args.json:
+            out = Path(args.json)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(json.dumps({
+                "measured_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "image_width_px": img_w,
+                "iris_diameter_cm": IRIS_DIAMETER_CM,
+                "points": rows,
+                "focal_px_median": statistics.median(f_list) if f_list else None,
+                "face_width_cm": statistics.median(face_cms) if face_cms else None,
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
+            print(f"저장: {out}")
 
     except (KeyboardInterrupt, EOFError):
         pass
