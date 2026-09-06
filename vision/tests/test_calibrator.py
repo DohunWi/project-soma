@@ -9,28 +9,29 @@ import calibrator as C  # noqa: E402
 from calibrator import Calibrator  # noqa: E402
 
 
-def make(tmp_path, cm=60.0):
-    return Calibrator(baseline_path=tmp_path / "baseline.json", calib_distance_cm=cm)
+def make(tmp_path):
+    return Calibrator(baseline_path=tmp_path / "baseline.json")
 
 
 def test_샘플이_모이면_baseline_이_생긴다(tmp_path, monkeypatch):
     monkeypatch.setattr(C, "CALIB_DURATION", 0.0)
     c = make(tmp_path)
     c.start()
-    c.add_sample({"face_width_px": 200.0, "blink_rate": 15.0})
+    c.add_sample({"distance_cm": 62.0, "blink_rate": 15.0})
     assert c.is_done()
-    assert c.baseline_distance_cm() == 60.0
+    assert c.baseline_distance_cm() == 62.0        # 잰 값. 가정한 값이 아닙니다
     assert (tmp_path / "baseline.json").exists()
 
 
-def test_핀홀_환산():
-    """face_width_px x distance = 상수."""
-    c = Calibrator(baseline_path=Path("/nonexistent/baseline.json"), calib_distance_cm=60.0)
-    c._baseline = {"face_width_px": 200.0, "calib_distance_cm": 60.0}
-    c._done = True
-    assert c.distance_cm(200.0) == 60.0
-    assert c.distance_cm(400.0) == 30.0       # 얼굴이 2배로 커지면 거리는 절반
-    assert c.distance_cm(0.0) is None
+def test_평소_거리는_샘플의_평균이다(tmp_path, monkeypatch):
+    """스케일을 만들지 않습니다. 그 사람이 평소 어디에 앉는지만 기록합니다."""
+    monkeypatch.setattr(C, "CALIB_DURATION", 10.0)
+    c = make(tmp_path)
+    c.start()
+    for cm in (60.0, 64.0, 62.0):
+        c.add_sample({"distance_cm": cm, "blink_rate": 12.0})
+    c.tick(c._start + 11.0)
+    assert abs(c.baseline_distance_cm() - 62.0) < 1e-9
 
 
 def test_샘플이_없으면_실패하고_재시도를_허용한다(tmp_path, monkeypatch):
@@ -59,16 +60,17 @@ def test_완료되면_재시도하지_않는다(tmp_path, monkeypatch):
     monkeypatch.setattr(C, "CALIB_DURATION", 0.0)
     c = make(tmp_path)
     c.start()
-    c.add_sample({"face_width_px": 200.0, "blink_rate": 15.0})
+    c.add_sample({"distance_cm": 60.0, "blink_rate": 15.0})
     assert c.should_retry() is False
 
 
-def test_저장된_기준거리가_다르면_경고한다(tmp_path, capsys):
+def test_옛_baseline_은_버린다(tmp_path, capsys):
+    """얼굴폭 기준의 옛 파일은 새 스케일과 의미가 다릅니다. 이어서 쓰면 안 됩니다."""
     (tmp_path / "baseline.json").write_text(json.dumps({
-        "face_width_px": 200.0, "blink_rate": 15.0, "calib_distance_cm": 60.0}))
-    make(tmp_path, cm=45.0)                   # 자로 45cm 를 재서 넘겼는데
-    out = capsys.readouterr().out
-    assert "45" in out and "recalibrate" in out   # 조용히 무시되면 안 됩니다
+        "face_width_px": 449.1, "blink_rate": 0.0, "calib_distance_cm": 60.0}))
+    c = make(tmp_path)
+    assert not c.is_done()
+    assert "재캘리브레이션" in capsys.readouterr().out
 
 
 def test_캘리브_깜빡임이_0이면_baseline_으로_쓰지_않는다(tmp_path, monkeypatch):
@@ -76,7 +78,7 @@ def test_캘리브_깜빡임이_0이면_baseline_으로_쓰지_않는다(tmp_pat
     monkeypatch.setattr(C, "CALIB_DURATION", 0.0)
     c = make(tmp_path)
     c.start()
-    c.add_sample({"face_width_px": 200.0, "blink_rate": 0.0})
+    c.add_sample({"distance_cm": 60.0, "blink_rate": 0.0})
     assert c.is_done()
     assert c.baseline_blink_rate() is None
 

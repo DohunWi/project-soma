@@ -1,17 +1,22 @@
 """
 vision/calibrator.py
 ────────────────────
-개인 baseline 캘리브레이션.
+개인 baseline — **그 사람의 평소값**을 기록합니다.
 
-이전 레포의 calibrator.py 를 포팅했습니다. 구조(스레드 안전, 락 밖 파일 I/O,
-시작 시 자동 로드)는 그대로 두고, 지표만 새 범위에 맞췄습니다.
+이전에는 여기서 거리의 스케일을 정했습니다. "지금 앉아 있는 이 자리가
+60cm" 라고 가정하고 얼굴 폭을 재서 상수를 만들었습니다. 아무도 자로 재지
+않으므로 거리 전체가 임의의 배율로 어긋났고, 같은 사람이 70cm 로도 77cm
+로도 나왔습니다. fusion 의 근접 임계 45cm 는 그 위에서 판정했습니다.
 
-  이전: head_lateral_tilt / neck_compression / head_pitch / face_width / shoulder_tilt
-  지금: face_width_px / blink_rate     ← 자세 지표는 범위 밖
+**스케일은 이제 카메라가 정합니다** (vision/distance.py — 화각 + 홍채 11.7mm).
+캘리브레이터는 스케일을 만들지 않고, 그 사람이 **평소 어느 거리에 앉는지**를
+실제로 잽니다. 그래야 "평소보다 13cm 가까움" 이 성립합니다.
+절대 임계(45cm)는 사람마다 의미가 달라지지만, 평소 대비 변화는 그렇지 않습니다.
 
-거리는 핀홀 근사로 구합니다.  face_width_px × distance = 상수
-캘리브레이션 시점의 거리를 알면 이후 거리를 계산할 수 있습니다.
-기본값 60cm 는 가정이며, 정확도가 필요하면 자로 재서 --calib-cm 으로 넘기세요.
+    calib = Calibrator()
+    calib.start()
+    calib.add_sample({"distance_cm": 62.3, "blink_rate": 14.0})
+    calib.baseline_distance_cm()      # 평소 거리
 """
 import json
 import threading
@@ -20,24 +25,22 @@ from pathlib import Path
 from typing import Optional
 
 CALIB_DURATION = 3.0
-DEFAULT_CALIB_CM = 60.0
 
 # 실패한 캘리브레이션을 다시 시도하기까지의 간격.
 # 얼굴이 보이지 않아 실패하는 것이 정상 경로입니다 — 사람이 아직 자리에
-# 앉지 않았을 뿐입니다. 실패를 최종 상태로 두면 그 실행 내내 거리값이 없습니다.
+# 앉지 않았을 뿐입니다. 실패를 최종 상태로 두면 그 실행 내내 평소값이 없습니다.
 CALIB_RETRY_SEC = 5.0
-_METRIC_KEYS = ("face_width_px", "blink_rate")
+
+_METRIC_KEYS = ("distance_cm", "blink_rate")
 _BASELINE_FILE = Path(__file__).parent / "baseline.json"
 
 
 class Calibrator:
     """스레드 안전. 캡처 스레드가 add_sample() 을 매 프레임 호출합니다."""
 
-    def __init__(self, baseline_path: Optional[Path] = None,
-                 calib_distance_cm: float = DEFAULT_CALIB_CM):
+    def __init__(self, baseline_path: Optional[Path] = None):
         self._lock = threading.Lock()
         self._path = baseline_path or _BASELINE_FILE
-        self._calib_cm = calib_distance_cm
 
         self._calibrating = False
         self._done = False
@@ -68,13 +71,9 @@ class Calibrator:
             return dict(self._baseline)
 
     # 계약에 실어 보낼 값들. "평소보다 N 만큼" 을 만들려면 평소값이 함께 가야 합니다.
-    # 절대 거리 45cm 임계는 카메라·개인마다 다르게 나오므로, 받는 쪽이
-    # baseline 대비로 판정할 수 있게 열어 둡니다 (vision/eval/README.md 참조).
     def baseline_distance_cm(self):
         with self._lock:
-            if not self._done:
-                return None
-            return self._baseline.get("calib_distance_cm")
+            return self._baseline.get("distance_cm") if self._done else None
 
     def baseline_blink_rate(self):
         with self._lock:
@@ -93,7 +92,7 @@ class Calibrator:
             self._start = time.time()
             self._samples = []
         print(f"[calib] 시작 — 평소 자세로 {CALIB_DURATION:.0f}초간 앉아주세요 "
-              f"(기준 거리 {self._calib_cm:.0f}cm 가정)")
+              f"(자로 잴 필요 없습니다. 평소값을 기록할 뿐입니다)")
 
     def recalibrate(self) -> None:
         self.start()
@@ -106,11 +105,11 @@ class Calibrator:
                 return
             sample = {k: float(metrics[k]) for k in _METRIC_KEYS
                       if metrics.get(k) is not None}
-            # face_width_px 가 없는 프레임은 세지 않습니다. 이전에는 빈 dict 도
-            # 샘플로 쌓여서, 쓸 수 있는 값이 하나도 없어도 캘리브레이션이
-            # "완료" 로 끝났습니다. 그렇게 저장된 baseline 은 face_width_px 가
-            # 0 이라 거리 환산이 영원히 None 을 돌려줍니다 — 조용한 고장입니다.
-            if sample.get("face_width_px"):
+            # 거리가 없는 프레임은 세지 않습니다. 이전에는 빈 dict 도 샘플로
+            # 쌓여서, 쓸 수 있는 값이 하나도 없어도 캘리브레이션이 "완료" 로
+            # 끝났습니다. 그렇게 저장된 baseline 은 쓸 수 없는 값이라
+            # 거리 판정이 영원히 조용히 실패했습니다.
+            if sample.get("distance_cm"):
                 self._samples.append(sample)
             if time.time() - self._start >= CALIB_DURATION:
                 self._finalize_locked()
@@ -172,28 +171,15 @@ class Calibrator:
         for k in _METRIC_KEYS:
             vals = [s[k] for s in self._samples if k in s]
             b[k] = sum(vals) / len(vals) if vals else 0.0
-        if not b.get("face_width_px"):
-            print(f"[calib] 얼굴 폭을 재지 못했습니다 — 실패 ({self._attempts}회째)")
+        if not b.get("distance_cm"):
+            print(f"[calib] 거리를 재지 못했습니다 — 실패 ({self._attempts}회째)")
             self._calibrating = False
             return
-        b["calib_distance_cm"] = self._calib_cm
         self._baseline = b
         self._calibrating = False
         self._done = True
         print(f"[calib] 완료 ({len(self._samples)} 샘플)  "
-              f"face_width={b['face_width_px']:.1f}px  blink_rate={b['blink_rate']:.1f}/분")
-
-    # ── 거리 환산 ────────────────────────────────────────────────────
-    def distance_cm(self, face_width_px: float) -> Optional[float]:
-        """핀홀 근사.  px × cm = 상수."""
-        with self._lock:
-            if not self._done or not self._baseline:
-                return None
-            base_px = self._baseline.get("face_width_px", 0.0)
-            base_cm = self._baseline.get("calib_distance_cm", DEFAULT_CALIB_CM)
-        if face_width_px <= 1e-6 or base_px <= 1e-6:
-            return None
-        return round(base_px * base_cm / face_width_px, 1)
+              f"평소 거리 {b['distance_cm']:.1f}cm")
 
     # ── 파일 ─────────────────────────────────────────────────────────
     def _save(self) -> None:
@@ -215,15 +201,6 @@ class Calibrator:
                 return
             self._baseline = data
             self._done = True
-            saved_cm = data.get("calib_distance_cm", DEFAULT_CALIB_CM)
-            print(f"[calib] baseline 로드: face_width={data['face_width_px']:.1f}px "
-                  f"@ {saved_cm:.0f}cm")
-            # 저장된 baseline 이 이깁니다. --calib-cm 을 새로 줘도 반영되지 않는데,
-            # 조용히 무시하면 자로 잰 값을 넘긴 사람이 그 사실을 모릅니다.
-            # 거리 상수가 통째로 틀어지므로 반드시 알립니다.
-            if abs(saved_cm - self._calib_cm) > 0.5:
-                print(f"[calib] 주의: 요청한 기준 거리 {self._calib_cm:.0f}cm 가 "
-                      f"저장된 {saved_cm:.0f}cm 와 다릅니다. "
-                      f"반영하려면 --recalibrate 를 쓰세요")
+            print(f"[calib] baseline 로드: 평소 거리 {data['distance_cm']:.1f}cm")
         except (OSError, json.JSONDecodeError) as e:
             print(f"[calib] 로드 실패: {e}")

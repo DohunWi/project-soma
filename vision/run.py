@@ -7,8 +7,7 @@ vision/run.py
     python vision/run.py                    # 서버로 전송
     python vision/run.py --stdout           # 서버 없이 jsonl
     python vision/run.py --preview          # 창에 EAR·거리 표시
-    python vision/run.py --recalibrate      # baseline 다시 잡기
-    python vision/run.py --calib-cm 55      # 캘리브레이션 시 실제 거리(자로 잰 값)
+    python vision/run.py --recalibrate      # 평소값 다시 잡기
     python vision/run.py --list-cams        # 쓸 수 있는 카메라 목록
     python vision/run.py --cam 1            # 카메라 고르기
 
@@ -46,6 +45,7 @@ except ImportError:
 
 from calibrator import Calibrator                       # vision/calibrator.py
 from camera import default_index, list_cams, open_camera    # vision/camera.py
+from distance import DistanceEstimator                  # vision/distance.py
 from ear import BlinkCounter, face_ear                  # vision/blink/ear.py
 from geometry import face_width_px, is_frontal, yaw_asymmetry   # vision/geometry.py
 from landmarks import FaceLandmarks                     # vision/landmarks.py
@@ -63,7 +63,6 @@ def main():
     ap.add_argument("--stdout", action="store_true")
     ap.add_argument("--preview", action="store_true")
     ap.add_argument("--recalibrate", action="store_true")
-    ap.add_argument("--calib-cm", type=float, default=60.0)
     ap.add_argument("--list-cams", action="store_true",
                     help="쓸 수 있는 카메라를 훑어보고 종료")
     args = ap.parse_args()
@@ -72,7 +71,7 @@ def main():
         list_cams()
         return
 
-    calib = Calibrator(calib_distance_cm=args.calib_cm)
+    calib = Calibrator()
     if args.recalibrate:
         calib.start()
 
@@ -105,6 +104,11 @@ def main():
     except ImportError:
         sys.exit("mediapipe 가 없습니다.  pip install -r vision/requirements.txt")
     print(f"[vision] 랜드마크 백엔드: {det.backend}", file=sys.stderr)
+
+    # 거리 스케일은 카메라가 정합니다 — 사람이 60cm 에 앉는다고 가정하지 않습니다.
+    est = DistanceEstimator(image_width_px=cap.get(cv2.CAP_PROP_FRAME_WIDTH),
+                            calibrator=calib)
+    print(f"[vision] 거리: {est.describe()}", file=sys.stderr)
 
     counter = BlinkCounter()
     quality = FrameQuality()
@@ -139,14 +143,18 @@ def main():
 
                 # 거리는 다릅니다. 고개를 돌리면 얼굴 폭이 투영상 줄어
                 # "멀어졌다" 고 오판합니다. 정면일 때만 씁니다 (geometry.py 참조)
+                # 거리는 홍채로 잽니다. 홍채는 시선을 향하므로 고개를 돌려도
+                # 화면을 보고 있으면 원형에 가깝게 찍힙니다. 얼굴 폭은 고개가
+                # 돌아가면 그대로 줄어 "멀어졌다" 고 오판했습니다.
                 yaw = yaw_asymmetry(pts)
                 frontal = is_frontal(pts)
                 width_px = face_width_px(pts)
-                if frontal:
-                    dist_cm = calib.distance_cm(width_px)
+                dist_cm, dist_src = est.distance_cm(pts)
+                if dist_src == "calib" and not frontal:
+                    dist_cm = None          # 얼굴 폭 대비책은 정면일 때만 씁니다
 
-                if calib.is_calibrating() and frontal:
-                    calib.add_sample({"face_width_px": width_px,
+                if calib.is_calibrating() and dist_cm:
+                    calib.add_sample({"distance_cm": dist_cm,
                                       "blink_rate": counter.rate(now)})
 
                 # 얼굴이 보이는데 baseline 이 없으면 다시 시도합니다.

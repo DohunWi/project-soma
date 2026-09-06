@@ -40,15 +40,17 @@ except ImportError:
     pass
 
 from camera import default_index, list_cams, open_camera  # noqa: E402
-from geometry import face_width_px, is_frontal, yaw_asymmetry  # noqa: E402
+from geometry import (face_width_cm_from_iris, face_width_px,  # noqa: E402
+                      fov_deg_from_focal, focal_px_from_iris, is_frontal,
+                      iris_px, yaw_asymmetry, IRIS_DIAMETER_CM)
 from landmarks import FaceLandmarks  # noqa: E402
 
 SAMPLE_SEC = 3.0
 
 
 def measure(cap, det, label, seconds=SAMPLE_SEC):
-    """N초 동안 정면 프레임의 얼굴 폭 중앙값을 반환."""
-    widths, skipped, t0 = [], 0, time.time()
+    """N초 동안 정면 프레임의 얼굴 폭·홍채 지름 중앙값을 반환."""
+    widths, irises, skipped, t0 = [], [], 0, time.time()
     while time.time() - t0 < seconds:
         ok, frame = cap.read()
         if not ok:
@@ -58,6 +60,9 @@ def measure(cap, det, label, seconds=SAMPLE_SEC):
         if pts is not None:
             if is_frontal(pts):
                 widths.append(face_width_px(pts))
+                ip = iris_px(pts)
+                if ip:
+                    irises.append(ip)
             else:
                 skipped += 1
         cv2.putText(frame, f"{label}  {time.time()-t0:.1f}/{seconds:.0f}s  n={len(widths)}",
@@ -66,7 +71,8 @@ def measure(cap, det, label, seconds=SAMPLE_SEC):
         cv2.waitKey(1)
     if skipped:
         print(f"    (고개 돌림으로 {skipped}프레임 제외)")
-    return statistics.median(widths) if widths else None
+    return (statistics.median(widths) if widths else None,
+            statistics.median(irises) if irises else None)
 
 
 def main():
@@ -91,36 +97,70 @@ def main():
         sys.exit("mediapipe 가 없습니다.  pip install -r vision/requirements.txt")
 
     try:
-        input(f"\n[1] 카메라에서 정확히 {args.calib_cm:.0f}cm 에 앉으신 뒤 Enter: ")
-        base_px = measure(cap, det, f"CALIB {args.calib_cm:.0f}cm")
-        if base_px is None:
-            sys.exit("얼굴을 검출하지 못했습니다")
-        k = base_px * args.calib_cm
-        print(f"    baseline = {base_px:.1f}px  →  상수 k = {k:.0f}\n")
+        print("\n자로 재세요. 코끝에서 카메라 렌즈까지입니다.")
+        print("노트북을 움직이지 마세요 — 각도가 바뀌면 상수가 흔들립니다.\n")
 
         rows = []
         for cm in args.points:
-            input(f"[2] {cm:.0f}cm 로 옮겨 앉으신 뒤 Enter: ")
-            px = measure(cap, det, f"{cm:.0f}cm")
+            input(f"[{len(rows)+1}/{len(args.points)}] {cm:.0f}cm 에 앉으신 뒤 Enter: ")
+            px, ip = measure(cap, det, f"{cm:.0f}cm")
             if px is None:
                 print("    검출 실패 — 건너뜁니다")
                 continue
-            pred = k / px
-            rows.append((cm, px, pred, pred - cm))
+            rows.append({"cm": cm, "face_px": px, "iris_px": ip,
+                         "f_face": px * cm, "f_iris": focal_px_from_iris(ip, cm) if ip else None,
+                         "face_cm": face_width_cm_from_iris(px, ip) if ip else None})
+            print(f"    얼굴폭 {px:.1f}px" + (f"   홍채 {ip:.1f}px" if ip else "   홍채 없음"))
 
-        print(f"\n{'실제':>6} {'얼굴폭':>8} {'예측':>7} {'오차':>7} {'상대오차':>8}")
-        print("─" * 42)
-        for cm, px, pred, err in rows:
-            print(f"{cm:6.0f} {px:8.1f} {pred:7.1f} {err:+7.1f} {100*err/cm:+7.1f}%")
+        if not rows:
+            sys.exit("측정된 지점이 없습니다")
 
-        if rows:
-            errs = [abs(e) for *_, e in rows]
-            rel = [abs(e) / cm * 100 for cm, _, _, e in rows]
-            print(f"\n평균 절대오차 {statistics.mean(errs):.1f}cm  "
-                  f"(상대 {statistics.mean(rel):.1f}%)   최대 {max(errs):.1f}cm")
-            print("\n판정 기준: fusion 의 근접 임계는 45cm 입니다.")
-            print("평균 오차가 5cm 를 넘으면 그 임계로 판정하기 어렵습니다 —")
-            print("절대 거리 대신 baseline 대비 변화량을 쓰는 쪽으로 바꾸세요.")
+        img_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        print(f"\n{'실제':>6} {'얼굴폭':>8} {'홍채':>7} {'f_px(홍채)':>11} {'얼굴폭cm':>9}")
+        print("─" * 48)
+        for r in rows:
+            print(f"{r['cm']:6.0f} {r['face_px']:8.1f} "
+                  f"{(r['iris_px'] or 0):7.1f} {(r['f_iris'] or 0):11.0f} "
+                  f"{(r['face_cm'] or 0):9.1f}")
+
+        # ── 초점거리: 지점마다 같은 값이 나와야 합니다 ────────────────────
+        f_list = [r["f_iris"] for r in rows if r["f_iris"]]
+        if f_list:
+            f_med = statistics.median(f_list)
+            spread = (max(f_list) - min(f_list)) / f_med * 100 if f_med else 0
+            print(f"\nf_px(홍채) 중앙값 {f_med:.0f}   지점 간 편차 {spread:.1f}%"
+                  f"   → 화각 {fov_deg_from_focal(img_w, f_med):.1f}°")
+            print("편차가 크면 자를 잘못 쟀거나 고개 각도가 흔들린 것입니다.")
+
+            # 이 값으로 각 지점을 되짚어 오차를 봅니다
+            print(f"\n{'실제':>6} {'홍채추정':>9} {'오차':>7} {'상대오차':>9}")
+            print("─" * 36)
+            errs = []
+            for r in rows:
+                if not r["iris_px"]:
+                    continue
+                pred = f_med * IRIS_DIAMETER_CM / r["iris_px"]
+                errs.append(abs(pred - r["cm"]))
+                print(f"{r['cm']:6.0f} {pred:9.1f} {pred - r['cm']:+7.1f} "
+                      f"{100*(pred-r['cm'])/r['cm']:+8.1f}%")
+            if errs:
+                mae = statistics.mean(errs)
+                print(f"\n평균 절대오차 {mae:.1f}cm")
+                print("판정: " + ("45cm 절대 임계를 쓸 수 있습니다" if mae <= 5
+                                 else "5cm 를 넘습니다 — baseline 대비 변화량으로 바꾸세요"))
+
+        face_cms = [r["face_cm"] for r in rows if r["face_cm"]]
+        if face_cms:
+            print(f"\n이 사람 얼굴폭 {statistics.median(face_cms):.1f}cm "
+                  f"(홍채 {IRIS_DIAMETER_CM*10:.1f}mm 기준, 지점 간 편차 "
+                  f"{(max(face_cms)-min(face_cms)):.2f}cm)")
+
+        if f_list:
+            print(f"\n.env 에 넣으세요:  VISION_FOCAL_PX={statistics.median(f_list):.0f}")
+            print("이 값은 카메라 고유값이라 사람이 바뀌어도 유효합니다.")
+
+    except (KeyboardInterrupt, EOFError):
+        pass
     finally:
         cap.release()
         det.close()
