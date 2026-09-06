@@ -134,3 +134,70 @@ def test_카메라를_연_뒤에_초점거리를_묶는다(tmp_path, monkeypatch
     c2.bind_focal(1484.0)
     assert not c2.is_done()            # 알고 나면 버립니다
     assert c2.should_retry() is True
+
+
+# ── 평소 깜빡임 ──────────────────────────────────────────────────────────────
+
+def test_평소_깜빡임은_구간의_중앙값(tmp_path, monkeypatch):
+    monkeypatch.setattr(C, "BLINK_BASELINE_SEC", 10.0)
+    monkeypatch.setattr(C, "BLINK_MIN_SAMPLES", 5)
+    c = make(tmp_path)
+    rates = [20.0, 22.0, 18.0, 25.0, 21.0, 19.0]
+    for i, r in enumerate(rates):
+        c.add_blink_sample(r, 1000.0 + i)
+    assert c.baseline_blink_rate() is None          # 아직 구간이 안 끝났습니다
+    c.add_blink_sample(21.0, 1011.0)
+    assert c.baseline_blink_rate() == 21.0
+
+
+def test_값이_없는_프레임은_평소값에_섞지_않는다(tmp_path, monkeypatch):
+    """관측 10초 미만이면 rate 가 None 입니다. 그것을 0 으로 세면 안 됩니다."""
+    monkeypatch.setattr(C, "BLINK_BASELINE_SEC", 1.0)
+    monkeypatch.setattr(C, "BLINK_MIN_SAMPLES", 2)
+    c = make(tmp_path)
+    for i in range(5):
+        c.add_blink_sample(None, 1000.0 + i)
+    assert c.baseline_blink_rate() is None
+    assert c.blink_baseline_progress() == 0.0
+
+
+def test_표본이_모자라면_구간이_끝나도_확정하지_않는다(tmp_path, monkeypatch):
+    monkeypatch.setattr(C, "BLINK_BASELINE_SEC", 1.0)
+    monkeypatch.setattr(C, "BLINK_MIN_SAMPLES", 100)
+    c = make(tmp_path)
+    for i in range(10):
+        c.add_blink_sample(20.0, 1000.0 + i)
+    assert c.baseline_blink_rate() is None
+
+
+def test_한번_정해지면_다시_재지_않는다(tmp_path, monkeypatch):
+    """피로로 깜빡임이 줄면 baseline 도 따라 내려가서는 안 됩니다."""
+    monkeypatch.setattr(C, "BLINK_BASELINE_SEC", 1.0)
+    monkeypatch.setattr(C, "BLINK_MIN_SAMPLES", 2)
+    c = make(tmp_path)
+    c.add_blink_sample(20.0, 1000.0)
+    c.add_blink_sample(20.0, 1002.0)
+    assert c.baseline_blink_rate() == 20.0
+    for i in range(50):
+        c.add_blink_sample(4.0, 1010.0 + i)      # 피로로 급감
+    assert c.baseline_blink_rate() == 20.0
+    assert c.needs_blink_baseline() is False
+
+
+def test_평소_깜빡임은_다음_세션에도_남는다(tmp_path, monkeypatch):
+    monkeypatch.setattr(C, "BLINK_BASELINE_SEC", 1.0)
+    monkeypatch.setattr(C, "BLINK_MIN_SAMPLES", 2)
+    c = make(tmp_path)
+    c.add_blink_sample(17.0, 1000.0)
+    c.add_blink_sample(17.0, 1002.0)
+
+    c2 = make(tmp_path)
+    assert c2.baseline_blink_rate() == 17.0
+
+
+def test_거리_baseline_이_없어도_평소_깜빡임은_살린다(tmp_path, capsys):
+    """5분을 들여 잰 값을 거리 캘리브레이션이 없다고 같이 버리면 안 됩니다."""
+    (tmp_path / "baseline.json").write_text(json.dumps({"blink_rate": 18.5}))
+    c = make(tmp_path)
+    assert c.baseline_blink_rate() == 18.5
+    assert not c.is_done()                        # 거리는 여전히 필요합니다

@@ -156,14 +156,18 @@ def main():
                 if dist_src == "calib" and not frontal:
                     dist_cm = None          # 얼굴 폭 대비책은 정면일 때만 씁니다
 
-                if calib.is_calibrating() and dist_cm:
-                    calib.add_sample({"distance_cm": dist_cm,
-                                      "blink_rate": counter.rate(now)})
-
-                # 얼굴이 보이는데 baseline 이 없으면 다시 시도합니다.
-                # 첫 시도는 보통 사람이 아직 자리에 앉기 전이라 실패합니다.
+                if calib.is_calibrating():
+                    if dist_cm:
+                        calib.add_sample({"distance_cm": dist_cm})
                 elif calib.should_retry(now):
+                    # 얼굴이 보이는데 평소 거리가 없으면 다시 시도합니다.
+                    # 첫 시도는 보통 사람이 아직 자리에 앉기 전이라 실패합니다.
                     calib.start()
+
+                # 평소 깜빡임은 세션 초반 5분에 걸쳐 잽니다. 얼굴이 보일 때만
+                # 넣습니다 — 자리를 비우면 빈도가 0 으로 떨어지는데 그것이
+                # 평소값에 섞이면 기준이 통째로 내려갑니다.
+                calib.add_blink_sample(counter.rate(now), now)
 
             quality.update(now, detected=detected,
                            frontal=(frontal if detected else None))
@@ -203,6 +207,8 @@ def main():
                        else f"blink 관측중 {counter.observed_sec(now):.0f}s")
                 if calib.is_calibrating():
                     txt = f"CALIBRATING {calib.progress()*100:.0f}%  " + txt
+                elif calib.needs_blink_baseline():
+                    txt = f"평소깜빡임 {calib.blink_baseline_progress()*100:.0f}%  " + txt
                 cv2.putText(frame, txt, (12, 30), cv2.FONT_HERSHEY_SIMPLEX,
                             0.6, (0, 255, 0), 2)
                 cv2.imshow("soma vision", frame)

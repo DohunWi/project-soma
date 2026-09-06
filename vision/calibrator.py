@@ -19,6 +19,7 @@ vision/calibrator.py
     calib.baseline_distance_cm()      # 평소 거리
 """
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -31,7 +32,20 @@ CALIB_DURATION = 3.0
 # 앉지 않았을 뿐입니다. 실패를 최종 상태로 두면 그 실행 내내 평소값이 없습니다.
 CALIB_RETRY_SEC = 5.0
 
-_METRIC_KEYS = ("distance_cm", "blink_rate")
+_METRIC_KEYS = ("distance_cm",)
+
+# ── 평소 깜빡임 ──────────────────────────────────────────────────────────────
+# 거리와 달리 3초로는 잴 수 없습니다. 분당 빈도라서 최소 수십 초를 봐야 하고,
+# BlinkCounter 는 관측 10초 미만이면 값을 내지 않습니다. 그래서 이전 구현의
+# blink_rate baseline 은 **항상 0 이었고 한 번도 전송된 적이 없습니다.**
+#
+# 세션 초반 5분을 평소 구간으로 잡습니다. 계속 따라가게 만들면 안 됩니다 —
+# 피로로 깜빡임이 줄면 baseline 도 같이 내려가 "줄었다" 가 영원히 성립하지
+# 않습니다. 초반에 한 번 잡고 얼려서 세션 내내, 그리고 다음 날에도 씁니다.
+# 시연·검증에서 5분을 기다릴 수 없을 때만 .env 로 줄입니다.
+# 짧게 잡으면 그만큼 평소값의 표본이 적어집니다.
+BLINK_BASELINE_SEC = float(os.getenv("VISION_BLINK_BASELINE_SEC", 300.0))
+BLINK_MIN_SAMPLES = 60          # 2Hz 전송 기준 30초 분량
 _BASELINE_FILE = Path(__file__).parent / "baseline.json"
 
 
@@ -52,6 +66,8 @@ class Calibrator:
         self._baseline: dict = {}
         self._attempts = 0
         self._last_end: Optional[float] = None
+        self._blink_samples: list = []
+        self._blink_start: Optional[float] = None
         self._load()
 
     # ── 조회 ─────────────────────────────────────────────────────────
@@ -79,13 +95,15 @@ class Calibrator:
             return self._baseline.get("distance_cm") if self._done else None
 
     def baseline_blink_rate(self):
+        """
+        세션 초반 5분의 중앙값 (add_blink_sample 참조).
+
+        거리 캘리브레이션(_done)과 **무관합니다.** 둘은 재는 방식도 걸리는
+        시간도 다릅니다. 예전에는 여기에 _done 게이트가 있어서, 거리 쪽이
+        끝나지 않으면 다 모은 평소 깜빡임까지 없는 값이 됐습니다.
+        """
         with self._lock:
-            if not self._done:
-                return None
-            rate = self._baseline.get("blink_rate")
-            # 캘리브레이션은 3초라 창(60초)이 거의 비어 있습니다. 그 값을 평소
-            # 깜빡임이라고 부르면 항상 0 에 가깝습니다. 0 이면 없는 것으로 봅니다.
-            return rate if rate else None
+            return self._baseline.get("blink_rate") or None
 
     # ── 시작 ─────────────────────────────────────────────────────────
     def start(self) -> None:
@@ -159,6 +177,48 @@ class Calibrator:
             how = f"f_px={saved:.0f} 로 잰 것" if saved else "초점거리를 모르는 값"
             print(f"[calib] 저장된 평소값은 {how}입니다 (지금 {focal:.0f}) — 다시 잽니다")
 
+    # ── 평소 깜빡임 ──────────────────────────────────────────────────
+    def needs_blink_baseline(self) -> bool:
+        with self._lock:
+            return not self._baseline.get("blink_rate")
+
+    def blink_baseline_progress(self) -> float:
+        with self._lock:
+            if self._blink_start is None:
+                return 0.0
+            return min(len(self._blink_samples) / BLINK_MIN_SAMPLES, 1.0)
+
+    def add_blink_sample(self, rate, now: float) -> None:
+        """
+        평소 깜빡임 표본. **얼굴이 보일 때만** 넣으세요.
+
+        자리를 비우면 빈도가 0 으로 떨어지는데 그것을 평소값에 섞으면
+        기준이 통째로 내려갑니다.
+        """
+        save = False
+        with self._lock:
+            if rate is None or self._baseline.get("blink_rate"):
+                return
+            if self._blink_start is None:
+                self._blink_start = now
+                print(f"[calib] 평소 깜빡임 측정 시작 "
+                      f"({BLINK_BASELINE_SEC / 60:.0f}분)")
+            self._blink_samples.append(float(rate))
+
+            elapsed = now - self._blink_start
+            enough = len(self._blink_samples) >= BLINK_MIN_SAMPLES
+            if elapsed >= BLINK_BASELINE_SEC and enough:
+                vals = sorted(self._blink_samples)
+                median = vals[len(vals) // 2]
+                self._baseline["blink_rate"] = round(median, 1)
+                self._baseline["blink_samples"] = len(vals)
+                self._baseline["blink_measured_sec"] = round(elapsed, 1)
+                print(f"[calib] 평소 깜빡임 {median:.1f}회/분 "
+                      f"({len(vals)}표본, {elapsed / 60:.1f}분)")
+                save = True
+        if save:
+            self._save()
+
     def should_retry(self, now: Optional[float] = None) -> bool:
         """
         다시 시도할 때가 됐는가.
@@ -221,6 +281,11 @@ class Calibrator:
             missing = [k for k in _METRIC_KEYS if k not in data]
             if missing:
                 print(f"[calib] 키 누락 {missing} — 재캘리브레이션 필요")
+                # 평소 깜빡임은 5분을 들여 잰 값입니다. 거리 캘리브레이션이
+                # 없다고 같이 버리면 그 5분을 다시 치릅니다.
+                if data.get("blink_rate"):
+                    self._baseline = {"blink_rate": data["blink_rate"]}
+                    print(f"[calib] 평소 깜빡임 {data['blink_rate']:.1f}회/분 은 살립니다")
                 return
             saved_focal = data.get("focal_px")
             if self._focal_px and not saved_focal:
