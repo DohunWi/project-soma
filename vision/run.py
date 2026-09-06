@@ -81,7 +81,7 @@ def main():
 
     # 카메라가 실제로 열린 뒤에 캘리브레이션을 시작합니다.
     # 열기 전에 시작하면 3초 창이 카메라 준비 대기에 소모돼 샘플이 1~2개만 모입니다.
-    if not calib.is_done() and not calib.is_calibrating():
+    if calib.should_retry():
         calib.start()
 
     # mediapipe 를 직접 부르지 않습니다 — vision/landmarks.py 가 유일한 창구입니다
@@ -109,6 +109,7 @@ def main():
                 continue
 
             now = time.time()
+            calib.tick(now)        # 얼굴이 안 보여도 캘리브레이션 창은 끝나야 합니다
             pts = det.detect(frame, now)
 
             detected = pts is not None
@@ -132,6 +133,11 @@ def main():
                 if calib.is_calibrating() and frontal:
                     calib.add_sample({"face_width_px": width_px,
                                       "blink_rate": counter.rate(now)})
+
+                # 얼굴이 보이는데 baseline 이 없으면 다시 시도합니다.
+                # 첫 시도는 보통 사람이 아직 자리에 앉기 전이라 실패합니다.
+                elif calib.should_retry(now):
+                    calib.start()
 
             quality.update(now, detected=detected,
                            frontal=(frontal if detected else None))
