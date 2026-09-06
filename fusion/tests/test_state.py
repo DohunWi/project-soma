@@ -104,3 +104,32 @@ def test_좌우편중_히스테리시스():
     assert st.balance == "LEFT"                                        # 아직 유지
     st, _ = step(st, sample(pressure=[900, 890, 900, 890]), 1006.0)   # 차이 20 < 30
     assert st.balance == "CENTER"
+
+
+def test_웹캠_값이_없으면_metrics_에서_키를_뺀다():
+    """null 은 state 계약 위반입니다. 대시보드는 없는 키를 '—' 로 표시합니다."""
+    _, d = run([{"pressure": SEATED, "user_name": "t"}])
+    assert "blink_rate" not in d["metrics"]
+    assert "face_distance_cm" not in d["metrics"]
+    assert None not in d["metrics"].values()
+
+
+def test_baseline_과_검출률을_그대로_넘긴다():
+    s = sample()
+    s.update({"blink_rate_baseline": 15.2, "face_distance_baseline_cm": 60.0,
+              "detect_rate": 0.9})
+    _, d = run([s])
+    m = d["metrics"]
+    assert m["blink_rate_baseline"] == 15.2
+    assert m["face_distance_baseline_cm"] == 60.0
+    assert m["detect_rate"] == 0.9
+
+
+def test_검출률이_낮으면_신뢰도가_낮다():
+    """프레임 하나가 우연히 잡힌 것과 계속 잡히는 것을 구분합니다."""
+    good = sample(); good["detect_rate"] = 1.0
+    poor = sample(); poor["detect_rate"] = 0.1
+    _, dg = run([good])
+    _, dp = run([poor])
+    assert dg["confidence"] > dp["confidence"]
+    assert dp["confidence"] < 0.55
