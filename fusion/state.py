@@ -26,13 +26,25 @@ OCCUPANCY_MIN     = 100    # 압력 합이 이 값 미만이면 자리 비움
 BALANCE_DIFF      = 50     # 좌우 압력차가 이 값을 넘으면 편중
 BALANCE_RELEASE   = 30     # 편중 해제 임계 (히스테리시스)
 
-BLINK_RATE_LOW    = 8.0    # 분당 깜빡임이 이 값 미만이면 저깜빡임
+BLINK_RATE_LOW    = 8.0    # 분당 깜빡임이 이 값 미만이면 저깜빡임 (평소값이 없을 때)
 BLINK_RATE_OK     = 11.0   # 회복 임계 (히스테리시스)
+
+# 평소값이 오면 절대 임계 대신 **평소 대비 비율**로 봅니다.
+# 실측(S01): 평소 21.7회/분. 절대 임계 8 은 이미 한참 진행된 상태라
+# 그때까지 아무 일도 일어나지 않습니다. 사람마다 평소가 다릅니다.
+BLINK_REL_LOW     = 0.6    # 평소의 60% 미만이면 저깜빡임
+BLINK_REL_OK      = 0.8    # 80% 이상 회복하면 해제
 LOW_BLINK_CAUTION = 300.0  # 저깜빡임 연속 초 → 주의
 LOW_BLINK_RISK    = 900.0  # → 위험
 
-DISTANCE_CLOSE_CM = 45.0   # 이보다 가까우면 근접
+DISTANCE_CLOSE_CM = 45.0   # 이보다 가까우면 근접 (평소값이 없을 때)
 DISTANCE_OK_CM    = 50.0   # 회복 임계
+
+# 거리도 같습니다. 실측(S01)의 평소 거리는 35cm 였습니다. 절대 임계 45cm 로는
+# 앉는 순간부터 계속 근접 경고입니다. "가까이 앉는 사람" 과 "평소보다 다가온
+# 사람" 은 다르고, 이 제품이 잡으려는 것은 후자입니다.
+DISTANCE_REL_CLOSE = 0.85  # 평소의 85% 미만(=15% 이상 다가옴)이면 근접
+DISTANCE_REL_OK    = 0.92  # 92% 이상 돌아오면 해제
 
 STATIC_EPS        = 25     # 압력 변화량이 이 값 이하면 "안 움직임"
 STATIC_CAUTION    = 1200.0 # 정적 유지 초 → 주의
@@ -57,6 +69,34 @@ class FusionState:
     balance:         str = "CENTER"
 
     _last_pressure:  tuple = field(default=())
+
+
+def _blink_thresholds(s):
+    """
+    (저깜빡임 임계, 회복 임계).
+
+    평소값이 오면 그 비율로, 없으면 절대값으로 봅니다. 절대 임계 8회/분은
+    사람마다 의미가 다릅니다 — 평소 22회인 사람에게 8은 이미 한참 진행된
+    상태이고, 그때까지 아무 신호도 나가지 않습니다.
+    """
+    base = s.get("blink_rate_baseline")
+    if base and base > 0:
+        return base * BLINK_REL_LOW, base * BLINK_REL_OK
+    return BLINK_RATE_LOW, BLINK_RATE_OK
+
+
+def _distance_thresholds(s):
+    """
+    (근접 임계, 해제 임계).
+
+    "가까이 앉는 사람" 과 "평소보다 다가온 사람" 은 다릅니다. 실측에서 평소
+    35cm 에 앉는 사용자가 있었는데, 절대 임계 45cm 로는 앉는 순간부터 계속
+    근접 경고입니다. 경고가 상시로 켜져 있으면 그건 정보가 아닙니다.
+    """
+    base = s.get("face_distance_baseline_cm")
+    if base and base > 0:
+        return base * DISTANCE_REL_CLOSE, base * DISTANCE_REL_OK
+    return DISTANCE_CLOSE_CM, DISTANCE_OK_CM
 
 
 def _balance(pressure, prev):
@@ -121,21 +161,23 @@ def step(st: FusionState, s: dict, now: float):
 
     # ── 웹캠: 값이 없으면 누적을 멈추되 리셋하지는 않습니다 ─────────────────
     rate = s.get("blink_rate")
+    low_th, ok_th = _blink_thresholds(s)
     if rate is None:
         low_blink = st.low_blink_sec
-    elif rate < BLINK_RATE_LOW:
+    elif rate < low_th:
         low_blink = st.low_blink_sec + dt
-    elif rate >= BLINK_RATE_OK:
+    elif rate >= ok_th:
         low_blink = 0.0
     else:
         low_blink = st.low_blink_sec          # 두 임계 사이는 유지
 
     dist = s.get("face_distance_cm")
+    close_th, far_th = _distance_thresholds(s)
     if dist is None or dist <= 0:
         close_dist = st.close_dist_sec
-    elif dist < DISTANCE_CLOSE_CM:
+    elif dist < close_th:
         close_dist = st.close_dist_sec + dt
-    elif dist >= DISTANCE_OK_CM:
+    elif dist >= far_th:
         close_dist = 0.0
     else:
         close_dist = st.close_dist_sec

@@ -46,6 +46,17 @@ _METRIC_KEYS = ("distance_cm",)
 # 짧게 잡으면 그만큼 평소값의 표본이 적어집니다.
 BLINK_BASELINE_SEC = float(os.getenv("VISION_BLINK_BASELINE_SEC", 300.0))
 BLINK_MIN_SAMPLES = 60          # 2Hz 전송 기준 30초 분량
+
+# ── 평소 거리 ────────────────────────────────────────────────────────────────
+# 3초 캘리브레이션은 그 3초의 자세를 그대로 평소값으로 삼습니다. 실측에서
+# 화면 쪽으로 기울어 있던 순간이 잡혀 평소 거리가 35.4cm 로 저장됐고, 실제로
+# 앉는 거리는 42.6cm 였습니다. 35.4cm 는 fusion 의 근접 임계 45cm 보다
+# 가까워서 "평소가 이미 위험 거리" 가 됩니다.
+#
+# 3초 값은 즉시 쓸 수 있으므로 남겨 두고(provisional), 세션 초반 5분의
+# 중앙값으로 덮어씁니다. 깜빡임과 같은 방식입니다.
+DIST_BASELINE_SEC = float(os.getenv("VISION_DIST_BASELINE_SEC", 300.0))
+DIST_MIN_SAMPLES = 60
 _BASELINE_FILE = Path(__file__).parent / "baseline.json"
 
 
@@ -68,6 +79,8 @@ class Calibrator:
         self._last_end: Optional[float] = None
         self._blink_samples: list = []
         self._blink_start: Optional[float] = None
+        self._dist_samples: list = []
+        self._dist_start: Optional[float] = None
         self._load()
 
     # ── 조회 ─────────────────────────────────────────────────────────
@@ -177,6 +190,44 @@ class Calibrator:
             how = f"f_px={saved:.0f} 로 잰 것" if saved else "초점거리를 모르는 값"
             print(f"[calib] 저장된 평소값은 {how}입니다 (지금 {focal:.0f}) — 다시 잽니다")
 
+    # ── 평소 거리 다듬기 ─────────────────────────────────────────────
+    def add_distance_sample(self, cm, now: float) -> None:
+        """
+        평소 거리 표본. 3초 값을 세션 초반 5분의 중앙값으로 덮어씁니다.
+
+        3초 캘리브레이션은 하필 그때의 자세를 평소라고 부릅니다. 몸을 기울인
+        순간이 잡히면 평소 거리가 실제보다 7cm 가까워지고, 그 baseline 위에서
+        "평소보다 가까움" 을 판정하게 됩니다.
+        """
+        save = False
+        with self._lock:
+            if cm is None or not self._done:
+                return
+            if self._baseline.get("distance_refined"):
+                return
+            if self._dist_start is None:
+                self._dist_start = now
+            self._dist_samples.append(float(cm))
+
+            elapsed = now - self._dist_start
+            if elapsed >= DIST_BASELINE_SEC and len(self._dist_samples) >= DIST_MIN_SAMPLES:
+                vals = sorted(self._dist_samples)
+                median = round(vals[len(vals) // 2], 1)
+                before = self._baseline.get("distance_cm")
+                self._baseline["distance_cm"] = median
+                self._baseline["distance_refined"] = True
+                self._baseline["distance_samples"] = len(vals)
+                print(f"[calib] 평소 거리 확정 {median:.1f}cm "
+                      f"(3초 값 {before:.1f}cm → {len(vals)}표본 {elapsed / 60:.1f}분)")
+                save = True
+        if save:
+            self._save()
+
+    def distance_baseline_is_provisional(self) -> bool:
+        """아직 3초 스냅샷이면 True. 대시보드가 '측정 중' 을 표시할 수 있습니다."""
+        with self._lock:
+            return self._done and not self._baseline.get("distance_refined")
+
     # ── 평소 깜빡임 ──────────────────────────────────────────────────
     def needs_blink_baseline(self) -> bool:
         with self._lock:
@@ -258,6 +309,11 @@ class Calibrator:
             return
         if self._focal_px:
             b["focal_px"] = self._focal_px
+        # 3초 값입니다. 세션 초반 5분의 중앙값으로 덮어쓸 때까지 임시입니다.
+        b["distance_refined"] = False
+        # 평소 깜빡임은 5분짜리라 거리 재측정에 딸려 버려지면 안 됩니다.
+        if self._baseline.get("blink_rate"):
+            b["blink_rate"] = self._baseline["blink_rate"]
         self._baseline = b
         self._calibrating = False
         self._done = True

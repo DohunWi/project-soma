@@ -168,6 +168,7 @@ def main():
                 # 넣습니다 — 자리를 비우면 빈도가 0 으로 떨어지는데 그것이
                 # 평소값에 섞이면 기준이 통째로 내려갑니다.
                 calib.add_blink_sample(counter.rate(now), now)
+                calib.add_distance_sample(dist_cm, now)
 
             quality.update(now, detected=detected,
                            frontal=(frontal if detected else None))

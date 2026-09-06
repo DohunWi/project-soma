@@ -133,3 +133,67 @@ def test_검출률이_낮으면_신뢰도가_낮다():
     _, dp = run([poor])
     assert dg["confidence"] > dp["confidence"]
     assert dp["confidence"] < 0.55
+
+
+# ── 평소값 대비 판정 ─────────────────────────────────────────────────────────
+
+def sample_rel(rate, dist=None, base_rate=21.7, base_dist=35.0):
+    s = {"pressure": SEATED, "face_detected": True, "user_name": "t",
+         "blink_rate": rate, "blink_rate_baseline": base_rate,
+         "face_distance_baseline_cm": base_dist}
+    if dist is not None:
+        s["face_distance_cm"] = dist
+    return s
+
+
+def test_평소가_높으면_절대임계_위에서도_저깜빡임이다():
+    """평소 21.7 인 사람의 11회/분은 절반입니다. 절대 임계 8 로는 아무 일도 없습니다."""
+    n = int(LOW_BLINK_CAUTION) + 5
+    _, d = run([sample_rel(11.0) for _ in range(n)])
+    assert d["state"] == "CAUTION"
+    assert "low_blink" in d["reasons"]
+
+
+def test_평소가_낮으면_같은_값이_정상이다():
+    """평소 12회인 사람에게 11회는 정상입니다. 같은 숫자가 사람마다 다릅니다."""
+    n = int(LOW_BLINK_CAUTION) + 5
+    _, d = run([sample_rel(11.0, base_rate=12.0) for _ in range(n)])
+    assert "low_blink" not in d["reasons"]
+
+
+def test_평소값이_없으면_절대임계를_쓴다():
+    n = int(LOW_BLINK_CAUTION) + 5
+    _, d = run([sample(blink_rate=11.0) for _ in range(n)])       # baseline 없음
+    assert "low_blink" not in d["reasons"]                        # 8 이상이므로 정상
+    _, d2 = run([sample(blink_rate=5.0) for _ in range(n)])
+    assert "low_blink" in d2["reasons"]
+
+
+def test_회복_임계도_평소_대비다():
+    st, _ = run([sample_rel(11.0) for _ in range(200)])
+    assert st.low_blink_sec > 100
+    t = 1000.0 + 200
+    for _ in range(3):
+        st, _ = step(st, sample_rel(18.0), t)     # 21.7 의 83% → 회복
+        t += 1
+    assert st.low_blink_sec == 0.0
+
+
+def test_평소_35cm_인_사람은_35cm_에서_경고받지_않는다():
+    """절대 임계 45cm 로는 앉는 순간부터 계속 근접 경고였습니다."""
+    n = int(LOW_BLINK_CAUTION) + 5
+    _, d = run([sample_rel(20.0, dist=35.0) for _ in range(n)])
+    assert "close_distance" not in d["reasons"]
+
+
+def test_평소보다_다가오면_근접이다():
+    n = int(LOW_BLINK_CAUTION) + 5
+    _, d = run([sample_rel(20.0, dist=28.0) for _ in range(n)])   # 35 의 80%
+    assert "close_distance" in d["reasons"]
+
+
+def test_거리_평소값이_없으면_절대임계를_쓴다():
+    n = int(LOW_BLINK_CAUTION) + 5
+    s = sample(blink_rate=20.0, dist=40.0)
+    _, d = run([s for _ in range(n)])
+    assert "close_distance" in d["reasons"]        # 45cm 미만

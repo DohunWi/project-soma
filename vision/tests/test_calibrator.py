@@ -201,3 +201,82 @@ def test_거리_baseline_이_없어도_평소_깜빡임은_살린다(tmp_path, c
     c = make(tmp_path)
     assert c.baseline_blink_rate() == 18.5
     assert not c.is_done()                        # 거리는 여전히 필요합니다
+
+
+# ── 평소 거리 다듬기 ─────────────────────────────────────────────────────────
+
+def ready(tmp_path, monkeypatch, cm=35.4):
+    """3초 캘리브레이션이 끝난 상태를 만듭니다."""
+    monkeypatch.setattr(C, "CALIB_DURATION", 0.0)
+    c = make(tmp_path)
+    c.start()
+    c.add_sample({"distance_cm": cm})
+    assert c.is_done()
+    return c
+
+
+def test_3초값은_임시로_표시된다(tmp_path, monkeypatch):
+    c = ready(tmp_path, monkeypatch)
+    assert c.distance_baseline_is_provisional() is True
+    assert c.baseline_distance_cm() == 35.4
+
+
+def test_5분_중앙값으로_덮어쓴다(tmp_path, monkeypatch):
+    """3초 캘리브레이션은 하필 그때의 자세를 평소라고 부릅니다."""
+    monkeypatch.setattr(C, "DIST_BASELINE_SEC", 10.0)
+    monkeypatch.setattr(C, "DIST_MIN_SAMPLES", 5)
+    c = ready(tmp_path, monkeypatch, cm=35.4)          # 몸을 기울인 순간
+    for i, cm in enumerate([42.0, 43.0, 42.5, 41.0, 44.0, 42.6]):
+        c.add_distance_sample(cm, 1000.0 + i)
+    assert c.baseline_distance_cm() == 35.4            # 아직 구간 중
+    c.add_distance_sample(42.6, 1011.0)
+    assert c.baseline_distance_cm() == 42.6
+    assert c.distance_baseline_is_provisional() is False
+
+
+def test_확정되면_다시_바꾸지_않는다(tmp_path, monkeypatch):
+    monkeypatch.setattr(C, "DIST_BASELINE_SEC", 1.0)
+    monkeypatch.setattr(C, "DIST_MIN_SAMPLES", 2)
+    c = ready(tmp_path, monkeypatch)
+    c.add_distance_sample(42.0, 1000.0)
+    c.add_distance_sample(42.0, 1002.0)
+    assert c.baseline_distance_cm() == 42.0
+    for i in range(50):
+        c.add_distance_sample(30.0, 1010.0 + i)        # 점점 화면에 붙어도
+    assert c.baseline_distance_cm() == 42.0            # 평소값은 그대로
+
+
+def test_값이_없으면_섞지_않는다(tmp_path, monkeypatch):
+    monkeypatch.setattr(C, "DIST_BASELINE_SEC", 1.0)
+    monkeypatch.setattr(C, "DIST_MIN_SAMPLES", 2)
+    c = ready(tmp_path, monkeypatch)
+    for i in range(5):
+        c.add_distance_sample(None, 1000.0 + i)
+    assert c.distance_baseline_is_provisional() is True
+
+
+def test_확정값은_다음_세션에도_남는다(tmp_path, monkeypatch):
+    monkeypatch.setattr(C, "DIST_BASELINE_SEC", 1.0)
+    monkeypatch.setattr(C, "DIST_MIN_SAMPLES", 2)
+    c = ready(tmp_path, monkeypatch)
+    c.add_distance_sample(42.0, 1000.0)
+    c.add_distance_sample(42.0, 1002.0)
+
+    c2 = make(tmp_path)
+    assert c2.baseline_distance_cm() == 42.0
+    assert c2.distance_baseline_is_provisional() is False
+
+
+def test_거리_재측정이_평소_깜빡임을_지우지_않는다(tmp_path, monkeypatch):
+    """깜빡임 평소값은 5분짜리입니다. 거리 3초 재측정에 딸려 버려지면 안 됩니다."""
+    monkeypatch.setattr(C, "BLINK_BASELINE_SEC", 1.0)
+    monkeypatch.setattr(C, "BLINK_MIN_SAMPLES", 2)
+    c = ready(tmp_path, monkeypatch)
+    c.add_blink_sample(21.7, 1000.0)
+    c.add_blink_sample(21.7, 1002.0)
+    assert c.baseline_blink_rate() == 21.7
+
+    c.recalibrate()                                    # 거리만 다시 잽니다
+    c.add_sample({"distance_cm": 50.0})
+    assert c.baseline_distance_cm() == 50.0
+    assert c.baseline_blink_rate() == 21.7
