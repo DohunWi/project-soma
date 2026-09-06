@@ -23,8 +23,13 @@
 
     "metrics": {
       "type": "object",
-      "description": "대시보드에 그대로 표시되는 값들",
+      "description": "대시보드에 그대로 표시되는 값들.\n**값이 없으면 키를 생략합니다 — null 을 넣지 않습니다.**",
       "properties": {
+        "blink_rate_baseline":       { "type": "number", "minimum": 0,
+                                       "description": "그 사람의 평소 분당 깜빡임. 문구는 절대값이 아니라 이 값과의 차이로 만듭니다" },
+        "face_distance_baseline_cm": { "type": "number", "exclusiveMinimum": 0 },
+        "detect_rate":               { "type": "number", "minimum": 0, "maximum": 1,
+                                       "description": "웹캠 얼굴 검출률. 값이 왜 비는지 UI 가 설명할 수 있게 넘깁니다" },
         "balance":          { "enum": ["LEFT", "CENTER", "RIGHT"] },
         "seated":           { "type": "boolean" },
         "blink_rate":       { "type": "number" },

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "sensor_data",
-  "description": "수집 계층 → 서버. Socket.IO 이벤트명: 'sensor_data'. 소스마다 독립적으로 보냅니다.",
+  "description": "수집 계층 → 서버. Socket.IO 이벤트명: 'sensor_data'. 소스마다 독립적으로 보냅니다.\n\n**값이 없으면 키를 생략합니다. null 을 보내지 마세요.** 스키마 위반이라 payload 전체가 버려지고, 같이 실려 있던 멀쩡한 값(깜빡임 등)까지 사라집니다.",
   "type": "object",
   "required": ["v", "t", "source", "user_name"],
   "properties": {
@@ -33,12 +33,43 @@
       "description": "source == 'vision' 일 때 필수. 영상은 절대 보내지 않습니다 — 수치만",
       "properties": {
         "blink":            { "type": "boolean", "description": "이 프레임에서 깜빡임 사건 발생 여부" },
-        "blink_rate":       { "type": "number",  "description": "최근 60초 분당 깜빡임 수" },
-        "face_distance_cm": { "type": "number",  "description": "얼굴 ↔ 모니터 추정 거리" },
-        "face_detected":    { "type": "boolean" }
+        "blink_rate":       { "type": "number", "minimum": 0,
+                              "description": "관측 창 기준 분당 깜빡임 수. 창이 덜 찼으면 관측한 시간으로 환산합니다" },
+        "blink_count":      { "type": "integer", "minimum": 0,
+                              "description": "관측 창 안의 깜빡임 사건 수. rate 의 근거입니다 — 받는 쪽이 직접 환산할 수 있습니다" },
+        "window_sec":       { "type": "number", "minimum": 0,
+                              "description": "blink_count 를 센 실제 관측 시간. 시작 직후에는 창(60초)보다 작습니다. 작으면 rate 를 신뢰하지 마세요" },
+        "blink_duration_ms":{ "type": "number", "minimum": 0,
+                              "description": "직전 깜빡임에서 눈을 감고 있던 시간. 짧으면 불완전 깜빡임입니다" },
+
+        "face_detected":    { "type": "boolean" },
+        "face_distance_cm": { "type": "number", "exclusiveMinimum": 0,
+                              "description": "얼굴 ↔ 모니터 추정 거리. 정면 프레임에서만 계산합니다. 없으면 키를 생략합니다" },
+        "face_distance_baseline_cm": { "type": "number", "exclusiveMinimum": 0,
+                              "description": "캘리브레이션 때의 평소 거리. '평소보다 N cm 가까워짐' 을 만들 수 있게 함께 보냅니다" },
+        "blink_rate_baseline": { "type": "number", "minimum": 0,
+                              "description": "캘리브레이션 때의 평소 분당 깜빡임 수. 자각 문구는 절대값이 아니라 이 값과의 차이로 만듭니다" },
+
+        "detect_rate":      { "type": "number", "minimum": 0, "maximum": 1,
+                              "description": "최근 창에서 얼굴이 검출된 프레임 비율. confidence 의 입력입니다" },
+        "yaw_dropped_rate": { "type": "number", "minimum": 0, "maximum": 1,
+                              "description": "고개 돌림으로 거리값을 버린 프레임 비율. 높으면 거리 지표가 드문드문합니다" },
+        "calibrating":      { "type": "boolean",
+                              "description": "캘리브레이션 진행 중. 거리값이 없는 이유가 장애가 아님을 알립니다" }
       }
     }
   },
+
+  "allOf": [
+    {
+      "if":   { "properties": { "source": { "const": "chair" } }, "required": ["source"] },
+      "then": { "required": ["chair"] }
+    },
+    {
+      "if":   { "properties": { "source": { "const": "vision" } }, "required": ["source"] },
+      "then": { "required": ["vision"] }
+    }
+  ],
 
   "examples": [
     { "v": 1, "t": 1725345600.123, "source": "chair", "device_id": "smart_chair_01",
@@ -46,6 +77,15 @@
       "chair": { "pressure": [900, 700, 1000, 910], "ir": [250] } },
 
     { "v": 1, "t": 1725345600.150, "source": "vision", "user_name": "guest",
-      "vision": { "blink": true, "blink_rate": 8.4, "face_distance_cm": 48.2, "face_detected": true } }
+      "vision": { "blink": true, "blink_rate": 8.4, "blink_count": 8, "window_sec": 57.1,
+                  "blink_duration_ms": 142,
+                  "face_detected": true, "face_distance_cm": 48.2,
+                  "face_distance_baseline_cm": 60.0, "blink_rate_baseline": 15.2,
+                  "detect_rate": 0.97, "yaw_dropped_rate": 0.08, "calibrating": false } },
+
+    { "v": 1, "t": 1725345601.150, "source": "vision", "user_name": "guest",
+      "vision": { "blink": false, "blink_count": 8, "window_sec": 58.1,
+                  "face_detected": false, "detect_rate": 0.12, "yaw_dropped_rate": 0.0,
+                  "calibrating": false } }
   ]
 }
