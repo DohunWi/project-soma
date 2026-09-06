@@ -54,6 +54,45 @@ OUT_DIR = Path(__file__).parent / "data"
 MIN_DETECT_RATE = 0.80
 MIN_CUES = 10
 
+# 녹화 앞의 "눈 뜨고 버티기" 구간.
+# 신호 방식만으로는 오검출을 셀 수 없습니다. 사람은 3~4초에 한 번 무의식적으로
+# 깜빡이는데 신호 간격도 4초라, 신호 사이의 자연 깜빡임이 전부 오검출로 잡힙니다.
+# 검출기가 맞게 잡은 것을 틀렸다고 세는 셈입니다.
+# 이 구간에서는 피험자가 눈을 뜨고 버티므로, 여기서 잡힌 검출만이 진짜 오검출입니다.
+HOLD_SEC = 15.0
+
+
+def draw_overlay(frame, cue: bool, info: str, hold: bool = False):
+    """
+    미리보기 그리기. 프레임을 제자리에서 고칩니다.
+
+    신호(cue)일 때는 **창 전체를 초록으로 덮습니다.** 화면 일부만 바꾸면
+    피험자가 그것을 보려고 시선을 옮기게 되고, 시선이 움직이면 깜빡임
+    타이밍이 흔들립니다. 전체를 덮으면 어디를 보고 있든 알아챕니다.
+
+    루프 안에 있던 것을 함수로 뺐습니다. 프레임 크기를 여기서 구하지 않고
+    바깥 변수(h, w)에 기대고 있었는데, 캡처 코드를 고치면서 그 정의가 사라져
+    첫 신호에서 NameError 로 죽었습니다. 녹화가 5초에서 끝났고 아무도
+    그 자리에서는 몰랐습니다.
+    """
+    h, w = frame.shape[:2]
+    if cue:
+        frame[:] = (0, 200, 0)                       # 신호: 전체 초록
+        cv2.putText(frame, "BLINK", (w // 2 - 90, h // 2),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.6, (255, 255, 255), 4)
+    elif hold:
+        # 버티기 구간은 파랗게. 초록(깜빡여라)과 색으로 구분합니다 —
+        # 글씨를 읽어야 알 수 있으면 읽는 동안 이미 지나갑니다.
+        frame[:] = (160, 90, 0)
+        cv2.putText(frame, "EYES OPEN", (w // 2 - 150, h // 2),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.4, (255, 255, 255), 4)
+        cv2.putText(frame, info, (12, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7, (255, 255, 255), 2)
+    else:
+        cv2.putText(frame, info, (12, 30), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6, (0, 255, 0), 2)
+    return frame
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -63,6 +102,8 @@ def main():
     ap.add_argument("--duration", type=float, default=90.0, help="초")
     ap.add_argument("--guided", action="store_true", help="신호에 맞춰 깜빡이기")
     ap.add_argument("--cue-interval", type=float, default=4.0, help="신호 간격(초)")
+    ap.add_argument("--hold-sec", type=float, default=HOLD_SEC,
+                    help="처음 N초는 눈을 뜨고 버팁니다. 진짜 오검출을 재는 구간입니다")
     ap.add_argument("--glasses", action="store_true", help="안경 착용 (메타데이터)")
     args = ap.parse_args()
 
@@ -93,15 +134,23 @@ def main():
           f"{'신호 방식' if args.guided else '스페이스바 방식'}"
           f"{'  (안경)' if args.glasses else ''}")
     if args.guided:
-        print(f"[rec] 화면이 초록으로 바뀌면 한 번 깜빡이세요 ({args.cue_interval:.0f}초 간격)")
+        print(f"[rec] 1단계 — 처음 {args.hold_sec:.0f}초는 눈을 뜨고 버티세요 "
+              f"(오검출 측정 구간)")
+        print(f"[rec] 2단계 — 화면이 초록으로 바뀌면 한 번 깜빡이세요 "
+              f"({args.cue_interval:.0f}초 간격)")
+        print(f"[rec]         신호 사이에는 평소대로 깜빡이셔도 됩니다")
     else:
         print("[rec] 피험자가 깜빡일 때마다 관찰자가 스페이스바를 누르세요")
     print("[rec] ESC 로 종료")
 
     t0 = time.time()
-    next_cue = t0 + 5.0        # 처음 5초는 준비 시간
+    hold_end = t0 + (args.hold_sec if args.guided else 0.0)
+    next_cue = hold_end + 2.0      # 버티기가 끝나고 2초 뒤부터 신호
     cue_until = 0.0
     n_cue = n_key = n_frame = n_detected = 0
+    if args.guided and args.hold_sec > 0:
+        f.write(json.dumps({"type": "hold", "start": round(t0, 4),
+                            "end": round(hold_end, 4)}) + "\n")
 
     try:
         while True:
@@ -135,16 +184,15 @@ def main():
                 next_cue = now + args.cue_interval
 
             # ── 화면 ──────────────────────────────────────────────
-            if args.guided and now < cue_until:
-                frame[:] = (0, 200, 0)                       # 신호: 전체 초록
-                cv2.putText(frame, "BLINK", (w // 2 - 90, h // 2),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.6, (255, 255, 255), 4)
+            holding = args.guided and now < hold_end
+            if holding:
+                info = f"눈을 뜨고 버티세요  {hold_end - now:4.1f}s"
             else:
                 info = f"{now - t0:5.1f}s / {args.duration:.0f}s   " + \
                        (f"EAR {ear:.3f}" if ear else "no face") + \
                        (f"   cue {n_cue}" if args.guided else f"   key {n_key}")
-                cv2.putText(frame, info, (12, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                            0.6, (0, 255, 0), 2)
+            draw_overlay(frame, cue=args.guided and now < cue_until, info=info,
+                         hold=holding)
 
             cv2.imshow("soma eval — record", frame)
             k = cv2.waitKey(1) & 0xFF
