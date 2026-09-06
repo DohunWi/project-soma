@@ -59,6 +59,10 @@ python chair/bridge/bridge.py                     # 의자
 python vision/run.py --preview                    # 웹캠
 ```
 
+웹캠은 mediapipe 모델 파일(3.7MB)을 씁니다. 없으면 처음 실행할 때 내려받아
+`vision/models/` 에 캐시합니다. **발표 전에 미리 한 번 실행해 두세요** —
+발표장 네트워크가 막히면 그 자리에서 받을 수 없습니다.
+
 ### 하드웨어 없이 개발하기
 
 **의자는 1대이고 공용공간에 있습니다.** 기다리지 말고 mock 으로 개발하세요.

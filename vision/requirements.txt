@@ -2,12 +2,25 @@
 -r ../requirements.txt
 
 opencv-python>=4.9
-mediapipe>=0.10.14
+mediapipe>=0.10.14,<1.0
 numpy>=1.24
+pytest>=8.0
 
-# 눈 깜빡임에는 Face Mesh(468점)가 필요합니다.
+# 눈 깜빡임에는 얼굴 468점 랜드마크가 필요합니다.
 # Pose(33점)에는 눈 윤곽이 없어 EAR 을 계산할 수 없습니다.
 #
-# mediapipe 설치가 실패하면:
-#   - Python 3.13 인지 확인 (아직 미지원). 3.12 로 내리세요
+# ── mediapipe 상한(<1.0)의 이유 ──────────────────────────────
+# 1.0.1 은 macOS(Apple Silicon)에서 첫 추론 때 프로세스가 abort 합니다.
+# 파이썬 예외가 아니라 네이티브 죽음이라 try/except 로 못 잡습니다.
+#     F0000 graph_service.h:139] Check failed: service_ Service is unavailable.
+#     @ -[DrishtiMetalHelper initWithCalculatorContext:]
+# 0.10.35 에서는 같은 코드가 정상 동작합니다(478점 검출 확인).
+#
+# ── 레거시 Solutions API 는 없어졌습니다 ─────────────────────
+# 0.10.31 무렵부터 mp.solutions 가 빠졌습니다. 캡처 계층은 Tasks API
+# (FaceLandmarker)를 씁니다. mediapipe 를 부르는 곳은 vision/landmarks.py
+# 하나뿐이므로, 다음에 API 가 또 바뀌면 그 파일만 고치면 됩니다.
+#
+# 설치가 실패하면:
+#   - Python 3.13 인지 확인 (mediapipe 미지원). 3.12 로 내리세요
 #   - numpy 충돌이면 `pip install "numpy<2"` 후 재시도

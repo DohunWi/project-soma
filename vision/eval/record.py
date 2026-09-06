@@ -29,15 +29,16 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "vision"))
 sys.path.insert(0, str(ROOT / "vision" / "blink"))
 
 try:
     import cv2
-    import mediapipe as mp
 except ImportError:
-    sys.exit("opencv / mediapipe 가 없습니다.  pip install -r vision/requirements.txt")
+    sys.exit("opencv 가 없습니다.  pip install -r vision/requirements.txt")
 
 from ear import face_ear  # noqa: E402
+from landmarks import FaceLandmarks  # noqa: E402
 
 FACE_L, FACE_R = 234, 454
 OUT_DIR = Path(__file__).parent / "data"
@@ -60,9 +61,10 @@ def main():
     if not cap.isOpened():
         sys.exit(f"카메라 {args.cam} 를 열 수 없습니다")
 
-    mesh = mp.solutions.face_mesh.FaceMesh(
-        max_num_faces=1, refine_landmarks=True,
-        min_detection_confidence=0.5, min_tracking_confidence=0.5)
+    try:
+        det = FaceLandmarks()
+    except ImportError:
+        sys.exit("mediapipe 가 없습니다.  pip install -r vision/requirements.txt")
 
     f = out.open("w", encoding="utf-8")
     f.write(json.dumps({
@@ -95,13 +97,10 @@ def main():
             if not ok:
                 continue
 
-            h, w = frame.shape[:2]
-            res = mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            pts = det.detect(frame, now)
 
             ear = width_px = None
-            if res.multi_face_landmarks:
-                lm = res.multi_face_landmarks[0].landmark
-                pts = {i: (lm[i].x * w, lm[i].y * h) for i in range(len(lm))}
+            if pts is not None:
                 ear = round(face_ear(pts), 5)
                 lx, ly = pts[FACE_L]
                 rx, ry = pts[FACE_R]
@@ -143,7 +142,7 @@ def main():
     finally:
         f.close()
         cap.release()
-        mesh.close()
+        det.close()
         cv2.destroyAllWindows()
         gt = n_cue if args.guided else n_key
         print(f"\n[rec] 저장: {out}")
