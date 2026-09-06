@@ -25,7 +25,6 @@ iPhone 이 있냐 없냐에 따라 같은 인덱스가 다른 카메라를 가�
 import argparse
 import json
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -46,6 +45,7 @@ except ImportError:
     sys.exit("opencv 가 없습니다.  pip install -r vision/requirements.txt")
 
 from calibrator import Calibrator                       # vision/calibrator.py
+from camera import default_index, list_cams, open_camera    # vision/camera.py
 from ear import BlinkCounter, face_ear                  # vision/blink/ear.py
 from geometry import face_width_px, is_frontal, yaw_asymmetry   # vision/geometry.py
 from landmarks import FaceLandmarks                     # vision/landmarks.py
@@ -53,83 +53,11 @@ from payload import vision_payload                      # vision/payload.py
 from quality import FrameQuality                        # vision/quality.py
 
 SEND_HZ = 2.0     # 서버 전송 주기. 깜빡임 사건은 발생 즉시 별도로 보냅니다
-MAX_CAM_PROBE = 6 # --list-cams 가 훑어볼 인덱스 범위
-
-
-def _mac_camera_names():
-    """
-    macOS 의 카메라 장치 이름 목록. 힌트로만 씁니다.
-
-    OpenCV 는 장치 이름을 알려주지 않고 인덱스만 줍니다. 이름을 같이 보여주면
-    "0번이 왜 iPhone 이지" 를 훨씬 빨리 알 수 있습니다. 다만 system_profiler 의
-    순서가 AVFoundation 의 인덱스 순서와 같다는 보장은 없으므로, 매칭하지 않고
-    목록만 보여줍니다.
-    """
-    if sys.platform != "darwin":
-        return []
-    try:
-        out = subprocess.run(["system_profiler", "SPCameraDataType"],
-                             capture_output=True, text=True, timeout=10).stdout
-    except (OSError, subprocess.SubprocessError):
-        return []
-    names = []
-    for line in out.splitlines():
-        stripped = line.strip()
-        if stripped.endswith(":") and line.startswith("    ") and not line.startswith("      "):
-            name = stripped[:-1]
-            if name and name != "Camera":
-                names.append(name)
-    return names
-
-
-def list_cams(max_index: int = MAX_CAM_PROBE) -> None:
-    """
-    열리는 카메라를 훑어 인덱스·해상도를 출력합니다.
-
-    chair/bridge.py 의 --list 와 같은 이유로 있습니다. 장치 인덱스를
-    코드나 머릿속에 박아 두면 환경이 바뀌었을 때 원인을 못 찾습니다.
-    연속성 카메라는 iPhone 이 근처에 있을 때만 목록에 나타나므로,
-    같은 인덱스가 어제와 다른 카메라를 가리킬 수 있습니다.
-    """
-    try:
-        cv2.setLogLevel(0)            # 없는 인덱스를 열 때 나오는 경고를 줄입니다
-    except AttributeError:
-        pass
-
-    for name in _mac_camera_names():
-        print(f"  (이름) {name}")
-    if sys.platform == "darwin":
-        print("  ※ 이름 순서와 인덱스 순서는 다릅니다. 연속성 카메라(iPhone)가")
-        print("     0번을 가져가는 경우가 많습니다.\n")
-
-    found = 0
-    for i in range(max_index):
-        cap = cv2.VideoCapture(i)
-        if not cap.isOpened():
-            cap.release()
-            continue
-        ok, frame = cap.read()
-        w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        cap.release()
-        if not ok or frame is None:
-            print(f"  [{i}] 열렸지만 프레임이 오지 않습니다 (다른 앱이 쓰는 중일 수 있습니다)")
-            continue
-        found += 1
-        print(f"  [{i}] {w}x{h}")
-    if not found:
-        print("  쓸 수 있는 카메라가 없습니다.")
-        print("  macOS 라면 시스템 설정 → 개인정보 보호 및 보안 → 카메라에서")
-        print("  터미널 앱을 허용하고 터미널을 다시 시작하세요.")
-    else:
-        print("\n어느 것이 내장캠인지 --preview 로 확인한 뒤")
-        print(".env 의 WEBCAM_INDEX 에 박아 두세요. iPhone 이 근처에 있으면")
-        print("연속성 카메라가 목록에 끼어들어 인덱스가 밀립니다.")
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--cam", type=int, default=int(os.getenv("WEBCAM_INDEX", 0)))
+    ap.add_argument("--cam", type=int, default=None, help=".env 의 WEBCAM_INDEX 를 씁니다")
     ap.add_argument("--url", default=f"http://127.0.0.1:{os.getenv('SERVER_PORT', 5000)}")
     ap.add_argument("--user", default=os.getenv("USER_NAME", "guest"))
     ap.add_argument("--stdout", action="store_true")
@@ -162,10 +90,9 @@ def main():
         emit = lambda ev: sio.emit("sensor_data", ev)
         print(f"[vision] 서버 연결: {args.url}", file=sys.stderr)
 
-    cap = cv2.VideoCapture(args.cam)
-    if not cap.isOpened():
-        sys.exit(f"카메라 {args.cam} 를 열 수 없습니다. --cam 으로 다른 인덱스를 시도하세요.")
-    print(f"[vision] 카메라 {args.cam} 시작", file=sys.stderr)
+    cam = default_index(args.cam)
+    cap = open_camera(cam)
+    print(f"[vision] 카메라 {cam} 시작", file=sys.stderr)
 
     # 카메라가 실제로 열린 뒤에 캘리브레이션을 시작합니다.
     # 열기 전에 시작하면 3초 창이 카메라 준비 대기에 소모돼 샘플이 1~2개만 모입니다.

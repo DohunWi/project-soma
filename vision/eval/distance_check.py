@@ -33,6 +33,13 @@ try:
 except ImportError:
     sys.exit("opencv 가 없습니다.  pip install -r vision/requirements.txt")
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env")
+except ImportError:
+    pass
+
+from camera import default_index, list_cams, open_camera  # noqa: E402
 from geometry import face_width_px, is_frontal, yaw_asymmetry  # noqa: E402
 from landmarks import FaceLandmarks  # noqa: E402
 
@@ -64,15 +71,20 @@ def measure(cap, det, label, seconds=SAMPLE_SEC):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--cam", type=int, default=0)
+    ap.add_argument("--cam", type=int, default=None, help=".env 의 WEBCAM_INDEX 를 씁니다")
+    ap.add_argument("--list-cams", action="store_true", help="카메라 목록만 보고 종료")
     ap.add_argument("--calib-cm", type=float, default=60.0)
     ap.add_argument("--points", type=float, nargs="+",
                     default=[40, 50, 60, 70, 80])
     args = ap.parse_args()
 
-    cap = cv2.VideoCapture(args.cam)
-    if not cap.isOpened():
-        sys.exit(f"카메라 {args.cam} 를 열 수 없습니다")
+    if args.list_cams:
+        list_cams()
+        return
+
+    cam = default_index(args.cam)
+    cap = open_camera(cam)
+    print(f"[eval] 카메라 {cam}")
     try:
         det = FaceLandmarks()
     except ImportError:

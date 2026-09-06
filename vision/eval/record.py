@@ -37,29 +37,45 @@ try:
 except ImportError:
     sys.exit("opencv 가 없습니다.  pip install -r vision/requirements.txt")
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env")
+except ImportError:
+    pass
+
+from camera import default_index, list_cams, open_camera  # noqa: E402
 from ear import face_ear  # noqa: E402
 from landmarks import FaceLandmarks  # noqa: E402
 
 FACE_L, FACE_R = 234, 454
 OUT_DIR = Path(__file__).parent / "data"
 
+# 녹화 품질 하한. 이 아래면 스윕을 돌려도 의미 있는 임계가 나오지 않습니다.
+MIN_DETECT_RATE = 0.80
+MIN_CUES = 10
+
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--subject", required=True, help="피험자 식별자 (예: S01)")
-    ap.add_argument("--cam", type=int, default=0)
+    ap.add_argument("--cam", type=int, default=None, help=".env 의 WEBCAM_INDEX 를 씁니다")
+    ap.add_argument("--list-cams", action="store_true", help="카메라 목록만 보고 종료")
     ap.add_argument("--duration", type=float, default=90.0, help="초")
     ap.add_argument("--guided", action="store_true", help="신호에 맞춰 깜빡이기")
     ap.add_argument("--cue-interval", type=float, default=4.0, help="신호 간격(초)")
     ap.add_argument("--glasses", action="store_true", help="안경 착용 (메타데이터)")
     args = ap.parse_args()
 
+    if args.list_cams:
+        list_cams()
+        return
+
     OUT_DIR.mkdir(exist_ok=True)
     out = OUT_DIR / f"{args.subject}.jsonl"
 
-    cap = cv2.VideoCapture(args.cam)
-    if not cap.isOpened():
-        sys.exit(f"카메라 {args.cam} 를 열 수 없습니다")
+    cam = default_index(args.cam)
+    cap = open_camera(cam)
+    print(f"[rec] 카메라 {cam}", file=sys.stderr)
 
     try:
         det = FaceLandmarks()
@@ -85,7 +101,7 @@ def main():
     t0 = time.time()
     next_cue = t0 + 5.0        # 처음 5초는 준비 시간
     cue_until = 0.0
-    n_cue = n_key = n_frame = 0
+    n_cue = n_key = n_frame = n_detected = 0
 
     try:
         while True:
@@ -101,6 +117,7 @@ def main():
 
             ear = width_px = None
             if pts is not None:
+                n_detected += 1
                 ear = round(face_ear(pts), 5)
                 lx, ly = pts[FACE_L]
                 rx, ry = pts[FACE_R]
@@ -145,9 +162,29 @@ def main():
         det.close()
         cv2.destroyAllWindows()
         gt = n_cue if args.guided else n_key
+        detect_rate = n_detected / n_frame if n_frame else 0.0
         print(f"\n[rec] 저장: {out}")
-        print(f"[rec] 프레임 {n_frame}개, 정답 {gt}개")
-        print(f"[rec] 다음:  python vision/eval/sweep.py {out}")
+        print(f"[rec] 프레임 {n_frame}개, 얼굴 검출 {n_detected}개 "
+              f"({100 * detect_rate:.0f}%), 정답 {gt}개")
+
+        # 못 쓰는 녹화를 조용히 저장하지 않습니다. 나중에 sweep 을 돌리고 나서야
+        # "정답이 1개였다" 를 알면 그 사이 시간이 통째로 날아갑니다.
+        problems = []
+        if detect_rate < MIN_DETECT_RATE:
+            problems.append(f"얼굴 검출률이 {100 * detect_rate:.0f}% 입니다 "
+                            f"(권장 {100 * MIN_DETECT_RATE:.0f}% 이상). "
+                            f"카메라·조명·앉은 위치를 확인하세요")
+        if gt < MIN_CUES:
+            problems.append(f"정답이 {gt}개뿐입니다 (권장 {MIN_CUES}개 이상). "
+                            f"90초를 채워서 다시 찍으세요")
+        if problems:
+            print("\n[rec] ⚠ 이 녹화는 정확도 분석에 쓰기 어렵습니다")
+            for p in problems:
+                print(f"       - {p}")
+            print(f"       다시:  python vision/eval/record.py --guided "
+                  f"--subject {args.subject}")
+        else:
+            print(f"[rec] 다음:  python vision/eval/sweep.py {out}")
 
 
 if __name__ == "__main__":
