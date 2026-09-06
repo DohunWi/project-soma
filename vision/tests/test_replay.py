@@ -25,11 +25,12 @@ def test_피로_신호는_빈도가_떨어진다():
 
 
 def test_임계를_낮추면_깜빡임을_덜_센다():
+    """임계는 평소 EAR 대비 비율입니다. 비율을 낮추면 더 깊이 감아야 인정합니다."""
     frames = synth_frames(fatigue=False)
-    normal = summarize(blink_series(frames, closed=0.21, open_th=0.25))
-    strict = summarize(blink_series(frames, closed=0.05, open_th=0.08))
-    assert strict["n"] >= 1
-    assert strict.get("avg", 0) < normal["avg"]     # 감김을 인정하지 않으면 0 에 가깝다
+    normal = summarize(blink_series(frames, closed=0.60, open_th=0.75))
+    strict = summarize(blink_series(frames, closed=0.20, open_th=0.30))
+    assert normal["avg"] > 0
+    assert strict.get("avg", 0) < normal["avg"]
 
 
 def test_의자_합성값이_불균형_알림을_만들지_않는다():

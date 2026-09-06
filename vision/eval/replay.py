@@ -33,7 +33,7 @@ sys.path.insert(0, str(ROOT / "vision"))
 sys.path.insert(0, str(ROOT / "vision" / "blink"))
 sys.path.insert(0, str(ROOT / "fusion"))
 
-from ear import BlinkCounter, EAR_CLOSED, EAR_OPEN  # noqa: E402
+from ear import BlinkCounter, R_CLOSED, R_OPEN  # noqa: E402
 import state as fusion                              # fusion/state.py  # noqa: E402
 
 SEND_SEC = 0.5          # run.py 의 SEND_HZ = 2.0 과 같은 주기
@@ -76,31 +76,26 @@ def synth_frames(seconds=90.0, blink_period=4.0, fps=30.0, fatigue=True):
     return out
 
 
-def blink_series(frames, closed=EAR_CLOSED, open_th=EAR_OPEN, repeat=1):
+def blink_series(frames, closed=R_CLOSED, open_th=R_OPEN, repeat=1):
     """
     EAR 시계열 → run.py 가 보냈을 (t, blink_rate) 목록.
 
-    런타임과 같은 상태기계(BlinkCounter)를 씁니다. 여기서 다른 구현을 쓰면
-    분석 결과가 실제 동작을 설명하지 못합니다.
+    런타임과 같은 상태기계(BlinkCounter)를 씁니다. 임계는 평소 EAR 대비
+    비율입니다 — 예전에는 모듈 상수를 임시로 바꿔 끼웠는데, 분석 도구가
+    런타임 모듈의 전역을 건드리는 구조는 언제든 사고가 됩니다.
     """
-    import ear as ear_mod
-    old = (ear_mod.EAR_CLOSED, ear_mod.EAR_OPEN)
-    ear_mod.EAR_CLOSED, ear_mod.EAR_OPEN = closed, open_th
-    try:
-        counter = BlinkCounter()
-        span = (frames[-1][0] - frames[0][0]) if frames else 0.0
-        out, next_send = [], 0.0
-        for loop in range(repeat):
-            offset = loop * (span + 1.0 / 30)
-            for t, e in frames:
-                now = offset + t
-                counter.update(e, now)
-                if now >= next_send:
-                    next_send = now + SEND_SEC
-                    out.append((now, counter.rate(now)))
-        return out
-    finally:
-        ear_mod.EAR_CLOSED, ear_mod.EAR_OPEN = old
+    counter = BlinkCounter(r_closed=closed, r_open=open_th)
+    span = (frames[-1][0] - frames[0][0]) if frames else 0.0
+    out, next_send = [], 0.0
+    for loop in range(repeat):
+        offset = loop * (span + 1.0 / 30)
+        for t, e in frames:
+            now = offset + t
+            counter.update(e, now)
+            if now >= next_send:
+                next_send = now + SEND_SEC
+                out.append((now, counter.rate(now)))
+    return out
 
 
 def run_fusion(series, low=None, ok=None):
@@ -153,8 +148,10 @@ def summarize(series):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("paths", nargs="*")
-    ap.add_argument("--closed", type=float, default=EAR_CLOSED)
-    ap.add_argument("--open", dest="open_th", type=float, default=EAR_OPEN)
+    ap.add_argument("--closed", type=float, default=R_CLOSED,
+                    help="감김 임계 (평소 EAR 대비 비율)")
+    ap.add_argument("--open", dest="open_th", type=float, default=R_OPEN,
+                    help="뜸 임계 (평소 EAR 대비 비율)")
     ap.add_argument("--repeat", type=int, default=1,
                     help="녹화를 N 번 이어 붙여 긴 세션을 만듭니다 (비교용 가정)")
     ap.add_argument("--sweep", action="store_true",
