@@ -41,6 +41,8 @@ except ImportError:
 from calibrator import Calibrator                       # vision/calibrator.py
 from ear import BlinkCounter, face_ear                  # vision/blink/ear.py
 from geometry import face_width_px, is_frontal, yaw_asymmetry   # vision/geometry.py
+from payload import vision_payload                      # vision/payload.py
+from quality import FrameQuality                        # vision/quality.py
 
 SEND_HZ = 2.0     # 서버 전송 주기. 깜빡임 사건은 발생 즉시 별도로 보냅니다
 
@@ -87,6 +89,7 @@ def main():
         min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
     counter = BlinkCounter()
+    quality = FrameQuality()
     last_send = 0.0
 
     def send(ev):
@@ -131,29 +134,42 @@ def main():
                     calib.add_sample({"face_width_px": width_px,
                                       "blink_rate": counter.rate(now)})
 
+            quality.update(now, detected=detected,
+                           frontal=(frontal if detected else None))
             rate = counter.rate(now)
+
+            # payload 조립은 vision/payload.py 의 순수 함수가 합니다.
+            # 값이 없으면 키를 생략합니다 — null 을 보내면 스키마 위반이라
+            # 서버가 payload 를 통째로 버리고, 거리 하나 때문에 깜빡임까지
+            # 같이 사라집니다 (docs/contracts/README.md 규칙 5).
+            def build(blink):
+                return vision_payload(
+                    t=now, user_name=args.user, face_detected=detected, blink=blink,
+                    blink_rate=rate,
+                    blink_count=counter.count(now),
+                    window_sec=counter.observed_sec(now),
+                    blink_duration_ms=counter.last_duration_ms if blink else None,
+                    face_distance_cm=dist_cm,
+                    face_distance_baseline_cm=calib.baseline_distance_cm(),
+                    blink_rate_baseline=calib.baseline_blink_rate(),
+                    detect_rate=quality.detect_rate(now),
+                    yaw_dropped_rate=quality.yaw_dropped_rate(now),
+                    calibrating=calib.is_calibrating())
 
             # 깜빡임 사건은 즉시 보냅니다 — 초 단위 사건이라 주기 전송에 묻히면 안 됩니다
             if blinked:
-                send({"v": 1, "t": round(now, 3), "source": "vision",
-                      "user_name": args.user,
-                      "vision": {"blink": True, "blink_rate": rate,
-                                 "face_distance_cm": dist_cm,
-                                 "face_detected": True}})
+                send(build(True))
 
             if now - last_send >= 1.0 / SEND_HZ:
                 last_send = now
-                send({"v": 1, "t": round(now, 3), "source": "vision",
-                      "user_name": args.user,
-                      "vision": {"blink": False, "blink_rate": rate,
-                                 "face_distance_cm": dist_cm,
-                                 "face_detected": detected}})
+                send(build(False))
 
             if args.preview:
                 txt = (f"EAR {ear:.3f}  " if ear else "no face  ") + \
                       (f"{dist_cm:.0f}cm  " if dist_cm
                        else ("(고개 돌림)  " if detected and not frontal else "")) + \
-                      f"blink {rate:.1f}/min"
+                      (f"blink {rate:.1f}/min" if rate is not None
+                       else f"blink 관측중 {counter.observed_sec(now):.0f}s")
                 if calib.is_calibrating():
                     txt = f"CALIBRATING {calib.progress()*100:.0f}%  " + txt
                 cv2.putText(frame, txt, (12, 30), cv2.FONT_HERSHEY_SIMPLEX,
