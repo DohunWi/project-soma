@@ -77,3 +77,4 @@ pytest vision/                        # 카메라·mediapipe 없이 돌아갑니
 | 안경 | 렌즈 반사가 EAR 신뢰도를 떨어뜨립니다. 표본 착용률이 높습니다 |
 | mediapipe 1.0.x | macOS 에서 첫 추론에 프로세스가 abort 합니다. `<1.0` 으로 고정 |
 | 노트북 내장캠 | 각도에 예민합니다. 외부캠을 씁니다 |
+| **카메라 인덱스가 고정이 아님** | macOS 연속성 카메라가 근처 iPhone 을 장치 목록에 끼워 넣고 보통 0번을 가져갑니다. `--list-cams` 로 확인하고 `.env` 의 `WEBCAM_INDEX` 에 박아 두세요. 거리 baseline 은 카메라마다 다르므로 카메라가 바뀌면 `--recalibrate` 가 필요합니다 |
