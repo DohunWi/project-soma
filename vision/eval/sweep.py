@@ -25,6 +25,14 @@ TOL = 0.6          # 정답과 검출을 같은 사건으로 볼 시간 허용�
 
 MIN_MS, MAX_MS = 60, 500
 
+# 감은 시간 게이트도 스윕합니다. 이전에는 EAR 임계 두 개만 스윕하고 이 값은
+# 60/500 으로 고정이었는데, 이 축이 정확도를 크게 바꿉니다:
+#   min_ms 를 올리면 안경 반사가 만드는 짧은 오검출이 걸러집니다
+#   max_ms 를 내리면 "감고 있는 것" 을 깜빡임으로 세지 않습니다
+# 둘 다 안경 착용자에서 특히 다르게 잡힙니다.
+MIN_MS_GRID = (40, 60, 80, 100)
+MAX_MS_GRID = (300, 400, 500, 700)
+
 
 def detect(frames, closed_th, open_th, min_ms=MIN_MS, max_ms=MAX_MS):
     """EAR 시계열 → 깜빡임 종료 시각 리스트. ear.py 와 같은 상태기계입니다."""
@@ -104,6 +112,9 @@ def main():
     ap.add_argument("paths", nargs="*")
     ap.add_argument("--top", type=int, default=10)
     ap.add_argument("--self-test", action="store_true")
+    ap.add_argument("--fast", action="store_true",
+                    help="EAR 임계만 스윕 (감은 시간 게이트는 60/500 고정)")
+    ap.add_argument("--json", help="결과를 파일로 저장. 피험자별 비교에 씁니다")
     args = ap.parse_args()
 
     if args.self_test:
@@ -125,25 +136,49 @@ def main():
     print(f"프레임 {len(frames)} (얼굴 검출 {len(valid)}, "
           f"{100*len(valid)/max(len(frames),1):.0f}%)   정답 {len(cues)}\n")
 
+    min_grid = (MIN_MS,) if args.fast else MIN_MS_GRID
+    max_grid = (MAX_MS,) if args.fast else MAX_MS_GRID
+
     rows = []
     for c10 in range(14, 29):                       # closed 0.14 ~ 0.28
         for gap10 in range(1, 9):                   # open = closed + 0.01~0.08
             ct, ot = c10 / 100, (c10 + gap10) / 100
-            tp, fp, fn = match(cues, detect(frames, ct, ot))
-            p, r, f = prf(tp, fp, fn)
-            rows.append((f, p, r, tp, fp, fn, ct, ot))
+            for mn in min_grid:
+                for mx in max_grid:
+                    tp, fp, fn = match(cues, detect(frames, ct, ot, mn, mx))
+                    p, r, f = prf(tp, fp, fn)
+                    rows.append({"f1": f, "precision": p, "recall": r,
+                                 "tp": tp, "fp": fp, "fn": fn,
+                                 "closed": ct, "open": ot,
+                                 "min_ms": mn, "max_ms": mx})
 
-    rows.sort(reverse=True)
+    # F1 이 같으면 재현율이 높은 쪽을 위로. 놓친 깜빡임(FN)이 오검출(FP)보다
+    # 나쁩니다 — 저깜빡임 판정이 "적게 깜빡였다" 를 세는 일이기 때문입니다.
+    rows.sort(key=lambda r: (r["f1"], r["recall"]), reverse=True)
     print(f"{'F1':>6} {'정밀도':>7} {'재현율':>7} {'TP':>4} {'FP':>4} {'FN':>4}   "
-          f"{'CLOSED':>7} {'OPEN':>6}")
-    print("─" * 60)
-    for f, p, r, tp, fp, fn, ct, ot in rows[:args.top]:
-        print(f"{f:6.3f} {p:7.3f} {r:7.3f} {tp:4d} {fp:4d} {fn:4d}   {ct:7.2f} {ot:6.2f}")
+          f"{'CLOSED':>7} {'OPEN':>6} {'MIN_MS':>7} {'MAX_MS':>7}")
+    print("─" * 78)
+    for r in rows[:args.top]:
+        print(f"{r['f1']:6.3f} {r['precision']:7.3f} {r['recall']:7.3f} "
+              f"{r['tp']:4d} {r['fp']:4d} {r['fn']:4d}   "
+              f"{r['closed']:7.2f} {r['open']:6.2f} {r['min_ms']:7d} {r['max_ms']:7d}")
 
     best = rows[0]
-    print(f"\n최적:  EAR_CLOSED = {best[6]:.2f}   EAR_OPEN = {best[7]:.2f}   "
-          f"(F1 {best[0]:.3f})")
+    print(f"\n최적:  EAR_CLOSED = {best['closed']:.2f}   EAR_OPEN = {best['open']:.2f}   "
+          f"MIN_CLOSED_MS = {best['min_ms']}   MAX_CLOSED_MS = {best['max_ms']}   "
+          f"(F1 {best['f1']:.3f})")
     print("vision/blink/ear.py 의 상수를 이 값으로 바꾸세요.")
+    print(f"조합 {len(rows)}개를 봤습니다"
+          + ("  (--fast: EAR 임계만)" if args.fast else ""))
+
+    if args.json:
+        payload = {"subjects": [m.get("subject") for m in metas],
+                   "glasses": [m.get("glasses") for m in metas],
+                   "frames": len(frames), "cues": len(cues),
+                   "best": best, "top": rows[:args.top]}
+        Path(args.json).write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                                   encoding="utf-8")
+        print(f"저장: {args.json}")
     if len(metas) > 1:
         print("\n주의: 여러 피험자를 합쳐 스윕했습니다. 한 사람에게 과적합되지 않았는지")
         print("      피험자별로도 따로 돌려 비교하세요.")

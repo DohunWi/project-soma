@@ -163,3 +163,11 @@ class FaceLandmarks:
 
     def close(self):
         self._det.close()
+
+
+if __name__ == "__main__":
+    # 발표 전에 미리 받아 두는 용도입니다.
+    #   python vision/landmarks.py
+    # 발표장 네트워크가 막히면 그 자리에서 받을 수 없습니다.
+    path = ensure_model()
+    print(f"모델 준비 완료: {path}  ({path.stat().st_size / 1e6:.1f}MB)")
