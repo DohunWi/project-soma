@@ -160,15 +160,38 @@ def step(st: FusionState, s: dict, now: float):
     state = ("NORMAL", "CAUTION", "DANGER")[level]
 
     # 웹캠이 없으면 신뢰도를 낮춥니다. 서버는 confidence < 0.5 면 승격하지 않습니다.
-    confidence = 0.9 if s.get("face_detected") else 0.55
+    # 검출률(detect_rate)이 오면 그것을 씁니다. 프레임 하나가 우연히 잡힌 것과
+    # 계속 안정적으로 잡히는 것을 불리언 하나로는 구분할 수 없었습니다.
+    detect = s.get("detect_rate")
+    if detect is not None:
+        confidence = round(0.45 + 0.45 * min(max(detect, 0.0), 1.0), 2)
+    else:
+        confidence = 0.9 if s.get("face_detected") else 0.55
     if rate is None and dist is None:
-        confidence = 0.45
+        confidence = min(confidence, 0.45)
 
     return st2, _decision(st2, s, now, state, confidence, reasons)
 
 
 def _decision(st, s, now, state, confidence, reasons):
     score = {"NORMAL": 90, "CAUTION": 60, "DANGER": 30, "ABSENT": 0}[state]
+    metrics = {
+        "balance":         st.balance,
+        "seated":          st.seated,
+        "low_blink_sec":   round(st.low_blink_sec, 1),
+        "static_hold_sec": round(st.static_hold_sec, 1),
+        "session_sec":     round(now - st.session_start, 1) if st.session_start else 0.0,
+    }
+    # 값이 없으면 키를 생략합니다 — null 은 계약 위반입니다
+    # (docs/contracts/README.md 규칙 5). 웹캠이 없을 때 이 dict 는 계속
+    # blink_rate: null 을 담고 있었고, 아무도 state 를 검증하지 않아서
+    # 드러나지 않았을 뿐입니다.
+    for key in ("blink_rate", "face_distance_cm", "blink_rate_baseline",
+                "face_distance_baseline_cm", "detect_rate"):
+        value = s.get(key)
+        if value is not None:
+            metrics[key] = value
+
     return {
         "v": 1,
         "t": round(now, 3),
@@ -177,13 +200,5 @@ def _decision(st, s, now, state, confidence, reasons):
         "confidence": round(confidence, 2),
         "score": score,
         "reasons": reasons,
-        "metrics": {
-            "balance":          st.balance,
-            "seated":           st.seated,
-            "blink_rate":       s.get("blink_rate"),
-            "low_blink_sec":    round(st.low_blink_sec, 1),
-            "face_distance_cm": s.get("face_distance_cm"),
-            "static_hold_sec":  round(st.static_hold_sec, 1),
-            "session_sec":      round(now - st.session_start, 1) if st.session_start else 0.0,
-        },
+        "metrics": metrics,
     }

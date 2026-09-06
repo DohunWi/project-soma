@@ -60,6 +60,24 @@ class Calibrator:
         with self._lock:
             return dict(self._baseline)
 
+    # 계약에 실어 보낼 값들. "평소보다 N 만큼" 을 만들려면 평소값이 함께 가야 합니다.
+    # 절대 거리 45cm 임계는 카메라·개인마다 다르게 나오므로, 받는 쪽이
+    # baseline 대비로 판정할 수 있게 열어 둡니다 (vision/eval/README.md 참조).
+    def baseline_distance_cm(self):
+        with self._lock:
+            if not self._done:
+                return None
+            return self._baseline.get("calib_distance_cm")
+
+    def baseline_blink_rate(self):
+        with self._lock:
+            if not self._done:
+                return None
+            rate = self._baseline.get("blink_rate")
+            # 캘리브레이션은 3초라 창(60초)이 거의 비어 있습니다. 그 값을 평소
+            # 깜빡임이라고 부르면 항상 0 에 가깝습니다. 0 이면 없는 것으로 봅니다.
+            return rate if rate else None
+
     # ── 시작 ─────────────────────────────────────────────────────────
     def start(self) -> None:
         with self._lock:

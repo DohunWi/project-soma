@@ -27,6 +27,10 @@ EAR_OPEN   = 0.25      # 다시 이 값 위로 올라오면 뜬 것 (히스테�
 MIN_CLOSED_MS = 60     # 이보다 짧으면 노이즈로 봅니다
 MAX_CLOSED_MS = 500    # 이보다 길면 깜빡임이 아니라 감고 있는 것
 
+# 이보다 적게 관측했으면 분당 빈도를 내보내지 않습니다.
+# 10초에 1회 관측한 것을 "분당 6회" 로 환산하면 표본 1개짜리 숫자가 됩니다.
+MIN_OBSERVED_SEC = 10.0
+
 
 def _dist(a, b):
     return math.hypot(a[0] - b[0], a[1] - b[1])
@@ -58,8 +62,13 @@ class BlinkCounter:
         self.window = window_sec
         self._closed_since = None
         self._events = deque()
+        self._t0 = None              # 첫 관측 시각. 창이 덜 찼을 때 환산에 씁니다
+        self.last_duration_ms = None # 직전 깜빡임에서 눈을 감고 있던 시간
 
     def update(self, ear: float, now: float) -> bool:
+        if self._t0 is None:
+            self._t0 = now
+
         blinked = False
         if self._closed_since is None:
             if ear < EAR_CLOSED:
@@ -69,17 +78,43 @@ class BlinkCounter:
                 ms = (now - self._closed_since) * 1000.0
                 if MIN_CLOSED_MS <= ms <= MAX_CLOSED_MS:
                     self._events.append(now)
+                    self.last_duration_ms = round(ms, 1)
                     blinked = True
                 self._closed_since = None
 
-        cutoff = now - self.window
-        while self._events and self._events[0] < cutoff:
-            self._events.popleft()
+        self._prune(now)
         return blinked
 
-    def rate(self, now: float) -> float:
-        """분당 횟수. 관측 시간이 창보다 짧으면 그만큼으로 나눕니다."""
+    def _prune(self, now: float) -> None:
         cutoff = now - self.window
         while self._events and self._events[0] < cutoff:
             self._events.popleft()
-        return round(len(self._events) * 60.0 / self.window, 1)
+
+    def observed_sec(self, now: float) -> float:
+        """실제로 관측한 시간. 창(60초)을 넘지 않습니다."""
+        if self._t0 is None:
+            return 0.0
+        return min(max(now - self._t0, 0.0), self.window)
+
+    def count(self, now: float) -> int:
+        """창 안의 깜빡임 사건 수."""
+        self._prune(now)
+        return len(self._events)
+
+    def rate(self, now: float):
+        """
+        분당 횟수. **관측한 시간으로 나눕니다** — 창 길이가 아니라.
+
+        이전에는 항상 60 으로 나눠, 시작 직후에는 실제 분당 20회가 5.0 으로
+        보고됐습니다. 그 값이 임계(8) 아래라 세션마다 저깜빡임 누적이
+        시작됐습니다.
+
+        관측이 MIN_OBSERVED_SEC 보다 짧으면 **None** 을 돌려줍니다.
+        표본이 1~2개일 때의 환산은 분산이 커서 숫자로 내보내면 안 됩니다.
+        받는 쪽은 값이 없으면 누적을 멈추되 리셋하지 않습니다
+        (fusion/state.py 의 blink_rate is None 분기).
+        """
+        obs = self.observed_sec(now)
+        if obs < MIN_OBSERVED_SEC:
+            return None
+        return round(self.count(now) * 60.0 / obs, 1)
