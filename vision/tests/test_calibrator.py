@@ -96,3 +96,41 @@ def test_얼굴이_안_보여도_창은_끝난다(tmp_path, monkeypatch):
     assert not c.is_calibrating()      # 창이 끝나면 실패로 마감
     assert not c.is_done()
     assert c.attempts() == 1
+
+
+def test_다른_초점거리로_잰_평소값은_버린다(tmp_path, capsys, monkeypatch):
+    """평소 거리는 초점거리에 딸린 값입니다. 카메라가 바뀌면 다른 자로 잰 숫자입니다."""
+    monkeypatch.setattr(C, "CALIB_DURATION", 0.0)
+    c = Calibrator(baseline_path=tmp_path / "baseline.json", focal_px=1844.0)
+    c.start()
+    c.add_sample({"distance_cm": 55.1, "blink_rate": 12.0})
+    assert c.is_done()
+
+    c2 = Calibrator(baseline_path=tmp_path / "baseline.json", focal_px=1484.0)
+    assert not c2.is_done()                       # 이어 쓰지 않습니다
+    assert "재캘리브레이션" in capsys.readouterr().out
+
+
+def test_같은_초점거리면_이어_쓴다(tmp_path, monkeypatch):
+    monkeypatch.setattr(C, "CALIB_DURATION", 0.0)
+    c = Calibrator(baseline_path=tmp_path / "baseline.json", focal_px=1484.0)
+    c.start()
+    c.add_sample({"distance_cm": 55.1, "blink_rate": 12.0})
+
+    c2 = Calibrator(baseline_path=tmp_path / "baseline.json", focal_px=1484.0)
+    assert c2.is_done()
+    assert c2.baseline_distance_cm() == 55.1
+
+
+def test_카메라를_연_뒤에_초점거리를_묶는다(tmp_path, monkeypatch, capsys):
+    """초점거리는 카메라가 열린 뒤에 정해집니다. 생성 시점에는 모릅니다."""
+    monkeypatch.setattr(C, "CALIB_DURATION", 0.0)
+    c = Calibrator(baseline_path=tmp_path / "baseline.json", focal_px=1844.0)
+    c.start()
+    c.add_sample({"distance_cm": 55.1, "blink_rate": 12.0})
+
+    c2 = Calibrator(baseline_path=tmp_path / "baseline.json")
+    assert c2.is_done()                # 아직 모르므로 일단 로드
+    c2.bind_focal(1484.0)
+    assert not c2.is_done()            # 알고 나면 버립니다
+    assert c2.should_retry() is True

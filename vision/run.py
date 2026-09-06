@@ -71,7 +71,7 @@ def main():
         list_cams()
         return
 
-    calib = Calibrator()
+    calib = Calibrator()   # 초점거리는 카메라를 연 뒤에 정해집니다
     if args.recalibrate:
         calib.start()
 
@@ -109,6 +109,9 @@ def main():
     est = DistanceEstimator(image_width_px=cap.get(cv2.CAP_PROP_FRAME_WIDTH),
                             calibrator=calib)
     print(f"[vision] 거리: {est.describe()}", file=sys.stderr)
+
+    # 평소 거리는 초점거리에 딸린 값입니다. 초점거리가 바뀌면 다시 잽니다.
+    calib.bind_focal(est.focal_px)
 
     counter = BlinkCounter()
     quality = FrameQuality()

@@ -38,9 +38,12 @@ _BASELINE_FILE = Path(__file__).parent / "baseline.json"
 class Calibrator:
     """스레드 안전. 캡처 스레드가 add_sample() 을 매 프레임 호출합니다."""
 
-    def __init__(self, baseline_path: Optional[Path] = None):
+    def __init__(self, baseline_path: Optional[Path] = None, focal_px=None):
         self._lock = threading.Lock()
         self._path = baseline_path or _BASELINE_FILE
+        # 평소 거리는 이 초점거리로 잰 값입니다. 초점거리가 바뀌면(카메라 교체,
+        # 자로 다시 잼) 저장된 평소 거리는 다른 자로 잰 숫자가 됩니다.
+        self._focal_px = round(float(focal_px), 1) if focal_px else None
 
         self._calibrating = False
         self._done = False
@@ -138,6 +141,24 @@ class Calibrator:
         if save:
             self._save()
 
+    def bind_focal(self, focal_px) -> None:
+        """
+        이 평소값이 어떤 초점거리로 잰 것인지 알려줍니다.
+
+        카메라가 열린 뒤에야 초점거리가 정해지므로 생성 시점에는 모릅니다.
+        저장된 값이 다른 초점거리로 잰 것이면 여기서 버립니다.
+        """
+        focal = round(float(focal_px), 1) if focal_px else None
+        with self._lock:
+            self._focal_px = focal
+            saved = self._baseline.get("focal_px")
+            stale = self._done and focal and (not saved or abs(saved - focal) > 1.0)
+            if stale:
+                self._baseline, self._done = {}, False
+        if stale:
+            how = f"f_px={saved:.0f} 로 잰 것" if saved else "초점거리를 모르는 값"
+            print(f"[calib] 저장된 평소값은 {how}입니다 (지금 {focal:.0f}) — 다시 잽니다")
+
     def should_retry(self, now: Optional[float] = None) -> bool:
         """
         다시 시도할 때가 됐는가.
@@ -175,6 +196,8 @@ class Calibrator:
             print(f"[calib] 거리를 재지 못했습니다 — 실패 ({self._attempts}회째)")
             self._calibrating = False
             return
+        if self._focal_px:
+            b["focal_px"] = self._focal_px
         self._baseline = b
         self._calibrating = False
         self._done = True
@@ -198,6 +221,17 @@ class Calibrator:
             missing = [k for k in _METRIC_KEYS if k not in data]
             if missing:
                 print(f"[calib] 키 누락 {missing} — 재캘리브레이션 필요")
+                return
+            saved_focal = data.get("focal_px")
+            if self._focal_px and not saved_focal:
+                # 초점거리를 모르는 평소값은 옛 스케일(얼굴 폭 기준)로 잰 것입니다.
+                print("[calib] 저장된 평소값에 초점거리가 없습니다 — 재캘리브레이션합니다")
+                return
+            if self._focal_px and saved_focal and abs(saved_focal - self._focal_px) > 1.0:
+                # 다른 자로 잰 숫자입니다. 이어 쓰면 "평소보다 N cm" 가 통째로
+                # 어긋나는데, 값이 그럴듯해서 틀린 줄 모릅니다.
+                print(f"[calib] 저장된 평소값은 f_px={saved_focal:.0f} 로 잰 것입니다 "
+                      f"(지금 {self._focal_px:.0f}) — 재캘리브레이션합니다")
                 return
             self._baseline = data
             self._done = True
