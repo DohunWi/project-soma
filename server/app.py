@@ -142,12 +142,17 @@ def on_sensor_data(sid, payload):
         c = payload.get("chair", {})
         sess.chair = (t, {"pressure": c.get("pressure"), "ir": c.get("ir")})
     else:
+        # 필드를 골라내지 않고 그대로 넘깁니다.
+        # 예전에는 blink_rate / face_distance_cm / face_detected 세 개만 뽑았는데,
+        # vision 이 평소값(blink_rate_baseline, face_distance_baseline_cm)과
+        # 품질 지표(detect_rate)를 보내기 시작하면서 그것들이 여기서 잘렸습니다.
+        # fusion 은 평소값이 없으면 절대 임계로 되돌아가므로 **에러 없이 조용히**
+        # 옛 판정을 합니다 — 깜빡임이 평소의 절반이어도 경고가 안 뜨고,
+        # 가까이 앉는 사람에게는 근접 경고가 상시로 켜집니다.
+        # 계약상 받는 쪽은 모르는 필드를 무시하므로 통째로 넘겨도 안전하고,
+        # 앞으로 필드가 늘어도 이 파일을 고치지 않아도 됩니다.
         v = payload.get("vision", {})
-        sess.vision = (t, {
-            "blink_rate":       v.get("blink_rate"),
-            "face_distance_cm": v.get("face_distance_cm"),
-            "face_detected":    v.get("face_detected"),
-        })
+        sess.vision = (t, dict(v))
         # 깜빡임 사건은 raw_data 에 담겨 sensor_logs 로 들어갑니다
 
     now = max(t, time.time())
