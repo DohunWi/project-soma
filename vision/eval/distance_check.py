@@ -30,27 +30,25 @@ sys.path.insert(0, str(ROOT / "vision" / "blink"))
 
 try:
     import cv2
-    import mediapipe as mp
 except ImportError:
-    sys.exit("opencv / mediapipe 가 없습니다.  pip install -r vision/requirements.txt")
+    sys.exit("opencv 가 없습니다.  pip install -r vision/requirements.txt")
 
 from geometry import face_width_px, is_frontal, yaw_asymmetry  # noqa: E402
+from landmarks import FaceLandmarks  # noqa: E402
 
 SAMPLE_SEC = 3.0
 
 
-def measure(cap, mesh, label, seconds=SAMPLE_SEC):
+def measure(cap, det, label, seconds=SAMPLE_SEC):
     """N초 동안 정면 프레임의 얼굴 폭 중앙값을 반환."""
     widths, skipped, t0 = [], 0, time.time()
     while time.time() - t0 < seconds:
         ok, frame = cap.read()
         if not ok:
             continue
-        h, w = frame.shape[:2]
-        res = mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        if res.multi_face_landmarks:
-            lm = res.multi_face_landmarks[0].landmark
-            pts = {i: (lm[i].x * w, lm[i].y * h) for i in range(len(lm))}
+        now = time.time()
+        pts = det.detect(frame, now)
+        if pts is not None:
             if is_frontal(pts):
                 widths.append(face_width_px(pts))
             else:
@@ -75,13 +73,14 @@ def main():
     cap = cv2.VideoCapture(args.cam)
     if not cap.isOpened():
         sys.exit(f"카메라 {args.cam} 를 열 수 없습니다")
-    mesh = mp.solutions.face_mesh.FaceMesh(
-        max_num_faces=1, refine_landmarks=True,
-        min_detection_confidence=0.5, min_tracking_confidence=0.5)
+    try:
+        det = FaceLandmarks()
+    except ImportError:
+        sys.exit("mediapipe 가 없습니다.  pip install -r vision/requirements.txt")
 
     try:
         input(f"\n[1] 카메라에서 정확히 {args.calib_cm:.0f}cm 에 앉으신 뒤 Enter: ")
-        base_px = measure(cap, mesh, f"CALIB {args.calib_cm:.0f}cm")
+        base_px = measure(cap, det, f"CALIB {args.calib_cm:.0f}cm")
         if base_px is None:
             sys.exit("얼굴을 검출하지 못했습니다")
         k = base_px * args.calib_cm
@@ -90,7 +89,7 @@ def main():
         rows = []
         for cm in args.points:
             input(f"[2] {cm:.0f}cm 로 옮겨 앉으신 뒤 Enter: ")
-            px = measure(cap, mesh, f"{cm:.0f}cm")
+            px = measure(cap, det, f"{cm:.0f}cm")
             if px is None:
                 print("    검출 실패 — 건너뜁니다")
                 continue
@@ -112,7 +111,7 @@ def main():
             print("절대 거리 대신 baseline 대비 변화량을 쓰는 쪽으로 바꾸세요.")
     finally:
         cap.release()
-        mesh.close()
+        det.close()
         cv2.destroyAllWindows()
 
 

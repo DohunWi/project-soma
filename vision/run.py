@@ -34,13 +34,13 @@ except ImportError:
 
 try:
     import cv2
-    import mediapipe as mp
 except ImportError:
-    sys.exit("opencv / mediapipe 가 없습니다.  pip install -r vision/requirements.txt")
+    sys.exit("opencv 가 없습니다.  pip install -r vision/requirements.txt")
 
 from calibrator import Calibrator                       # vision/calibrator.py
 from ear import BlinkCounter, face_ear                  # vision/blink/ear.py
 from geometry import face_width_px, is_frontal, yaw_asymmetry   # vision/geometry.py
+from landmarks import FaceLandmarks                     # vision/landmarks.py
 from payload import vision_payload                      # vision/payload.py
 from quality import FrameQuality                        # vision/quality.py
 
@@ -84,9 +84,12 @@ def main():
     if not calib.is_done() and not calib.is_calibrating():
         calib.start()
 
-    mesh = mp.solutions.face_mesh.FaceMesh(
-        max_num_faces=1, refine_landmarks=True,
-        min_detection_confidence=0.5, min_tracking_confidence=0.5)
+    # mediapipe 를 직접 부르지 않습니다 — vision/landmarks.py 가 유일한 창구입니다
+    try:
+        det = FaceLandmarks()
+    except ImportError:
+        sys.exit("mediapipe 가 없습니다.  pip install -r vision/requirements.txt")
+    print(f"[vision] 랜드마크 백엔드: {det.backend}", file=sys.stderr)
 
     counter = BlinkCounter()
     quality = FrameQuality()
@@ -106,18 +109,14 @@ def main():
                 continue
 
             now = time.time()
-            h, w = frame.shape[:2]
-            res = mesh.process(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            pts = det.detect(frame, now)
 
-            detected = bool(res.multi_face_landmarks)
+            detected = pts is not None
             ear = dist_cm = width_px = yaw = None
             frontal = False
             blinked = False
 
             if detected:
-                lm = res.multi_face_landmarks[0].landmark
-                pts = {i: (lm[i].x * w, lm[i].y * h) for i in range(len(lm))}
-
                 # 깜빡임은 좌우 회전에 견딥니다 — EAR 은 눈 안에서의 비율입니다
                 ear = face_ear(pts)
                 blinked = counter.update(ear, now)
@@ -182,7 +181,7 @@ def main():
         pass
     finally:
         cap.release()
-        mesh.close()
+        det.close()
         if args.preview:
             cv2.destroyAllWindows()
         print("\n[vision] 종료", file=sys.stderr)

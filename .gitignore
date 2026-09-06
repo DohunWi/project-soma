@@ -20,6 +20,9 @@ data/raw/
 # 캘리브레이션 (기기별)
 baseline.json
 
+# mediapipe 모델 파일 (3.7MB). 없으면 vision/landmarks.py 가 내려받습니다
+vision/models/
+
 # OS · 에디터
 .DS_Store
 Thumbs.db
