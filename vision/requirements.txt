@@ -4,6 +4,7 @@
 opencv-python>=4.9
 mediapipe>=0.10.14,<1.0
 numpy>=1.24
+python-socketio[client]>=5.11    # 서버로 sensor_data 전송
 pytest>=8.0
 
 # 눈 깜빡임에는 얼굴 468점 랜드마크가 필요합니다.

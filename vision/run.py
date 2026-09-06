@@ -153,7 +153,9 @@ def main():
         try:
             import socketio
         except ImportError:
-            sys.exit("python-socketio 가 없습니다.  pip install -r vision/requirements.txt")
+            sys.exit("python-socketio 가 없습니다.\n"
+                     "  설치:        pip install -r vision/requirements.txt\n"
+                     "  서버 없이 볼 때:  python vision/run.py --stdout --preview")
         sio = socketio.Client()
         auth = os.getenv("SOCKET_AUTH_TOKEN")
         sio.connect(args.url, auth={"token": auth} if auth else None)
