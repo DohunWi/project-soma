@@ -1,207 +1,183 @@
-#!/usr/bin/env python3
-"""
-server/app.py
-─────────────
-Flask + Socket.IO 중계 서버.
-
-    수집 → [검증 → 병합 → fusion → 판정] → DB / UI / 액추에이터
-
-이전 구현에서 고친 것:
-  - 판정 로직을 fusion/state.py 로 분리했습니다. 여기서는 호출만 합니다
-  - DB 쓰기를 큐 + 스레드로 뺐습니다 (server/db_writer.py 주석 참조)
-  - DB 자격증명을 .env 로 옮겼습니다. 코드에 평문으로 있었습니다
-  - cors_allowed_origins='*' 와 인증 없음을 고쳤습니다.
-    공개 저장소 + 인증 없는 소켓 = 누구나 DB 에 쓸 수 있는 상태였습니다
-  - payload 를 스키마로 검증합니다. 이전에는 dict 를 직접 인덱싱하고
-    실패하면 except 로 삼켜서, 무엇이 왜 실패했는지 알 수 없었습니다
-
-실행:
-    python server/app.py
-"""
 import eventlet
 eventlet.monkey_patch()
 
-import json
-import logging
-import os
-import sys
-import time
-from pathlib import Path
-
-from flask import Flask, jsonify, request
-import socketio
-
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "fusion"))
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv(ROOT / ".env")
-except ImportError:
-    pass
-
-from state import FusionState, step          # fusion/state.py
-from db_writer import DBWriter               # server/db_writer.py
-
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s %(levelname)-7s %(name)s  %(message)s")
-log = logging.getLogger("server")
-
-# ── 설정 ─────────────────────────────────────────────────────────────
-PORT         = int(os.getenv("SERVER_PORT", 5000))
-HOST         = os.getenv("SERVER_HOST", "0.0.0.0")
-AUTH_TOKEN   = os.getenv("SOCKET_AUTH_TOKEN") or None
-CORS         = [o.strip() for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",") if o.strip()]
-MERGE_WINDOW = 2.0    # 초. 이보다 오래된 다른 소스 값은 쓰지 않습니다
-
-if not CORS:
-    log.warning("CORS_ALLOWED_ORIGINS 가 비어 있어 '*' 로 엽니다 — 개발용으로만 쓰세요")
-    CORS = "*"
-if not AUTH_TOKEN:
-    log.warning("SOCKET_AUTH_TOKEN 이 비어 있어 인증 없이 받습니다 — 개발용으로만 쓰세요")
-
-sio = socketio.Server(cors_allowed_origins=CORS, async_mode="eventlet")
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+# flask_app 선언 바로 밑에 추가
 flask_app = Flask(__name__)
+CORS(flask_app)  # 모든 외부 프론트엔드 도메인에서의 API 호출을 허용
+import socketio
+import psycopg2
+import json
+import time
+
+# ==========================================================
+# 1. 초기화 (반드시 맨 위에 있어야 NameError가 발생하지 않습니다)
+# ==========================================================
+sio = socketio.Server(cors_allowed_origins='*')            
+
+DB_CONFIG = {
+    "host": "aws-1-ap-northeast-2.pooler.supabase.com", 
+    "database": "postgres",
+    "user": "postgres.dzkionspeweesqwlrxex",
+    "password": "XtpXL52,QHS/7nN", 
+    "port": "6543"
+}
+
+def get_db_connection():
+    return psycopg2.connect(**DB_CONFIG, connect_timeout=5)
+
+last_db_save_time = {}   
+DB_SAVE_INTERVAL = 5.0   
+bad_posture_start_time = {}     
+vibration_level = {}            
+
+# ==========================================================
+# 2. HTTP 라우터 (API 엔드포인트)
+# ==========================================================
+@flask_app.route('/api/report', methods=['POST'])
+def receive_report():
+    try:
+        report_data = request.get_json()
+        if not report_data: return jsonify({"status": "error"}), 400
+        print(f"📊 [보고서 수신] {json.dumps(report_data, ensure_ascii=False)}")
+        return jsonify({"status": "success"}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@flask_app.route('/api/report/weekly', methods=['GET'])
+def get_weekly_report():
+    user_id = request.args.get('user_id')
+    if not user_id:
+        return jsonify({"status": "error", "message": "user_id가 필요합니다."}), 400
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        query = """
+            SELECT target_time, total_logs, leaning_count 
+            FROM posture_stats_30min 
+            WHERE user_id = %s 
+              AND target_time >= NOW() - INTERVAL '7 days'
+            ORDER BY target_time ASC
+        """
+        cur.execute(query, (user_id,))
+        rows = cur.fetchall()
+        
+        total_logs_week = 0
+        leaning_logs_week = 0
+        daily_stats = []
+
+        for row in rows:
+            target_time, t_logs, l_logs = row
+            total_logs_week += t_logs
+            leaning_logs_week += l_logs
+            
+            daily_stats.append({
+                "time": target_time.strftime("%Y-%m-%d %H:%M"),
+                "total": t_logs,
+                "leaning": l_logs
+            })
+        
+        score = 100
+        if total_logs_week > 0:
+            bad_ratio = leaning_logs_week / total_logs_week
+            score = round(100 - (bad_ratio * 100))
+
+        return jsonify({
+            "status": "success",
+            "summary": {
+                "weekly_score": score,
+                "total_measured_intervals": len(rows)
+            },
+            "chart_data": daily_stats
+        }), 200
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if 'cur' in locals(): cur.close()
+        if 'conn' in locals(): conn.close()
+
+# ==========================================================
+# 3. Socket.io 실시간 이벤트
+# ==========================================================
+@sio.event
+def connect(sid, environ):
+    print(f"클라이언트 접속됨: {sid}")
+
+@sio.event
+def sensor_data(sid, data):
+    try:
+        if isinstance(data, str): data = json.loads(data)
+        
+        device_id = data.get("device_id", "smart_chair_01")
+        user_name = data["data_payload"].get("user_name", "guest")
+        pressure = data["data_payload"]["chair"]["pressure"]
+        distances = data["data_payload"]["vision"]["distances"]
+        
+        left_side = pressure[0] + pressure[2]
+        right_side = pressure[1] + pressure[3]
+        balance_status = "LEFT" if left_side > right_side + 20 else ("RIGHT" if right_side > left_side + 20 else "CENTER")
+
+        dist_val = distances[0]
+        total_pressure = sum(pressure)  
+        is_pressure_active = total_pressure > 2000  
+        
+        if not is_pressure_active:
+            posture_status = "Empty"
+        else:
+            posture_status = "Leaning Forward" if dist_val > 105 else "Seated"
+
+        duration_str = "정상 자세"  
+        
+        if posture_status == "Leaning Forward":
+            if device_id not in bad_posture_start_time:
+                bad_posture_start_time[device_id] = time.time()
+                vibration_level[device_id] = 0
+                duration_str = "❌ 잘못된 자세 0.0초 지속"
+            else:
+                elapsed = time.time() - bad_posture_start_time[device_id]
+                duration_str = f"❌ 잘못된 자세 {elapsed:.1f}초 지속"
+                current_lvl = vibration_level[device_id]
+                
+                if elapsed >= 60.0 and current_lvl < 3:
+                    sio.emit('trigger_vibration', {'command': '3'})
+                    vibration_level[device_id] = 3
+                elif elapsed >= 30.0 and current_lvl < 2:
+                    sio.emit('trigger_vibration', {'command': '2'})
+                    vibration_level[device_id] = 2
+                elif elapsed >= 10.0 and current_lvl < 1:
+                    sio.emit('trigger_vibration', {'command': '1'})
+                    vibration_level[device_id] = 1
+        else:
+            if device_id in bad_posture_start_time:
+                del bad_posture_start_time[device_id]
+                del vibration_level[device_id]
+            duration_str = "공석 (Empty)" if posture_status == "Empty" else "🟢 바른 자세 유지 중"
+
+        print(f"[{device_id} ({user_name})] 균형 : {balance_status.lower()} | 자세 : {posture_status.lower()} | ({duration_str})")
+
+        current_time = time.time()
+        last_save = last_db_save_time.get(device_id, 0)
+        if current_time - last_save >= DB_SAVE_INTERVAL:
+            last_db_save_time[device_id] = current_time 
+            conn = get_db_connection()
+            cur = conn.cursor()
+            query = "INSERT INTO sensor_logs (user_name, raw_data, balance_status, posture_status) VALUES (%s, %s, %s, %s)"
+            cur.execute(query, (user_name, json.dumps(data['data_payload']), balance_status, posture_status))
+            conn.commit()
+            cur.close()
+            conn.close()
+    except Exception as e:
+        print(f"❌ 에러 발생: {e}")
+
+# ==========================================================
+# 4. 앱 결합 및 서버 실행 (항상 파일의 가장 마지막에 위치해야 함)
+# ==========================================================
 app = socketio.WSGIApp(sio, flask_app)
 
-db = DBWriter()
-
-# ── 스키마 검증 ──────────────────────────────────────────────────────
-_validator = None
-try:
-    from jsonschema import Draft202012Validator
-    with open(ROOT / "docs/contracts/sensor_data.schema.json", encoding="utf-8") as f:
-        _validator = Draft202012Validator(json.load(f))
-except Exception as e:                                   # noqa: BLE001
-    log.warning("스키마 검증 비활성 (%s)", e)
-
-
-def validate(payload):
-    """실패 사유를 반환합니다. 조용히 삼키지 않습니다."""
-    if _validator is None:
-        return None
-    errs = list(_validator.iter_errors(payload))
-    if not errs:
-        return None
-    return "; ".join(f"{list(e.path)}: {e.message}" for e in errs[:3])
-
-
-# ── 소스별 최신값 + fusion 상태 (사용자별) ───────────────────────────
-class Session:
-    def __init__(self):
-        self.fusion = FusionState()
-        self.chair = None          # (t, dict)
-        self.vision = None
-        self.last_emit = 0.0
-
-sessions: dict = {}
-
-
-def merged(sess, now):
-    """chair 와 vision 의 최신값을 t 로 합칩니다. 오래된 쪽은 버립니다."""
-    out = {}
-    for slot in (sess.chair, sess.vision):
-        if slot and now - slot[0] <= MERGE_WINDOW:
-            out.update(slot[1])
-    return out
-
-
-# ── Socket.IO ────────────────────────────────────────────────────────
-@sio.event
-def connect(sid, environ, auth):
-    if AUTH_TOKEN:
-        token = (auth or {}).get("token")
-        if token != AUTH_TOKEN:
-            log.warning("인증 실패로 연결 거부: %s", sid)
-            raise socketio.exceptions.ConnectionRefusedError("unauthorized")
-    log.info("연결 %s", sid)
-
-
-@sio.event
-def disconnect(sid):
-    log.info("해제 %s", sid)
-
-
-@sio.on("sensor_data")
-def on_sensor_data(sid, payload):
-    if isinstance(payload, str):
-        payload = json.loads(payload)
-
-    reason = validate(payload)
-    if reason:
-        log.warning("스키마 위반, 버림: %s", reason)
-        return
-
-    user = payload["user_name"]
-    src  = payload["source"]
-    t    = payload["t"]
-    sess = sessions.setdefault(user, Session())
-
-    if src == "chair":
-        c = payload.get("chair", {})
-        sess.chair = (t, {"pressure": c.get("pressure"), "ir": c.get("ir")})
-    else:
-        v = payload.get("vision", {})
-        sess.vision = (t, {
-            "blink_rate":       v.get("blink_rate"),
-            "face_distance_cm": v.get("face_distance_cm"),
-            "face_detected":    v.get("face_detected"),
-        })
-        # 깜빡임 사건은 raw_data 에 담겨 sensor_logs 로 들어갑니다
-
-    now = max(t, time.time())
-    sample = merged(sess, now)
-    sample["user_name"] = user
-
-    sess.fusion, decision = step(sess.fusion, sample, now)
-
-    sio.emit("state", decision)
-
-    # sensor_logs 는 소스마다 매 샘플 넣습니다 (의자 1Hz, 웹캠 2Hz).
-    # fatigue_logs 는 상태 로그라 1초에 한 번이면 충분합니다.
-    db.put_sample(payload, decision)
-    if now - sess.last_emit >= 1.0:
-        sess.last_emit = now
-        db.put_state(decision)
-
-
-@sio.on("feedback")
-def on_feedback(sid, payload):
-    """액추에이터로 중계하고 기록합니다. 정책은 feedback/policy 가 정합니다."""
-    sio.emit("feedback", payload, skip_sid=sid)
-    # 앰비언트(LED)는 상시 미러링이라 개입이 아닙니다 — 기록하면 초당 수십 행이 쌓입니다.
-    # 명시 개입만 남깁니다.
-    if payload.get("target") in ("chair_vibration", "web_popup"):
-        db.put_feedback(payload)
-
-
-# ── HTTP ─────────────────────────────────────────────────────────────
-@flask_app.route("/api/report", methods=["POST"])
-def receive_report():
-    data = request.get_json(silent=True)
-    if not data:
-        return jsonify({"status": "error", "message": "JSON 본문이 없습니다"}), 400
-    log.info("보고서 수신: %s %s", data.get("user_name"), data.get("kind"))
-    sio.emit("report", data)               # 프론트로 즉시 푸시
-    return jsonify({"status": "ok"}), 200
-
-
-@flask_app.route("/api/health")
-def health():
-    return jsonify({
-        "ok": True,
-        "sessions": list(sessions),
-        "db_queue": db.q.qsize(),
-        "db_dropped": db.dropped,
-    })
-
-
-if __name__ == "__main__":
-    db.start()
-    log.info("서버 시작 http://%s:%d  (auth=%s, cors=%s)",
-             HOST, PORT, "on" if AUTH_TOKEN else "off", CORS)
-    try:
-        eventlet.wsgi.server(eventlet.listen((HOST, PORT)), app, log_output=False)
-    finally:
-        db.stop()
+if __name__ == '__main__':
+    print(f"서버 시작 (포트: 5000) / DB 저장 주기: {DB_SAVE_INTERVAL}초")
+    eventlet.wsgi.server(eventlet.listen(('0.0.0.0', 5000)), app)
