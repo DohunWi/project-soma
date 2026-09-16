@@ -107,7 +107,7 @@
               <h2 class="text-2xl font-bold text-gray-800" data-i18n="title_monitoring">실시간 모니터링</h2>
               <div class="flex gap-2">
                   <button class="px-4 py-2 text-sm text-gray-600 bg-white shadow-sm rounded-md hover:bg-gray-50 border border-gray-200 transition-colors" data-i18n="btn_pause">일시정지</button>
-                  <button class="px-4 py-2 text-sm text-white bg-blue-500 rounded-md hover:bg-blue-600 shadow-sm transition-colors" data-i18n="btn_login">로그인</button>
+                  <button onclick="openLoginModal()" class="px-4 py-2 text-sm text-white bg-blue-500 rounded-md hover:bg-blue-600 shadow-sm transition-colors" data-i18n="btn_login">로그인</button>
               </div>
           </nav>
 
@@ -268,6 +268,19 @@
     </section>
 
   </main>
+</div>
+
+<!-- 로그인 팝업 모달 -->
+<div id="loginModal" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden justify-center items-center">
+    <div class="bg-white p-8 rounded-xl shadow-lg w-80 text-center">
+        <h3 class="text-xl font-bold mb-6 text-gray-800">로그인</h3>
+        <input type="text" id="userId" placeholder="아이디" class="w-full px-4 py-2 mb-3 border border-gray-300 rounded-md outline-none focus:border-blue-500">
+        <input type="password" id="userPw" placeholder="비밀번호" class="w-full px-4 py-2 mb-6 border border-gray-300 rounded-md outline-none focus:border-blue-500">
+        <div class="flex gap-2 justify-center">
+            <button onclick="closeLoginModal()" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors">취소</button>
+            <button onclick="attemptLogin()" class="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors">접속</button>
+        </div>
+    </div>
 </div>
 
 <script>
@@ -530,6 +543,61 @@
           updateRealtimeChart(currentScore);
       }
   }
+  /* =========================================
+   로그인 팝업 및 API 통신 뼈대 로직
+   ========================================= */
+function openLoginModal() {
+    document.getElementById('loginModal').classList.remove('hidden');
+    document.getElementById('loginModal').classList.add('flex');
+}
+
+function closeLoginModal() {
+    document.getElementById('loginModal').classList.remove('flex');
+    document.getElementById('loginModal').classList.add('hidden');
+    document.getElementById('userId').value = '';
+    document.getElementById('userPw').value = '';
+}
+
+async function attemptLogin() {
+    const id = document.getElementById('userId').value;
+    const pw = document.getElementById('userPw').value;
+
+    if (!id || !pw) {
+        alert("아이디와 비밀번호를 입력해주세요.");
+        return;
+    }
+
+    /* 
+    TODO: 백엔드 API가 완성되면 아래 주석을 풀고 사용하세요.
+    try {
+        // 1. 백엔드로 ID/PW 전송
+        const response = await fetch("http://172.17.77.26:5000/api/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ username: id, password: pw })
+        });
+        
+        const data = await response.json();
+        
+        // 2. 발급받은 토큰을 브라우저에 저장
+        if (data.token) {
+            localStorage.setItem("authToken", data.token);
+            alert("로그인 성공!");
+            
+            // 3. 소켓을 끊고 토큰과 함께 재연결
+            socket.disconnect();
+            socket.auth = { token: data.token };
+            socket.connect();
+        }
+    } catch (error) {
+        console.error("로그인 실패:", error);
+    }
+    */
+
+    // 임시 확인용 알림
+    alert(`로그인 준비 완료!\n입력한 ID: ${id}\n(백엔드 API가 완성되면 실제 서버로 전송됩니다.)`);
+    closeLoginModal();
+}
 </script>
 
 </body>
