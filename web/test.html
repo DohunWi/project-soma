@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>스마트 체어 주간 리포트 테스트</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 24px; background-color: #f8fafc; }
+    .container { display: flex; flex-direction: column; gap: 20px; align-items: center; }
+    .card { background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; width: 100%; max-width: 600px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); }
+    h2 { margin-top: 0; color: #1e293b; }
+    .summary-text { font-size: 16px; color: #475569; }
+    .score { font-size: 36px; font-weight: bold; color: #2563eb; margin: 10px 0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- 요약 리포트 카드 -->
+    <div class="card">
+      <h2>주간 자세 리포트</h2>
+      <p class="summary-text">총 측정 구간: <strong id="interval-count">-</strong>개 (30분 단위)</p>
+      <p class="summary-text">종합 자세 점수:</p>
+      <div id="weekly-score" class="score">- 점</div>
+    </div>
+
+    <!-- 차트 카드 -->
+    <div class="card">
+      <canvas id="postureChart"></canvas>
+    </div>
+  </div>
+
+  <script>
+    // 테스트 중인 DB의 user_name에 맞춰 ID 변경 (예: 'Test')
+    const USER_ID = "550e8400-e29b-41d4-a716-446655440000"; 
+    const API_URL = `http://127.0.0.1:5000/api/report/weekly?user_id=${USER_ID}`;
+
+    async function fetchReportData() {
+      try {
+        const response = await fetch(API_URL);
+        const data = await response.json();
+
+        if (data.status === "success") {
+          document.getElementById("interval-count").innerText = data.summary.total_measured_intervals;
+          document.getElementById("weekly-score").innerText = `${data.summary.weekly_score}점`;
+
+          const labels = data.chart_data.map(item => item.time);
+          const totalLogs = data.chart_data.map(item => item.total);
+          const leaningLogs = data.chart_data.map(item => item.leaning);
+          const unbalancedLogs = data.chart_data.map(item => item.unbalanced);
+
+          renderChart(labels, totalLogs, leaningLogs, unbalancedLogs);
+        } else {
+          alert("데이터를 불러오지 못했습니다: " + data.message);
+        }
+      } catch (err) {
+        console.error("서버 통신 실패:", err);
+      }
+    }
+
+    function renderChart(labels, totalData, leaningData, unbalancedData) {
+      const ctx = document.getElementById('postureChart').getContext('2d');
+      new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: labels,
+          datasets: [
+            { label: '전체 로그 수', data: totalData, backgroundColor: '#cbd5e1' },
+            { label: '거북목 (앞)', data: leaningData, backgroundColor: '#ef4444' },
+            { label: '좌우 쏠림', data: unbalancedData, backgroundColor: '#f59e0b' }
+          ]
+        },
+        options: {
+          responsive: true,
+          scales: { y: { beginAtZero: true } }
+        }
+      });
+    }
+
+    fetchReportData();
+  </script>
+</body>
+</html>
