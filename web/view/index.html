@@ -106,7 +106,6 @@
           <nav class="flex justify-between items-center py-2 bg-transparent mb-4">
               <h2 class="text-2xl font-bold text-gray-800" data-i18n="title_monitoring">실시간 모니터링</h2>
               <div class="flex gap-2">
-                  <button class="px-4 py-2 text-sm text-gray-600 bg-white shadow-sm rounded-md hover:bg-gray-50 border border-gray-200 transition-colors" data-i18n="btn_pause">일시정지</button>
                   <button onclick="openLoginModal()" class="px-4 py-2 text-sm text-white bg-blue-500 rounded-md hover:bg-blue-600 shadow-sm transition-colors" data-i18n="btn_login">로그인</button>
               </div>
           </nav>
@@ -220,21 +219,6 @@
       </div>
 
       <div class="settings-card">
-        <h3 data-i18n="alert_setting">감지 및 알림 설정</h3>
-        <div class="setting-row">
-          <div>
-            <div style="font-weight: 600; color: #374151;" data-i18n="monitor_interval">모니터링 주기</div>
-            <div style="font-size: 0.85rem; color: #6b7280; margin-top: 4px;" data-i18n="interval_desc">자세를 분석하는 시간 간격을 설정합니다.</div>
-          </div>
-          <select class="form-select">
-            <option data-i18n="sec_3">3초</option>
-            <option data-i18n="sec_5">5초</option>
-            <option data-i18n="sec_10">10초</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="settings-card">
         <h3 class="mb-4" data-i18n="cam_setting_title">카메라 설정</h3>
         <div class="bg-[#eff6ff] border-l-4 border-blue-500 p-5 rounded-r-md">
             <p class="text-blue-800 text-[15px] mb-4" data-i18n="cam_setting_desc">
@@ -284,13 +268,13 @@
 </div>
 
 <script>
-  /* =========================================
+/* =========================================
      1. 다국어 (i18n) 번역 사전 객체 (기획에 맞게 완전 수정)
      ========================================= */
   const translations = {
       ko: {
           menu_monitoring: "실시간 모니터링", menu_dashboard: "대시보드", menu_settings: "설정", menu_info: "정보",
-          title_monitoring: "실시간 모니터링", btn_pause: "일시정지", btn_login: "로그인",
+          title_monitoring: "실시간 모니터링", btn_login: "로그인",
           status_waiting: "대기 중", cam_wait: "데이터 수신 대기 중", cam_wait_sub: "서버로부터 데이터를 기다립니다...",
           live_detecting: "🔴 웹캠 모니터링 (서버 전송용 아님)", conn_title: "🪑 실시간 데이터 연동 현황", server_wait: "서버 연결 대기 중...",
           current_posture: "현재 종합 상태", data_wait: "분석 대기 중", analyzing: "데이터를 수집하고 있습니다.",
@@ -298,8 +282,7 @@
           recent_history: "최근 점수 이력 (Score)", daily_report: "일간 통계 리포트",
           excellent: "훌륭합니다!", excellent_desc: "오늘 하루 종일 좋은 자세 패턴을 유지하셨네요.",
           pie_title: "오늘 하루 상태 비율", timeline_title: "시간대별 상태 이력",
-          lang_setting: "언어 설정", alert_setting: "감지 및 알림 설정", monitor_interval: "모니터링 주기", interval_desc: "자세를 분석하는 시간 간격을 설정합니다.",
-          sec_3: "3초", sec_5: "5초", sec_10: "10초",
+          lang_setting: "언어 설정",
           version: "버전: 1.0.0", info_desc: "스마트 피로도 자각 솔루션 시스템입니다.", server_connected: "서버 연결됨", server_disconnected: "서버 연결 끊김",
           cam_setting_title: "카메라 설정", cam_setting_desc: "카메라 권한을 허용해주세요.", btn_cam_setting: "카메라 설정 안내",
           cam_setting_fallback: "수동으로 브라우저 주소창 좌측의 아이콘을 눌러 권한을 허용해주세요.", select_camera: "사용할 카메라", loading_cameras: "카메라 목록을 불러오는 중...",
@@ -308,7 +291,7 @@
       },
       en: {
           menu_monitoring: "Live Monitoring", menu_dashboard: "Dashboard", menu_settings: "Settings", menu_info: "Info",
-          title_monitoring: "Live Monitoring", btn_pause: "Pause", btn_login: "Login",
+          title_monitoring: "Live Monitoring", btn_login: "Login",
           status_waiting: "Waiting", cam_wait: "Waiting for Data", cam_wait_sub: "Waiting for server data...",
           live_detecting: "🔴 Webcam View", conn_title: "🪑 Server Connection Status", server_wait: "Waiting for server...",
           current_posture: "Overall Status", data_wait: "Waiting...", analyzing: "Collecting data.",
@@ -316,8 +299,7 @@
           recent_history: "Recent Score History", daily_report: "Daily Report",
           excellent: "Excellent!", excellent_desc: "You maintained a good pattern today.",
           pie_title: "Daily Status Ratio", timeline_title: "Timeline History",
-          lang_setting: "Language Settings", alert_setting: "Alert Settings", monitor_interval: "Interval", interval_desc: "Analysis interval.",
-          sec_3: "3 sec", sec_5: "5 sec", sec_10: "10 sec",
+          lang_setting: "Language Settings",
           version: "Version: 1.0.0", info_desc: "Smart fatigue awareness solution.", server_connected: "Server Connected", server_disconnected: "Disconnected",
           cam_setting_title: "Camera Settings", cam_setting_desc: "Please allow camera permissions.", btn_cam_setting: "Permission Guide",
           cam_setting_fallback: "Please allow permissions manually from your browser.", select_camera: "Select Camera", loading_cameras: "Loading...",
@@ -547,7 +529,8 @@
    로그인 팝업 및 API 통신 뼈대 로직
    ========================================= */
 function openLoginModal() {
-    document.getElementById('loginModal').classList.remove('hidden');
+    document.getE
+    lementById('loginModal').classList.remove('hidden');
     document.getElementById('loginModal').classList.add('flex');
 }
 
