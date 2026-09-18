@@ -3,18 +3,21 @@ eventlet.monkey_patch()
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-# flask_app 선언 바로 밑에 추가
-flask_app = Flask(__name__)
-CORS(flask_app)  # 모든 외부 프론트엔드 도메인에서의 API 호출을 허용
 import socketio
 import psycopg2
 import json
 import time
+from functools import wraps
+from supabase import create_client, Client
 
 # ==========================================================
-# 1. 초기화 (반드시 맨 위에 있어야 NameError가 발생하지 않습니다)
+# 1. 초기화 (앱 객체 생성 및 설정)
 # ==========================================================
-sio = socketio.Server(cors_allowed_origins='*')            
+flask_app = Flask(__name__)
+CORS(flask_app)
+
+sio = socketio.Server(cors_allowed_origins='*')
+app = socketio.WSGIApp(sio, flask_app)
 
 DB_CONFIG = {
     "host": "aws-1-ap-northeast-2.pooler.supabase.com", 
@@ -24,66 +27,99 @@ DB_CONFIG = {
     "port": "6543"
 }
 
+SUPABASE_URL = "https://dzkionspeweesqwlrxex.supabase.co"  
+SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR6a2lvbnNwZXdlZXNxd2xyeGV4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzNzkzNjAsImV4cCI6MjA5NDk1NTM2MH0.VoYhfIg7h1PGpm72NYPTe3sXGqk0pt54k_UCsNcQxVI" 
+supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+
 def get_db_connection():
     return psycopg2.connect(**DB_CONFIG, connect_timeout=5)
 
 last_db_save_time = {}   
 DB_SAVE_INTERVAL = 5.0   
-bad_posture_start_time = {}     
-vibration_level = {}            
+
+# ⭐️ 실시간 측정을 진행 중인 사용자의 UUID를 기억하는 변수
+active_user_id = None  
 
 # ==========================================================
-# 2. HTTP 라우터 (API 엔드포인트)
+# 2. JWT 검증 데코레이터 
 # ==========================================================
-@flask_app.route('/api/report', methods=['POST'])
-def receive_report():
-    try:
-        report_data = request.get_json()
-        if not report_data: return jsonify({"status": "error"}), 400
-        print(f"📊 [보고서 수신] {json.dumps(report_data, ensure_ascii=False)}")
-        return jsonify({"status": "success"}), 200
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)}), 500
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return jsonify({"status": "error", "message": "토큰이 없습니다."}), 401
+        
+        token = auth_header.split(" ")[1]
+        try:
+            user_response = supabase_client.auth.get_user(token)
+            if not user_response or not user_response.user:
+                raise Exception("유저 정보를 찾을 수 없습니다.")
+            user_id = user_response.user.id 
+        except Exception as e:
+            print(f"🚨 Supabase 인증 에러: {e}")
+            return jsonify({"status": "error", "message": "유효하지 않거나 만료된 토큰입니다."}), 401
+            
+        return f(user_id, *args, **kwargs)
+    return decorated
+
+# ==========================================================
+# 3. HTTP 라우터 (측정 제어 및 리포트 조회)
+# ==========================================================
+@flask_app.route('/api/measurement/start', methods=['POST'])
+@token_required
+def start_measurement(user_id):
+    global active_user_id
+    active_user_id = user_id
+    print(f"\n▶️ 측정 시작: 사용자 [{user_id}]")
+    return jsonify({"status": "success", "message": "측정이 시작되었습니다."}), 200
+
+@flask_app.route('/api/measurement/stop', methods=['POST'])
+@token_required
+def stop_measurement(user_id):
+    global active_user_id
+    active_user_id = None
+    print("\n⏹️ 측정 종료")
+    return jsonify({"status": "success", "message": "측정이 종료되었습니다."}), 200
 
 @flask_app.route('/api/report/weekly', methods=['GET'])
-def get_weekly_report():
-    user_id = request.args.get('user_id')
-    if not user_id:
-        return jsonify({"status": "error", "message": "user_id가 필요합니다."}), 400
-
+@token_required
+def get_weekly_report(user_id):
     try:
         conn = get_db_connection()
         cur = conn.cursor()
         
         query = """
-            SELECT target_time, total_logs, leaning_count 
+            SELECT target_time, total_logs, leaning_count, unbalanced_count 
             FROM posture_stats_30min 
             WHERE user_id = %s 
-              AND target_time >= NOW() - INTERVAL '7 days'
             ORDER BY target_time ASC
         """
         cur.execute(query, (user_id,))
         rows = cur.fetchall()
         
         total_logs_week = 0
-        leaning_logs_week = 0
+        total_bad_week = 0
         daily_stats = []
 
         for row in rows:
-            target_time, t_logs, l_logs = row
+            target_time, t_logs, l_logs, u_logs = row
+            u_logs = u_logs or 0 
+            
             total_logs_week += t_logs
-            leaning_logs_week += l_logs
+            total_bad_week += (l_logs + u_logs)
             
             daily_stats.append({
-                "time": target_time.strftime("%Y-%m-%d %H:%M"),
+                "time": target_time.strftime("%H:%M"),
                 "total": t_logs,
-                "leaning": l_logs
+                "leaning": l_logs,
+                "unbalanced": u_logs
             })
         
         score = 100
         if total_logs_week > 0:
-            bad_ratio = leaning_logs_week / total_logs_week
-            score = round(100 - (bad_ratio * 100))
+            bad_ratio = total_bad_week / total_logs_week
+            score = max(0, round(100 - (bad_ratio * 100)))
 
         return jsonify({
             "status": "success",
@@ -101,7 +137,7 @@ def get_weekly_report():
         if 'conn' in locals(): conn.close()
 
 # ==========================================================
-# 3. Socket.io 실시간 이벤트
+# 4. Socket.io 실시간 이벤트 (센서 데이터 수신)
 # ==========================================================
 @sio.event
 def connect(sid, environ):
@@ -109,11 +145,16 @@ def connect(sid, environ):
 
 @sio.event
 def sensor_data(sid, data):
+    global active_user_id
+    
+    # ⭐️ 프론트엔드에서 '측정 시작'을 누르지 않아 주인이 없는 데이터는 저장하지 않고 무시
+    if not active_user_id:
+        return 
+
     try:
         if isinstance(data, str): data = json.loads(data)
-        
         device_id = data.get("device_id", "smart_chair_01")
-        user_name = data["data_payload"].get("user_name", "guest")
+        
         pressure = data["data_payload"]["chair"]["pressure"]
         distances = data["data_payload"]["vision"]["distances"]
         
@@ -130,53 +171,23 @@ def sensor_data(sid, data):
         else:
             posture_status = "Leaning Forward" if dist_val > 105 else "Seated"
 
-        duration_str = "정상 자세"  
-        
-        if posture_status == "Leaning Forward":
-            if device_id not in bad_posture_start_time:
-                bad_posture_start_time[device_id] = time.time()
-                vibration_level[device_id] = 0
-                duration_str = "❌ 잘못된 자세 0.0초 지속"
-            else:
-                elapsed = time.time() - bad_posture_start_time[device_id]
-                duration_str = f"❌ 잘못된 자세 {elapsed:.1f}초 지속"
-                current_lvl = vibration_level[device_id]
-                
-                if elapsed >= 60.0 and current_lvl < 3:
-                    sio.emit('trigger_vibration', {'command': '3'})
-                    vibration_level[device_id] = 3
-                elif elapsed >= 30.0 and current_lvl < 2:
-                    sio.emit('trigger_vibration', {'command': '2'})
-                    vibration_level[device_id] = 2
-                elif elapsed >= 10.0 and current_lvl < 1:
-                    sio.emit('trigger_vibration', {'command': '1'})
-                    vibration_level[device_id] = 1
-        else:
-            if device_id in bad_posture_start_time:
-                del bad_posture_start_time[device_id]
-                del vibration_level[device_id]
-            duration_str = "공석 (Empty)" if posture_status == "Empty" else "🟢 바른 자세 유지 중"
-
-        print(f"[{device_id} ({user_name})] 균형 : {balance_status.lower()} | 자세 : {posture_status.lower()} | ({duration_str})")
-
         current_time = time.time()
         last_save = last_db_save_time.get(device_id, 0)
+        
         if current_time - last_save >= DB_SAVE_INTERVAL:
             last_db_save_time[device_id] = current_time 
             conn = get_db_connection()
             cur = conn.cursor()
-            query = "INSERT INTO sensor_logs (user_name, raw_data, balance_status, posture_status) VALUES (%s, %s, %s, %s)"
-            cur.execute(query, (user_name, json.dumps(data['data_payload']), balance_status, posture_status))
+            
+            # ⭐️ UUID(active_user_id)를 부착하여 데이터 저장
+            query = "INSERT INTO sensor_logs (user_id, raw_data, balance_status, posture_status) VALUES (%s, %s, %s, %s)"
+            cur.execute(query, (active_user_id, json.dumps(data['data_payload']), balance_status, posture_status))
+            
             conn.commit()
             cur.close()
             conn.close()
     except Exception as e:
         print(f"❌ 에러 발생: {e}")
-
-# ==========================================================
-# 4. 앱 결합 및 서버 실행 (항상 파일의 가장 마지막에 위치해야 함)
-# ==========================================================
-app = socketio.WSGIApp(sio, flask_app)
 
 if __name__ == '__main__':
     print(f"서버 시작 (포트: 5000) / DB 저장 주기: {DB_SAVE_INTERVAL}초")
