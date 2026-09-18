@@ -1,82 +1,171 @@
 <!DOCTYPE html>
 <html lang="ko">
 <head>
-  <meta charset="UTF-8">
-  <title>스마트 체어 주간 리포트 테스트</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <style>
-    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 24px; background-color: #f8fafc; }
-    .container { display: flex; flex-direction: column; gap: 20px; align-items: center; }
-    .card { background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; width: 100%; max-width: 600px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); }
-    h2 { margin-top: 0; color: #1e293b; }
-    .summary-text { font-size: 16px; color: #475569; }
-    .score { font-size: 36px; font-weight: bold; color: #2563eb; margin: 10px 0; }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>스마트 체어 주간 리포트 테스트</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { 
+            font-family: 'Noto Sans KR', sans-serif; 
+            background-color: #797979; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            padding: 40px 20px; 
+            margin: 0;
+        }
+        .card { 
+            background: white; 
+            padding: 30px 40px; 
+            border-radius: 12px; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1); 
+            width: 100%; 
+            max-width: 800px; 
+            margin-bottom: 20px; 
+        }
+        h2 { margin-top: 0; color: #1e293b; font-size: 24px; font-weight: bold; }
+        p { color: #475569; font-size: 16px; margin: 8px 0; }
+        .score-text { font-size: 40px; font-weight: bold; color: #2563eb; margin-top: 15px; }
+        .chart-container { position: relative; height: 400px; width: 100%; }
+        .header-wrap { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        
+        /* 버튼 스타일 추가 */
+        .btn { border: none; padding: 10px 18px; border-radius: 6px; cursor: pointer; font-weight: bold; color: white; transition: 0.2s; }
+        .btn-logout { background: #64748b; }
+        .btn-logout:hover { background: #475569; }
+        .btn-start { background: #10b981; }
+        .btn-start:hover { background: #059669; }
+        .btn-stop { background: #ef4444; }
+        .btn-stop:hover { background: #dc2626; }
+        
+        .control-panel { background: #f8fafc; padding: 15px; border-radius: 8px; margin-top: 20px; display: flex; align-items: center; gap: 10px; border: 1px solid #e2e8f0; }
+        .status-badge { padding: 4px 10px; border-radius: 12px; font-size: 14px; font-weight: bold; background: #e2e8f0; color: #475569; margin-left: auto; }
+        .status-active { background: #d1fae5; color: #047857; }
+    </style>
 </head>
 <body>
-  <div class="container">
-    <!-- 요약 리포트 카드 -->
     <div class="card">
-      <h2>주간 자세 리포트</h2>
-      <p class="summary-text">총 측정 구간: <strong id="interval-count">-</strong>개 (30분 단위)</p>
-      <p class="summary-text">종합 자세 점수:</p>
-      <div id="weekly-score" class="score">- 점</div>
+        <div class="header-wrap">
+            <h2>주간 자세 리포트</h2>
+            <button class="btn btn-logout" onclick="logout()">로그아웃</button>
+        </div>
+        <p id="total-intervals">총 측정 구간: 불러오는 중...</p>
+        <p>종합 자세 점수:</p>
+        <div class="score-text" id="weekly-score">- 점</div>
+
+        <!-- 측정 제어 패널 추가 -->
+        <div class="control-panel">
+            <button class="btn btn-start" onclick="toggleMeasurement('start')">▶ 측정 시작</button>
+            <button class="btn btn-stop" onclick="toggleMeasurement('stop')">■ 측정 종료</button>
+            <div id="measure-status" class="status-badge">대기 중</div>
+        </div>
     </div>
 
-    <!-- 차트 카드 -->
     <div class="card">
-      <canvas id="postureChart"></canvas>
+        <div class="chart-container">
+            <canvas id="dashboardChart"></canvas>
+        </div>
     </div>
-  </div>
 
-  <script>
-    // 테스트 중인 DB의 user_name에 맞춰 ID 변경 (예: 'Test')
-    const USER_ID = "550e8400-e29b-41d4-a716-446655440000"; 
-    const API_URL = `http://127.0.0.1:5000/api/report/weekly?user_id=${USER_ID}`;
+    <script>
+        let dashboardChart;
 
-    async function fetchReportData() {
-      try {
-        const response = await fetch(API_URL);
-        const data = await response.json();
-
-        if (data.status === "success") {
-          document.getElementById("interval-count").innerText = data.summary.total_measured_intervals;
-          document.getElementById("weekly-score").innerText = `${data.summary.weekly_score}점`;
-
-          const labels = data.chart_data.map(item => item.time);
-          const totalLogs = data.chart_data.map(item => item.total);
-          const leaningLogs = data.chart_data.map(item => item.leaning);
-          const unbalancedLogs = data.chart_data.map(item => item.unbalanced);
-
-          renderChart(labels, totalLogs, leaningLogs, unbalancedLogs);
-        } else {
-          alert("데이터를 불러오지 못했습니다: " + data.message);
+        function initChart() {
+            const ctx = document.getElementById('dashboardChart').getContext('2d');
+            dashboardChart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: [], 
+                    datasets: [
+                        { label: '전체 로그 수', backgroundColor: '#cbd5e1', data: [] }, 
+                        { label: '거북목 (앞)', backgroundColor: '#ef4444', data: [] },  
+                        { label: '좌우 쏠림', backgroundColor: '#f59e0b', data: [] }    
+                    ]
+                },
+                options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true } } }
+            });
         }
-      } catch (err) {
-        console.error("서버 통신 실패:", err);
-      }
-    }
 
-    function renderChart(labels, totalData, leaningData, unbalancedData) {
-      const ctx = document.getElementById('postureChart').getContext('2d');
-      new Chart(ctx, {
-        type: 'bar',
-        data: {
-          labels: labels,
-          datasets: [
-            { label: '전체 로그 수', data: totalData, backgroundColor: '#cbd5e1' },
-            { label: '거북목 (앞)', data: leaningData, backgroundColor: '#ef4444' },
-            { label: '좌우 쏠림', data: unbalancedData, backgroundColor: '#f59e0b' }
-          ]
-        },
-        options: {
-          responsive: true,
-          scales: { y: { beginAtZero: true } }
+        function logout() {
+            localStorage.removeItem('access_token');
+            alert("로그아웃 되었습니다.");
+            window.location.href = 'login.html';
         }
-      });
-    }
 
-    fetchReportData();
-  </script>
+        // ⭐️ 추가됨: 백엔드에 측정 시작/종료 신호 보내기
+        async function toggleMeasurement(action) {
+            const token = localStorage.getItem('access_token');
+            if (!token) {
+                alert("로그인이 필요합니다.");
+                return;
+            }
+
+            const apiUrl = `http://127.0.0.1:5000/api/measurement/${action}`;
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (response.ok) {
+                    const statusBadge = document.getElementById('measure-status');
+                    if (action === 'start') {
+                        statusBadge.innerText = "● 실시간 측정 중";
+                        statusBadge.classList.add("status-active");
+                    } else {
+                        statusBadge.innerText = "대기 중";
+                        statusBadge.classList.remove("status-active");
+                    }
+                } else if (response.status === 401) {
+                    alert("세션이 만료되었습니다.");
+                    logout();
+                }
+            } catch (error) {
+                console.error("통신 에러:", error);
+                alert("서버 연결 실패.");
+            }
+        }
+
+        async function fetchWeeklyReport() {
+            const token = localStorage.getItem('access_token');
+            if (!token) {
+                window.location.href = 'login.html';
+                return;
+            }
+
+            try {
+                const response = await fetch(`http://127.0.0.1:5000/api/report/weekly`, {
+                    method: 'GET',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (response.status === 401) {
+                    localStorage.removeItem('access_token');
+                    window.location.href = 'login.html';
+                    return;
+                }
+
+                const data = await response.json();
+                if (data.status === 'success') {
+                    document.getElementById("total-intervals").innerText = `총 측정 구간: ${data.summary.total_measured_intervals}개 (30분 단위)`;
+                    document.getElementById("weekly-score").innerText = `${data.summary.weekly_score}점`;
+
+                    dashboardChart.data.labels = data.chart_data.map(item => item.time);
+                    dashboardChart.data.datasets[0].data = data.chart_data.map(item => item.total);
+                    dashboardChart.data.datasets[1].data = data.chart_data.map(item => item.leaning);
+                    dashboardChart.data.datasets[2].data = data.chart_data.map(item => item.unbalanced);
+                    dashboardChart.update();
+                }
+            } catch (error) {
+                console.error("서버 통신 에러:", error);
+            }
+        }
+
+        window.onload = () => {
+            initChart();
+            fetchWeeklyReport();
+        };
+    </script>
 </body>
 </html>
