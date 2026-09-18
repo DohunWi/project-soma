@@ -148,7 +148,7 @@
 
                 const data = await response.json();
                 if (data.status === 'success') {
-                    document.getElementById("total-intervals").innerText = `총 측정 구간: ${data.summary.total_measured_intervals}개 (30분 단위)`;
+                    document.getElementById("total-intervals").innerText = `총 측정 구간: ${data.summary.total_measured_intervals}개 (5분 단위)`;
                     document.getElementById("weekly-score").innerText = `${data.summary.weekly_score}점`;
 
                     dashboardChart.data.labels = data.chart_data.map(item => item.time);
