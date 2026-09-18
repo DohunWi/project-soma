@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>스마트 체어 로그인</title>
+    <script type="module">
+        import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm'
+
+        // 발급받은 키 2가지를 여기에 입력합니다.
+        const supabase = createClient('https://dzkionspeweesqwlrxex.supabase.co', 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR6a2lvbnNwZXdlZXNxd2xyeGV4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzNzkzNjAsImV4cCI6MjA5NDk1NTM2MH0.VoYhfIg7h1PGpm72NYPTe3sXGqk0pt54k_UCsNcQxVI');
+
+        document.getElementById('login-btn').addEventListener('click', async () => {
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+
+            // Supabase로 로그인 요청 
+            const { data, error } = await supabase.auth.signInWithPassword({
+                email: email,
+                password: password
+            });
+
+            if (error) {
+                alert("로그인 실패: " + error.message);
+                return;
+            }
+
+            // 로그인 성공 시 브라우저 로컬 스토리지에 토큰(입장권) 보관
+            localStorage.setItem('access_token', data.session.access_token);
+            
+            alert("로그인 성공! 대시보드로 이동합니다.");
+            window.location.href = 'test.html'; // 리포트 페이지로 자동 이동
+        });
+    </script>
+</head>
+<body>
+    <h3>스마트 체어 시스템 로그인</h3>
+    <input type="email" id="email" placeholder="이메일 (test@example.com)" />
+    <input type="password" id="password" placeholder="비밀번호" />
+    <button id="login-btn">로그인</button>
+</body>
+</html>
