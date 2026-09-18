@@ -91,7 +91,7 @@ def get_weekly_report(user_id):
         
         query = """
             SELECT target_time, total_logs, leaning_count, unbalanced_count 
-            FROM posture_stats_30min 
+            FROM posture_stats_5min 
             WHERE user_id = %s 
             ORDER BY target_time ASC
         """
