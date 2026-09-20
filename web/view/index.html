@@ -1,586 +1,973 @@
 <!DOCTYPE html>
 <html lang="ko">
+
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Project-Soma: 스마트 자세 교정 대시보드</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project-Soma: 스마트 자세 교정 대시보드</title>
 
-<!-- 외부 라이브러리 및 폰트 -->
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
-<style>@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');</style>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script src="https://cdn.tailwindcss.com"></script>
+    <!-- 외부 라이브러리 및 폰트 -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap"
+        rel="stylesheet">
+    <style>
+        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
 
-<!-- 🚨 신규 추가: Socket.IO 및 알림(SweetAlert2) 라이브러리 (향후 로컬 파일로 교체 권장) -->
-<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <!-- Socket.IO 및 알림(SweetAlert2) 라이브러리 -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
-<style>
-  /* 기본 리셋 및 레이아웃 (유지) */
-  body { font-family: 'Pretendard', 'Noto Sans KR', sans-serif; margin: 0; padding: 0; background-color: #f4f7f6; color: #333; }
-  .app-container { display: flex; height: 100vh; overflow: hidden; }
+    <style>
+        /* 기본 리셋 및 레이아웃 */
+        body {
+            font-family: 'Pretendard', 'Noto Sans KR', sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f7f6;
+            color: #333;
+        }
 
-  /* 좌측 사이드바 (유지) */
-  .sidebar { width: 240px; background-color: #ffffff; border-right: 1px solid #e5e7eb; padding: 20px 10px; display: flex; flex-direction: column; z-index: 10; }
-  .sidebar-logo { padding: 10px 20px; font-weight: bold; font-size: 1.2rem; margin-bottom: 20px; color: #2c3e50; }
-  .menu-item { padding: 12px 20px; margin-bottom: 4px; border-radius: 8px; color: #4b5563; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 10px; }
-  .menu-item:hover { background-color: #f3f4f6; }
-  .menu-item.active { background-color: #f3f4f6; color: #111827; font-weight: 600; }
+        .app-container {
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
 
-  /* 우측 콘텐츠 영역 (유지) */
-  .main-content { flex: 1; padding: 30px 40px; overflow-y: auto; background-color: #f4f7f6; }
-  .view-section { display: none; }
-  .view-section.active { display: block; animation: fadeIn 0.3s ease; }
-  @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        /* 좌측 사이드바 */
+        .sidebar {
+            width: 240px;
+            background-color: #ffffff;
+            border-right: 1px solid #e5e7eb;
+            padding: 20px 10px;
+            display: flex;
+            flex-direction: column;
+            z-index: 10;
+        }
 
-  /* 대시보드 내부 컨텐츠 스타일 (유지) */
-  :root {
-      --bg-color: #f4f7f6;
-      --card-bg: #ffffff;
-      --text-main: #2c3e50;
-      --text-sub: #7f8c8d;
-      --good-color: #2ecc71;
-      --warn-color: #e67e22;
-      --danger-color: #e74c3c;
-      --neutral-color: #95a5a6;
-      --border-color: #ecf0f1;
-      --blue-color: #4a9eff;
-  }
-  .dashboard-container { max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }
-  .header, .section-title { grid-column: 1 / -1; display: flex; justify-content: space-between; align-items: center; background: var(--card-bg); padding: 20px 30px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
-  .header h1 { margin: 0; font-size: 1.3rem; font-weight: bold; }
-  .section-title { margin-top: 10px; background: transparent; box-shadow: none; padding: 0 10px; border-bottom: 2px solid var(--border-color); border-radius: 0; }
-  .connection-status { font-weight: bold; color: var(--neutral-color); display: flex; align-items: center; gap: 8px; }
-  .status-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--neutral-color); }
+        .sidebar-logo {
+            padding: 10px 20px;
+            font-weight: bold;
+            font-size: 1.2rem;
+            margin-bottom: 20px;
+            color: #2c3e50;
+        }
 
-  .card { background: var(--card-bg); padding: 24px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); display: flex; flex-direction: column; justify-content: center; }
-  .card h3 { margin: 0 0 10px 0; color: var(--text-sub); font-size: 0.95rem; font-weight: 600;}
-  .status-card { grid-column: 1 / -1; text-align: center; padding: 40px 20px; border: 2px solid transparent; transition: all 0.3s ease; }
-  .status-card h2 { font-size: 2.2rem; margin: 10px 0; font-weight: bold; }
-  .status-card p { font-size: 1.1rem; color: var(--text-sub); margin: 0; }
-  .data-value { font-size: 1.8rem; font-weight: bold; }
-  .data-unit { font-size: 0.9rem; font-weight: normal; color: var(--text-sub); }
-  .chart-card { grid-column: 1 / -1; height: 350px; }
+        .menu-item {
+            padding: 12px 20px;
+            margin-bottom: 4px;
+            border-radius: 8px;
+            color: #4b5563;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
 
-  .feedback-card { grid-column: 1 / -1; background: rgba(46, 204, 113, 0.1); border-left: 5px solid var(--good-color); padding: 20px; border-radius: 8px; display: flex; align-items: center; gap: 15px; }
-  .feedback-icon { font-size: 2rem; }
-  .feedback-text h4 { margin: 0 0 5px 0; color: var(--text-main); font-size: 1.1rem; font-weight: bold; }
-  .feedback-text p { margin: 0; color: var(--text-sub); font-size: 0.95rem; }
+        .menu-item:hover {
+            background-color: #f3f4f6;
+        }
 
-  .half-chart { grid-column: span 1; height: 300px; }
-  .half-chart-wide { grid-column: span 2; height: 300px; }
-  .chart-container { position: relative; height: 100%; width: 100%; }
+        .menu-item.active {
+            background-color: #f3f4f6;
+            color: #111827;
+            font-weight: 600;
+        }
 
-  .score-circle { width: 120px; height: 120px; border-radius: 50%; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 8px solid var(--neutral-color); transition: border-color 0.3s; background: white; }
+        /* 우측 콘텐츠 영역 */
+        .main-content {
+            flex: 1;
+            padding: 30px 40px;
+            overflow-y: auto;
+            background-color: #f4f7f6;
+        }
 
-  /* 설정 화면 스타일 (유지) */
-  .settings-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 24px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.02); }
-  .settings-card h3 { margin-top: 0; margin-bottom: 20px; font-size: 1.1rem; font-weight: bold; color: #111827; }
-  .setting-row { display: flex; justify-content: space-between; align-items: center; padding-bottom: 16px; margin-bottom: 16px; border-bottom: 1px solid #f3f4f6; }
-  .setting-row:last-child { border-bottom: none; padding-bottom: 0; margin-bottom: 0; }
-  select.form-select { padding: 8px 32px 8px 12px; border: 1px solid #e5e7eb; border-radius: 8px; outline: none; background-color: #fff; appearance: none; background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e"); background-repeat: no-repeat; background-position: right 8px center; background-size: 16px; }
-  .btn-outline { padding: 8px 16px; border:1px solid #d1d5db; background:#fff; border-radius:6px; cursor:pointer; font-weight: 500; transition: background 0.2s; }
-  .btn-outline:hover { background: #f9fafb; }
-  .error-text { color: #e74c3c; font-size: 0.85rem; margin-top: 12px; display: none; background: #fdf3f2; padding: 12px; border-radius: 6px; }
-</style>
+        .view-section {
+            display: none;
+        }
+
+        .view-section.active {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* 대시보드 내부 컨텐츠 스타일 */
+        :root {
+            --bg-color: #f4f7f6;
+            --card-bg: #ffffff;
+            --text-main: #2c3e50;
+            --text-sub: #7f8c8d;
+            --good-color: #2ecc71;
+            --warn-color: #e67e22;
+            --danger-color: #e74c3c;
+            --neutral-color: #95a5a6;
+            --border-color: #ecf0f1;
+            --blue-color: #4a9eff;
+        }
+
+        .dashboard-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+        }
+
+        .header,
+        .section-title {
+            grid-column: 1 / -1;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--card-bg);
+            padding: 20px 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 1.3rem;
+            font-weight: bold;
+        }
+
+        .section-title {
+            margin-top: 10px;
+            background: transparent;
+            box-shadow: none;
+            padding: 0 10px;
+            border-bottom: 2px solid var(--border-color);
+            border-radius: 0;
+        }
+
+        .connection-status {
+            font-weight: bold;
+            color: var(--neutral-color);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--neutral-color);
+        }
+
+        .card {
+            background: var(--card-bg);
+            padding: 24px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .card h3 {
+            margin: 0 0 10px 0;
+            color: var(--text-sub);
+            font-size: 0.95rem;
+            font-weight: 600;
+        }
+
+        .status-card {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 40px 20px;
+            border: 2px solid transparent;
+            transition: all 0.3s ease;
+        }
+
+        .status-card h2 {
+            font-size: 2.2rem;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+
+        .status-card p {
+            font-size: 1.1rem;
+            color: var(--text-sub);
+            margin: 0;
+        }
+
+        .data-value {
+            font-size: 1.8rem;
+            font-weight: bold;
+        }
+
+        .data-unit {
+            font-size: 0.9rem;
+            font-weight: normal;
+            color: var(--text-sub);
+        }
+
+        .chart-card {
+            grid-column: 1 / -1;
+            height: 350px;
+        }
+
+        .feedback-card {
+            grid-column: 1 / -1;
+            background: rgba(46, 204, 113, 0.1);
+            border-left: 5px solid var(--good-color);
+            padding: 20px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .feedback-icon {
+            font-size: 2rem;
+        }
+
+        .feedback-text h4 {
+            margin: 0 0 5px 0;
+            color: var(--text-main);
+            font-size: 1.1rem;
+            font-weight: bold;
+        }
+
+        .feedback-text p {
+            margin: 0;
+            color: var(--text-sub);
+            font-size: 0.95rem;
+        }
+
+        .half-chart {
+            grid-column: span 1;
+            height: 300px;
+        }
+
+        .half-chart-wide {
+            grid-column: span 2;
+            height: 300px;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 100%;
+            width: 100%;
+        }
+
+        .score-circle {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            border: 8px solid var(--neutral-color);
+            transition: border-color 0.3s;
+            background: white;
+        }
+
+        /* 설정 화면 스타일 */
+        .settings-card {
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.02);
+        }
+
+        .settings-card h3 {
+            margin-top: 0;
+            margin-bottom: 20px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            color: #111827;
+        }
+
+        .setting-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 16px;
+            margin-bottom: 16px;
+            border-bottom: 1px solid #f3f4f6;
+        }
+
+        .setting-row:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+            margin-bottom: 0;
+        }
+
+        select.form-select {
+            padding: 8px 32px 8px 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            outline: none;
+            background-color: #fff;
+            appearance: none;
+            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+            background-repeat: no-repeat;
+            background-position: right 8px center;
+            background-size: 16px;
+        }
+
+        .btn-outline {
+            padding: 8px 16px;
+            border: 1px solid #d1d5db;
+            background: #fff;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .btn-outline:hover {
+            background: #f9fafb;
+        }
+
+        .error-text {
+            color: #e74c3c;
+            font-size: 0.85rem;
+            margin-top: 12px;
+            display: none;
+            background: #fdf3f2;
+            padding: 12px;
+            border-radius: 6px;
+        }
+    </style>
 </head>
+
 <body>
 
-<div class="app-container">
-  
-  <!-- 사이드바 -->
-  <aside class="sidebar">
-    <div class="sidebar-logo">Project-Soma</div>
-    <div class="menu-item active" onclick="switchView('monitoring', this)" data-i18n="menu_monitoring">실시간 모니터링</div>
-    <div class="menu-item" onclick="switchView('dashboard', this)" data-i18n="menu_dashboard">대시보드</div>
-    <div class="menu-item" onclick="switchView('settings', this)" data-i18n="menu_settings">설정</div>
-    <div class="menu-item" onclick="switchView('info', this)" data-i18n="menu_info">정보</div>
-  </aside>
+    <div class="app-container">
 
-  <!-- 메인 콘텐츠 -->
-  <main class="main-content">
-    
-    <!-- 뷰 A: 실시간 모니터링 -->
-    <section id="view-monitoring" class="view-section active">
-      <div class="max-w-[1200px] mx-auto mb-6">
-          <nav class="flex justify-between items-center py-2 bg-transparent mb-4">
-              <h2 class="text-2xl font-bold text-gray-800" data-i18n="title_monitoring">실시간 모니터링</h2>
-              <div class="flex gap-2">
-                  <button onclick="openLoginModal()" class="px-4 py-2 text-sm text-white bg-blue-500 rounded-md hover:bg-blue-600 shadow-sm transition-colors" data-i18n="btn_login">로그인</button>
-              </div>
-          </nav>
+        <!-- 사이드바 -->
+        <aside class="sidebar">
+            <div class="sidebar-logo">Project-Soma</div>
+            <div class="menu-item active" onclick="switchView('monitoring', this)" data-i18n="menu_monitoring">실시간 모니터링
+            </div>
+            <div class="menu-item" onclick="switchView('dashboard', this)" data-i18n="menu_dashboard">대시보드</div>
+            <div class="menu-item" onclick="switchView('settings', this)" data-i18n="menu_settings">설정</div>
+            <div class="menu-item" onclick="switchView('info', this)" data-i18n="menu_info">정보</div>
+        </aside>
 
-          <div class="grid grid-cols-3 gap-6 mb-6">
-              <div class="col-span-2 flex items-center gap-8 bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-                  <div id="scoreRing" class="score-circle">
-                      <span id="currentScore" class="text-4xl font-bold text-gray-800">-</span>
-                      <span class="text-[10px] text-gray-500 font-semibold tracking-wide mt-1">SCORE</span>
-                  </div>
-                  <div>
-                      <div class="flex items-center gap-2 mb-1">
-                          <span id="topStatusDot" class="w-2 h-2 rounded-full bg-gray-400"></span>
-                          <span id="topStatusLabel" class="text-sm font-medium text-gray-500" data-i18n="status_waiting">대기 중</span>
-                      </div>
-                      <!-- 타이틀 텍스트도 아이디 분리하여 i18n 없이 직접 삽입 -->
-                      <h1 id="topStatusMessage" class="text-3xl font-bold mb-1 text-gray-800" data-i18n="cam_wait">데이터를 기다립니다</h1>
-                      <p id="topDetailFeedback" class="text-sm text-gray-500" data-i18n="cam_wait_sub">잠시만 기다려주세요...</p>
-                  </div>
-              </div>
+        <!-- 메인 콘텐츠 -->
+        <main class="main-content">
 
-              <!-- 웹캠 유지 (실제 분석은 서버가 하지만 모니터링 용도) -->
+            <!-- 뷰 A: 실시간 모니터링 -->
+            <section id="view-monitoring" class="view-section active">
+                <div class="max-w-[1200px] mx-auto mb-6">
+                    <nav class="flex justify-between items-center py-2 bg-transparent mb-4">
+                        <h2 class="text-2xl font-bold text-gray-800" data-i18n="title_monitoring">실시간 모니터링</h2>
+                        <div class="flex gap-2">
+                            <button onclick="openLoginModal()"
+                                class="px-4 py-2 text-sm text-white bg-blue-500 rounded-md hover:bg-blue-600 shadow-sm transition-colors"
+                                data-i18n="btn_login">로그인</button>
+                        </div>
+                    </nav>
+
+                    <div class="grid grid-cols-3 gap-6 mb-6">
+                        <div
+                            class="col-span-2 flex items-center gap-8 bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                            <div id="scoreRing" class="score-circle">
+                                <span id="currentScore" class="text-4xl font-bold text-gray-800">-</span>
+                                <span class="text-[10px] text-gray-500 font-semibold tracking-wide mt-1">SCORE</span>
+                            </div>
+                            <div>
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span id="topStatusDot" class="w-2 h-2 rounded-full bg-gray-400"></span>
+                                    <span id="topStatusLabel" class="text-sm font-medium text-gray-500"
+                                        data-i18n="status_waiting">대기 중</span>
+                                </div>
+                                <h1 id="topStatusMessage" class="text-3xl font-bold mb-1 text-gray-800"
+                                    data-i18n="cam_wait">데이터를 기다립니다</h1>
+                                <p id="topDetailFeedback" class="text-sm text-gray-500" data-i18n="cam_wait_sub">잠시만
+                                    기다려주세요...</p>
+                            </div>
+                        </div>
+
+                        <!-- 웹캠 모니터링 (주석 처리됨) -->
+                        <!--
               <div class="col-span-1 bg-black rounded-xl overflow-hidden relative shadow-sm aspect-video flex items-center justify-center">
                   <video id="webcamPreview" autoplay playsinline muted class="w-full h-full object-cover opacity-80"></video>
                   <div class="absolute bottom-2 left-2 bg-black bg-opacity-60 text-white text-[10px] px-2 py-1 rounded" data-i18n="live_detecting">
                       🔴 웹캠 모니터링
                   </div>
               </div>
-          </div>
-      </div>
+              -->
 
-      <div class="dashboard-container">
-          <div class="header">
-              <h1 data-i18n="conn_title">🪑 실시간 자세 데이터 백엔드 연동 현황</h1>
-              <div class="connection-status" id="conn-status">
-                  <div class="status-dot" id="conn-dot"></div>
-                  <span id="conn-text" data-i18n="server_wait">서버 연결 대기 중...</span>
-              </div>
-          </div>
+                        <!-- 신규 추가: 측정 제어 버튼 영역 -->
+                        <div
+                            class="col-span-1 bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex flex-col justify-center items-center gap-5 aspect-video">
+                            <h3 class="font-bold text-gray-700 text-lg">실시간 측정 제어</h3>
+                            <div class="flex gap-3 w-full">
+                                <button id="btn-start" onclick="startMeasurement()"
+                                    class="flex-1 py-3 bg-blue-500 hover:bg-blue-600 text-white font-bold rounded-lg transition-colors shadow-sm">측정
+                                    시작</button>
+                                <button id="btn-stop" onclick="stopMeasurement()"
+                                    class="flex-1 py-3 bg-red-500 hover:bg-red-600 text-white font-bold rounded-lg transition-colors shadow-sm opacity-50 cursor-not-allowed"
+                                    disabled>측정 중지</button>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span id="measure-status-dot" class="w-3 h-3 rounded-full bg-gray-400"></span>
+                                <p id="measure-status-text" class="text-sm text-gray-500 font-medium">현재 상태: 대기 중</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
 
-          <div class="card status-card" id="main-status-card">
-              <h3 data-i18n="current_posture">현재 종합 상태</h3>
-              <h2 id="posture-msg" data-i18n="data_wait">분석 대기 중</h2>
-              <p id="posture-sub" data-i18n="analyzing">사용자의 데이터를 수집하고 있습니다.</p>
-          </div>
+                <div class="dashboard-container">
+                    <div class="header">
+                        <h1 data-i18n="conn_title">🪑 실시간 자세 데이터 백엔드 연동 현황</h1>
+                        <div class="connection-status" id="conn-status">
+                            <div class="status-dot" id="conn-dot"></div>
+                            <span id="conn-text" data-i18n="server_wait">서버 연결 대기 중...</span>
+                        </div>
+                    </div>
 
-          <!-- 🚨 핵심: 기획에 맞춘 4대 지표 카드로 교체 (각도 데이터 삭제) -->
-          <div class="card">
-              <h3 data-i18n="metric_blink">분당 눈 깜빡임</h3>
-              <div class="data-value"><span id="val-blink">-</span><span class="data-unit"> 회/분</span></div>
-          </div>
-          <div class="card">
-              <h3 data-i18n="metric_dist">화면과의 거리</h3>
-              <div class="data-value"><span id="val-dist">-</span><span class="data-unit"> cm</span></div>
-          </div>
-          <div class="card">
-              <h3 data-i18n="metric_static">정적 유지 시간</h3>
-              <div class="data-value"><span id="val-static">-</span><span class="data-unit"> 초</span></div>
-          </div>
-          <div class="card" style="grid-column: 1 / -1; display:flex; flex-direction:row; align-items:center; justify-content:space-between;">
-              <h3 data-i18n="metric_balance" style="margin:0;">좌우 하중 밸런스</h3>
-              <div class="data-value"><span id="val-balance">-</span></div>
-          </div>
-      </div>
-    </section>
+                    <div class="card status-card" id="main-status-card">
+                        <h3 data-i18n="current_posture">현재 종합 상태</h3>
+                        <h2 id="posture-msg" data-i18n="data_wait">분석 대기 중</h2>
+                        <p id="posture-sub" data-i18n="analyzing">우측 상단의 '측정 시작' 버튼을 눌러주세요.</p>
+                    </div>
 
-    <!-- 뷰 B: 대시보드 (디자인 유지) -->
-    <section id="view-dashboard" class="view-section">
-      <div class="max-w-[1200px] mx-auto mb-6">
-          <nav class="flex justify-between items-center py-2 bg-transparent mb-4">
-              <h2 class="text-2xl font-bold text-gray-800" data-i18n="menu_dashboard">대시보드</h2>
-          </nav>
-      </div>
-      <div class="dashboard-container">
-          <div class="card chart-card">
-              <!-- 타이틀 변경: 목 기울기 -> 실시간 점수 변화 -->
-              <h3 data-i18n="recent_history">최근 자세 이력 (실시간 점수 변화)</h3>
-              <div class="chart-container"><canvas id="realtimeChart"></canvas></div>
-          </div>
-          <div class="section-title">
-              <h2 style="margin: 0; color: var(--text-main); font-size: 1.2rem; font-weight: bold;" data-i18n="daily_report">일간 통계 리포트</h2>
-          </div>
-          <div class="feedback-card">
-              <div class="feedback-icon">🌟</div>
-              <div class="feedback-text">
-                  <h4 data-i18n="excellent">훌륭합니다!</h4>
-                  <p data-i18n="excellent_desc">오늘 하루 종일 좋은 자세 패턴을 유지하셨네요.</p>
-              </div>
-          </div>
-          <div class="card half-chart">
-              <h3 data-i18n="pie_title">오늘 하루 상태 비율</h3>
-              <div class="chart-container"><canvas id="pieChart"></canvas></div>
-          </div>
-          <div class="card half-chart-wide">
-              <h3 data-i18n="timeline_title">시간대별 상태 이력</h3>
-              <div class="chart-container"><canvas id="timelineChart"></canvas></div>
-          </div>
-      </div>
-    </section>
+                    <div class="card">
+                        <h3 data-i18n="metric_blink">분당 눈 깜빡임</h3>
+                        <div class="data-value"><span id="val-blink">-</span><span class="data-unit"> 회/분</span></div>
+                    </div>
+                    <div class="card">
+                        <h3 data-i18n="metric_dist">화면과의 거리</h3>
+                        <div class="data-value"><span id="val-dist">-</span><span class="data-unit"> cm</span></div>
+                    </div>
+                    <div class="card">
+                        <h3 data-i18n="metric_static">정적 유지 시간</h3>
+                        <div class="data-value"><span id="val-static">-</span><span class="data-unit"> 초</span></div>
+                    </div>
+                    <div class="card"
+                        style="grid-column: 1 / -1; display:flex; flex-direction:row; align-items:center; justify-content:space-between;">
+                        <h3 data-i18n="metric_balance" style="margin:0;">좌우 하중 밸런스</h3>
+                        <div class="data-value"><span id="val-balance">-</span></div>
+                    </div>
+                </div>
+            </section>
 
-    <!-- 뷰 C: 설정 화면 (유지) -->
-    <section id="view-settings" class="view-section">
-      <h2 class="text-2xl font-bold text-gray-800 mb-6" data-i18n="menu_settings">설정</h2>
-      
-      <div class="settings-card">
-        <h3 data-i18n="lang_setting">언어 설정</h3>
-        <select id="langSelect" class="form-select" onchange="changeLanguage(this.value)">
-            <option value="ko">한국어</option>
-            <option value="en">English</option>
-        </select>
-      </div>
+            <!-- 뷰 B: 대시보드 -->
+            <section id="view-dashboard" class="view-section">
+                <div class="max-w-[1200px] mx-auto mb-6">
+                    <nav class="flex justify-between items-center py-2 bg-transparent mb-4">
+                        <h2 class="text-2xl font-bold text-gray-800" data-i18n="menu_dashboard">대시보드</h2>
+                    </nav>
+                </div>
+                <div class="dashboard-container">
+                    <div class="card chart-card">
+                        <h3 data-i18n="recent_history">최근 자세 이력 (실시간 점수 변화)</h3>
+                        <div class="chart-container"><canvas id="realtimeChart"></canvas></div>
+                    </div>
+                    <div class="section-title">
+                        <h2 style="margin: 0; color: var(--text-main); font-size: 1.2rem; font-weight: bold;"
+                            data-i18n="daily_report">일간 통계 리포트</h2>
+                    </div>
+                    <div class="feedback-card">
+                        <div class="feedback-icon">🌟</div>
+                        <div class="feedback-text">
+                            <h4 data-i18n="excellent">훌륭합니다!</h4>
+                            <p data-i18n="excellent_desc">오늘 하루 종일 좋은 자세 패턴을 유지하셨네요.</p>
+                        </div>
+                    </div>
+                    <div class="card half-chart">
+                        <h3 data-i18n="pie_title">오늘 하루 상태 비율</h3>
+                        <div class="chart-container"><canvas id="pieChart"></canvas></div>
+                    </div>
+                    <div class="card half-chart-wide">
+                        <h3 data-i18n="timeline_title">시간대별 상태 이력</h3>
+                        <div class="chart-container"><canvas id="timelineChart"></canvas></div>
+                    </div>
+                </div>
+            </section>
 
-      <div class="settings-card">
-        <h3 class="mb-4" data-i18n="cam_setting_title">카메라 설정</h3>
-        <div class="bg-[#eff6ff] border-l-4 border-blue-500 p-5 rounded-r-md">
-            <p class="text-blue-800 text-[15px] mb-4" data-i18n="cam_setting_desc">
-                카메라가 작동하지 않는 경우, 아래 버튼을 클릭하여 시스템 설정에서 앱의 카메라 접근 권한을 허용해주세요.
-            </p>
-            <button class="bg-[#111827] hover:bg-gray-800 text-white px-5 py-2.5 rounded-md text-sm transition-colors" 
-                    onclick="openSystemSettings('camera')" data-i18n="btn_cam_setting">
-                카메라 설정 안내
-            </button>
-        </div>
-        <div id="cameraSettingsFallback" class="error-text" data-i18n="cam_setting_fallback">
-            수동으로 브라우저 주소창 좌측의 자물쇠 아이콘을 눌러 카메라 권한을 허용해주세요.
-        </div>
-        <div class="flex justify-between items-center pt-8 mt-4">
-            <div class="font-medium text-gray-800" data-i18n="select_camera">사용할 카메라</div>
-            <select id="cameraSelect" class="form-select w-64 bg-gray-50" onchange="changeCamera(this.value)">
-                <option value="" data-i18n="loading_cameras">카메라 목록을 불러오는 중...</option>
-            </select>
-        </div>
-      </div>
-    </section>
+            <!-- 뷰 C: 설정 화면 -->
+            <section id="view-settings" class="view-section">
+                <h2 class="text-2xl font-bold text-gray-800 mb-6" data-i18n="menu_settings">설정</h2>
 
-    <!-- 뷰 D: 정보 (유지) -->
-    <section id="view-info" class="view-section">
-      <h2 class="text-2xl font-bold text-gray-800 mb-6" data-i18n="menu_info">정보</h2>
-      <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
-        <h3 class="text-lg font-bold mb-2">Project-Soma</h3>
-        <p class="text-gray-600 mb-1" data-i18n="version">버전: 1.0.0</p>
-        <p class="text-gray-600" data-i18n="info_desc">스마트 피로도 자각 솔루션 시스템입니다.</p>
-      </div>
-    </section>
+                <div class="settings-card">
+                    <h3 data-i18n="lang_setting">언어 설정</h3>
+                    <select id="langSelect" class="form-select" onchange="changeLanguage(this.value)">
+                        <option value="ko">한국어</option>
+                        <option value="en">English</option>
+                    </select>
+                </div>
 
-  </main>
-</div>
+                <div class="settings-card">
+                    <h3 class="mb-4" data-i18n="cam_setting_title">카메라 설정</h3>
+                    <div class="bg-[#eff6ff] border-l-4 border-blue-500 p-5 rounded-r-md">
+                        <p class="text-blue-800 text-[15px] mb-4" data-i18n="cam_setting_desc">
+                            카메라가 작동하지 않는 경우, 아래 버튼을 클릭하여 시스템 설정에서 앱의 카메라 접근 권한을 허용해주세요.
+                        </p>
+                        <button
+                            class="bg-[#111827] hover:bg-gray-800 text-white px-5 py-2.5 rounded-md text-sm transition-colors"
+                            onclick="openSystemSettings('camera')" data-i18n="btn_cam_setting">
+                            카메라 설정 안내
+                        </button>
+                    </div>
+                    <div id="cameraSettingsFallback" class="error-text" data-i18n="cam_setting_fallback">
+                        수동으로 브라우저 주소창 좌측의 자물쇠 아이콘을 눌러 카메라 권한을 허용해주세요.
+                    </div>
+                    <div class="flex justify-between items-center pt-8 mt-4">
+                        <div class="font-medium text-gray-800" data-i18n="select_camera">사용할 카메라</div>
+                        <select id="cameraSelect" class="form-select w-64 bg-gray-50"
+                            onchange="changeCamera(this.value)">
+                            <option value="" data-i18n="loading_cameras">카메라 목록을 불러오는 중...</option>
+                        </select>
+                    </div>
+                </div>
+            </section>
 
-<!-- 로그인 팝업 모달 -->
-<div id="loginModal" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden justify-center items-center">
-    <div class="bg-white p-8 rounded-xl shadow-lg w-80 text-center">
-        <h3 class="text-xl font-bold mb-6 text-gray-800">로그인</h3>
-        <input type="text" id="userId" placeholder="아이디" class="w-full px-4 py-2 mb-3 border border-gray-300 rounded-md outline-none focus:border-blue-500">
-        <input type="password" id="userPw" placeholder="비밀번호" class="w-full px-4 py-2 mb-6 border border-gray-300 rounded-md outline-none focus:border-blue-500">
-        <div class="flex gap-2 justify-center">
-            <button onclick="closeLoginModal()" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors">취소</button>
-            <button onclick="attemptLogin()" class="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors">접속</button>
+            <!-- 뷰 D: 정보 -->
+            <section id="view-info" class="view-section">
+                <h2 class="text-2xl font-bold text-gray-800 mb-6" data-i18n="menu_info">정보</h2>
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
+                    <h3 class="text-lg font-bold mb-2">Project-Soma</h3>
+                    <p class="text-gray-600 mb-1" data-i18n="version">버전: 1.0.0</p>
+                    <p class="text-gray-600" data-i18n="info_desc">스마트 피로도 자각 솔루션 시스템입니다.</p>
+                </div>
+            </section>
+
+        </main>
+    </div>
+
+    <!-- 로그인 팝업 모달 -->
+    <div id="loginModal" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden justify-center items-center">
+        <div class="bg-white p-8 rounded-xl shadow-lg w-80 text-center">
+            <h3 class="text-xl font-bold mb-6 text-gray-800">로그인 / 회원가입</h3>
+            <input type="email" id="userId" placeholder="이메일 (test@example.com)"
+                class="w-full px-4 py-2 mb-3 border border-gray-300 rounded-md outline-none focus:border-blue-500">
+            <input type="password" id="userPw" placeholder="비밀번호"
+                class="w-full px-4 py-2 mb-6 border border-gray-300 rounded-md outline-none focus:border-blue-500">
+
+            <!-- 회원가입 버튼 추가 -->
+            <div class="flex gap-2 justify-center">
+                <button onclick="closeLoginModal()"
+                    class="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors">취소</button>
+                <button onclick="attemptSignUp()"
+                    class="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 transition-colors">회원가입</button>
+                <button onclick="attemptLogin()"
+                    class="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition-colors">접속</button>
+            </div>
         </div>
     </div>
-</div>
 
-<script>
-/* =========================================
-     1. 다국어 (i18n) 번역 사전 객체 (기획에 맞게 완전 수정)
-     ========================================= */
-  const translations = {
-      ko: {
-          menu_monitoring: "실시간 모니터링", menu_dashboard: "대시보드", menu_settings: "설정", menu_info: "정보",
-          title_monitoring: "실시간 모니터링", btn_login: "로그인",
-          status_waiting: "대기 중", cam_wait: "데이터 수신 대기 중", cam_wait_sub: "서버로부터 데이터를 기다립니다...",
-          live_detecting: "🔴 웹캠 모니터링 (서버 전송용 아님)", conn_title: "🪑 실시간 데이터 연동 현황", server_wait: "서버 연결 대기 중...",
-          current_posture: "현재 종합 상태", data_wait: "분석 대기 중", analyzing: "데이터를 수집하고 있습니다.",
-          metric_blink: "분당 눈 깜빡임 (Rate)", metric_dist: "화면과의 거리 (Dist)", metric_static: "정적 유지 시간 (Hold)", metric_balance: "좌우 하중 밸런스",
-          recent_history: "최근 점수 이력 (Score)", daily_report: "일간 통계 리포트",
-          excellent: "훌륭합니다!", excellent_desc: "오늘 하루 종일 좋은 자세 패턴을 유지하셨네요.",
-          pie_title: "오늘 하루 상태 비율", timeline_title: "시간대별 상태 이력",
-          lang_setting: "언어 설정",
-          version: "버전: 1.0.0", info_desc: "스마트 피로도 자각 솔루션 시스템입니다.", server_connected: "서버 연결됨", server_disconnected: "서버 연결 끊김",
-          cam_setting_title: "카메라 설정", cam_setting_desc: "카메라 권한을 허용해주세요.", btn_cam_setting: "카메라 설정 안내",
-          cam_setting_fallback: "수동으로 브라우저 주소창 좌측의 아이콘을 눌러 권한을 허용해주세요.", select_camera: "사용할 카메라", loading_cameras: "카메라 목록을 불러오는 중...",
-          
-          bal_LEFT: "왼쪽 쏠림", bal_CENTER: "균형 (정상)", bal_RIGHT: "오른쪽 쏠림"
-      },
-      en: {
-          menu_monitoring: "Live Monitoring", menu_dashboard: "Dashboard", menu_settings: "Settings", menu_info: "Info",
-          title_monitoring: "Live Monitoring", btn_login: "Login",
-          status_waiting: "Waiting", cam_wait: "Waiting for Data", cam_wait_sub: "Waiting for server data...",
-          live_detecting: "🔴 Webcam View", conn_title: "🪑 Server Connection Status", server_wait: "Waiting for server...",
-          current_posture: "Overall Status", data_wait: "Waiting...", analyzing: "Collecting data.",
-          metric_blink: "Blink Rate (per min)", metric_dist: "Screen Distance (cm)", metric_static: "Static Hold (sec)", metric_balance: "L/R Balance",
-          recent_history: "Recent Score History", daily_report: "Daily Report",
-          excellent: "Excellent!", excellent_desc: "You maintained a good pattern today.",
-          pie_title: "Daily Status Ratio", timeline_title: "Timeline History",
-          lang_setting: "Language Settings",
-          version: "Version: 1.0.0", info_desc: "Smart fatigue awareness solution.", server_connected: "Server Connected", server_disconnected: "Disconnected",
-          cam_setting_title: "Camera Settings", cam_setting_desc: "Please allow camera permissions.", btn_cam_setting: "Permission Guide",
-          cam_setting_fallback: "Please allow permissions manually from your browser.", select_camera: "Select Camera", loading_cameras: "Loading...",
-          
-          bal_LEFT: "Leaning Left", bal_CENTER: "Balanced", bal_RIGHT: "Leaning Right"
-      }
-  };
+    <script>
+        /* =========================================
+           1. 다국어 및 뷰 로직 
+           ========================================= */
+        const translations = {
+            ko: {
+                menu_monitoring: "실시간 모니터링", menu_dashboard: "대시보드", menu_settings: "설정", menu_info: "정보",
+                title_monitoring: "실시간 모니터링", btn_login: "로그인",
+                status_waiting: "대기 중", cam_wait: "데이터 수신 대기 중", cam_wait_sub: "서버로부터 데이터를 기다립니다...",
+                live_detecting: "🔴 웹캠 모니터링 (서버 전송용 아님)", conn_title: "🪑 실시간 데이터 연동 현황", server_wait: "서버 연결 대기 중...",
+                current_posture: "현재 종합 상태", data_wait: "분석 대기 중", analyzing: "데이터를 수집하고 있습니다.",
+                metric_blink: "분당 눈 깜빡임 (Rate)", metric_dist: "화면과의 거리 (Dist)", metric_static: "정적 유지 시간 (Hold)", metric_balance: "좌우 하중 밸런스",
+                recent_history: "최근 점수 이력 (Score)", daily_report: "일간 통계 리포트",
+                excellent: "훌륭합니다!", excellent_desc: "오늘 하루 종일 좋은 자세 패턴을 유지하셨네요.",
+                pie_title: "오늘 하루 상태 비율", timeline_title: "시간대별 상태 이력",
+                lang_setting: "언어 설정",
+                version: "버전: 1.0.0", info_desc: "스마트 피로도 자각 솔루션 시스템입니다.", server_connected: "서버 연결됨", server_disconnected: "서버 연결 끊김",
+                cam_setting_title: "카메라 설정", cam_setting_desc: "카메라 권한을 허용해주세요.", btn_cam_setting: "카메라 설정 안내",
+                cam_setting_fallback: "수동으로 브라우저 주소창 좌측의 아이콘을 눌러 권한을 허용해주세요.", select_camera: "사용할 카메라", loading_cameras: "카메라 목록을 불러오는 중...",
+                bal_LEFT: "왼쪽 쏠림", bal_CENTER: "균형 (정상)", bal_RIGHT: "오른쪽 쏠림"
+            },
+            en: {
+                menu_monitoring: "Live Monitoring", menu_dashboard: "Dashboard", menu_settings: "Settings", menu_info: "Info",
+                title_monitoring: "Live Monitoring", btn_login: "Login",
+                status_waiting: "Waiting", cam_wait: "Waiting for Data", cam_wait_sub: "Waiting for server data...",
+                live_detecting: "🔴 Webcam View", conn_title: "🪑 Server Connection Status", server_wait: "Waiting for server...",
+                current_posture: "Overall Status", data_wait: "Waiting...", analyzing: "Collecting data.",
+                metric_blink: "Blink Rate (per min)", metric_dist: "Screen Distance (cm)", metric_static: "Static Hold (sec)", metric_balance: "L/R Balance",
+                recent_history: "Recent Score History", daily_report: "Daily Report",
+                excellent: "Excellent!", excellent_desc: "You maintained a good pattern today.",
+                pie_title: "Daily Status Ratio", timeline_title: "Timeline History",
+                lang_setting: "Language Settings",
+                version: "Version: 1.0.0", info_desc: "Smart fatigue awareness solution.", server_connected: "Server Connected", server_disconnected: "Disconnected",
+                cam_setting_title: "Camera Settings", cam_setting_desc: "Please allow camera permissions.", btn_cam_setting: "Permission Guide",
+                cam_setting_fallback: "Please allow permissions manually from your browser.", select_camera: "Select Camera", loading_cameras: "Loading...",
+                bal_LEFT: "Leaning Left", bal_CENTER: "Balanced", bal_RIGHT: "Leaning Right"
+            }
+        };
 
-  let currentLang = 'ko';
-  let lastServerStatus = false; 
-  let lastPostureData = null; 
-  let currentStream = null;
+        let currentLang = 'ko';
+        let lastServerStatus = false;
+        let lastPostureData = null;
+        let currentStream = null;
+        let isMeasuring = false; // 신규: 측정 상태를 관리하는 변수
 
-  function changeLanguage(lang) {
-      currentLang = lang;
-      document.querySelectorAll('[data-i18n]').forEach(el => {
-          const key = el.getAttribute('data-i18n');
-          if (translations[lang][key]) {
-              if (el.tagName === 'OPTION' && el.value === "") el.text = translations[lang][key];
-              else el.innerText = translations[lang][key];
-          }
-      });
-      const connText = document.getElementById('conn-text');
-      if (lastServerStatus) connText.innerText = translations[lang].server_connected;
-      else connText.innerText = translations[lang].server_disconnected;
+        function changeLanguage(lang) {
+            currentLang = lang;
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                if (translations[lang][key]) {
+                    if (el.tagName === 'OPTION' && el.value === "") el.text = translations[lang][key];
+                    else el.innerText = translations[lang][key];
+                }
+            });
+            const connText = document.getElementById('conn-text');
+            if (lastServerStatus) connText.innerText = translations[lang].server_connected;
+            else connText.innerText = translations[lang].server_disconnected;
 
-      if (lastPostureData) updateDashboardUI(lastPostureData);
-  }
-
-  function switchView(viewId, clickedMenu) {
-    document.querySelectorAll('.view-section').forEach(section => { section.classList.remove('active'); });
-    document.getElementById('view-' + viewId).classList.add('active');
-    document.querySelectorAll('.menu-item').forEach(menu => { menu.classList.remove('active'); });
-    clickedMenu.classList.add('active');
-  }
-
-  function openSystemSettings(type) {
-      if (type === 'camera') document.getElementById('cameraSettingsFallback').style.display = 'block';
-  }
-
-  /* =========================================
-     2. 웹캠 연동 로직 (화면 모니터링용 유지)
-     ========================================= */
-  const videoElement = document.getElementById('webcamPreview');
-  const cameraSelect = document.getElementById('cameraSelect');
-
-  async function initCamera() {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
-      try {
-          currentStream = await navigator.mediaDevices.getUserMedia({ video: true });
-          videoElement.srcObject = currentStream;
-          const devices = await navigator.mediaDevices.enumerateDevices();
-          const videoDevices = devices.filter(device => device.kind === 'videoinput');
-          cameraSelect.innerHTML = '';
-          if (videoDevices.length === 0) return;
-          videoDevices.forEach((device, index) => {
-              const option = document.createElement('option');
-              option.value = device.deviceId;
-              option.text = device.label || `Camera ${index + 1}`;
-              cameraSelect.appendChild(option);
-          });
-      } catch (err) { console.error("웹캠 초기화 에러:", err); }
-  }
-  async function changeCamera(deviceId) {
-      if (!deviceId) return;
-      if (currentStream) currentStream.getTracks().forEach(track => track.stop());
-      try {
-          currentStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } });
-          videoElement.srcObject = currentStream;
-      } catch (err) { console.error("카메라 변경 중 에러:", err); }
-  }
-  window.addEventListener('load', initCamera);
-
-  /* =========================================
-     3. 차트 초기화 (목 기울기 대신 점수로 변경)
-     ========================================= */
-  const ctxRealtime = document.getElementById('realtimeChart').getContext('2d');
-  const MAX_POINTS = 30;
-  const realtimeChart = new Chart(ctxRealtime, {
-      type: 'line',
-      data: {
-          labels: Array(MAX_POINTS).fill(''),
-          datasets: [{ label: 'Score', data: Array(MAX_POINTS).fill(100), borderColor: '#2ecc71', backgroundColor: 'rgba(46, 204, 113, 0.1)', borderWidth: 2, fill: true, tension: 0.4, pointRadius: 0 }]
-      },
-      options: { responsive: true, maintainAspectRatio: false, scales: { y: { min: 0, max: 100 }, x: { display: false } }, animation: { duration: 0 } }
-  });
-  function updateRealtimeChart(val) {
-      const data = realtimeChart.data.datasets[0].data;
-      data.push(val);
-      if (data.length > MAX_POINTS) data.shift();
-      realtimeChart.update();
-  }
-
-  // 파이 및 타임라인 차트 틀 유지
-  const ctxPie = document.getElementById('pieChart').getContext('2d');
-  new Chart(ctxPie, { type: 'doughnut', data: { labels: ['NORMAL', 'CAUTION', 'DANGER', 'ABSENT'], datasets: [{ data: [60, 20, 10, 10], backgroundColor: ['#2ecc71', '#f1c40f', '#e74c3c', '#95a5a6'], borderWidth: 0 }] }, options: { responsive: true, maintainAspectRatio: false } });
-  const ctxTimeline = document.getElementById('timelineChart').getContext('2d');
-  new Chart(ctxTimeline, { type: 'bar', data: { labels: ['09:00', '10:00', '11:00', '12:00', '13:00'], datasets: [{ label: 'Status', data: [1, 1, 1, 1, 1], backgroundColor: ['#2ecc71', '#f1c40f', '#e74c3c', '#95a5a6', '#2ecc71'], borderRadius: 4 }] }, options: { responsive: true, maintainAspectRatio: false, scales: { y: { display: false } } } });
-
-  /* =========================================
-     4. 백엔드 최신 계약(state.schema.json) 적용
-     ========================================= */
-  // 진단적 단어 제거 후 순수 객관적 상태로 매핑
-  const STATE_MAP = {
-      "NORMAL": { 
-          color: "var(--good-color)", bg: "rgba(46, 204, 113, 0.1)",
-          ko: { label: "정상", msg: "안정적인 상태입니다", sub: "좋은 수치를 유지하고 있습니다.", topDetail: "바른 습관을 계속 유지해주세요." },
-          en: { label: "Normal", msg: "Stable Status", sub: "Maintaining good metrics.", topDetail: "Keep up the good habits." }
-      },
-      "CAUTION": { 
-          color: "var(--warn-color)", bg: "rgba(241, 196, 15, 0.1)",
-          ko: { label: "주의", msg: "수치 변화 감지", sub: "눈 깜빡임이나 움직임에 신경써주세요.", topDetail: "수치가 떨어지고 있습니다. 스트레칭을 권장합니다." },
-          en: { label: "Caution", msg: "Changes Detected", sub: "Pay attention to blinks/movement.", topDetail: "Metrics dropping. Stretch recommended." }
-      },
-      "DANGER": { 
-          color: "var(--danger-color)", bg: "rgba(231, 76, 60, 0.1)",
-          ko: { label: "위험", msg: "피로 누적 발생", sub: "즉각적인 휴식이 필요합니다.", topDetail: "장시간 정적 상태입니다. 자리에서 일어나세요!" },
-          en: { label: "Danger", msg: "Fatigue Accumulated", sub: "Immediate rest required.", topDetail: "Static for too long. Please stand up!" }
-      },
-      "ABSENT": { 
-          color: "var(--neutral-color)", bg: "var(--card-bg)",
-          ko: { label: "자리 비움", msg: "사용자 없음", sub: "누적 지표 계산이 일시 정지됩니다.", topDetail: "자리에 돌아오면 분석을 재개합니다." },
-          en: { label: "Absent", msg: "User Absent", sub: "Metric tracking paused.", topDetail: "Analysis will resume upon return." }
-      },
-      "UNKNOWN": { 
-          color: "var(--text-main)", bg: "var(--card-bg)",
-          ko: { label: "대기", msg: "분석 중...", sub: "데이터를 기다리고 있습니다.", topDetail: "..." },
-          en: { label: "Waiting", msg: "Analyzing...", sub: "Waiting for data.", topDetail: "..." }
-      }
-  };
-
-  /* =========================================
-     5. Socket.IO 연동 및 데이터 바인딩
-     ========================================= */
-
-  const socket = io("http://172.17.77.26:5000");
-  
-  const connDot = document.getElementById('conn-dot');
-  const connText = document.getElementById('conn-text');
-  
-  socket.on("connect", () => {
-      lastServerStatus = true;
-      connDot.style.background = 'var(--good-color)';
-      connText.innerText = translations[currentLang].server_connected;
-      connText.style.color = 'var(--good-color)';
-  });
-  
-  socket.on("disconnect", () => {
-      lastServerStatus = false;
-      connDot.style.background = 'var(--danger-color)';
-      connText.innerText = translations[currentLang].server_disconnected;
-      connText.style.color = 'var(--danger-color)';
-  });
-
-  // state 이벤트 처리 (화면 렌더링)
-  socket.on("state", (data) => {
-      try {
-          lastPostureData = data; 
-          updateDashboardUI(data); 
-      } catch (e) {
-          console.error("데이터 파싱 에러:", e);
-      }
-  });
-
-  // feedback 이벤트 처리 (SweetAlert 팝업 렌더링)
-  socket.on("feedback", (data) => {
-      if (data.target === "web_popup" && data.action) {
-          const action = data.action;
-          let iconType = "info";
-          if (action.level === "caution") iconType = "warning";
-          if (action.level === "risk") iconType = "error";
-
-          Swal.fire({
-              icon: iconType,
-              title: action.title,
-              text: action.body,
-              confirmButtonText: '확인',
-              timer: action.level === "risk" ? undefined : 5000
-          });
-      }
-  });
-
-  function updateDashboardUI(data) {
-      // 1. 상태 텍스트 및 테마 매핑
-      const stateKey = data.state || "UNKNOWN";
-      const theme = STATE_MAP[stateKey] || STATE_MAP["UNKNOWN"];
-      const textInfo = theme[currentLang]; 
-
-      // 2. 점수 적용 (undefined 방어)
-      const currentScore = (data.score !== undefined) ? data.score : 0;
-      document.getElementById('currentScore').innerText = (data.score !== undefined) ? data.score : "-";
-      document.getElementById('scoreRing').style.borderColor = theme.color;
-      
-      // 3. 상단 텍스트 및 메인 카드 색상
-      document.getElementById('topStatusDot').style.backgroundColor = theme.color;
-      document.getElementById('topStatusLabel').innerText = textInfo.label;
-      document.getElementById('topStatusMessage').innerText = textInfo.msg;
-      document.getElementById('topDetailFeedback').innerText = textInfo.topDetail;
-
-      const postureMsg = document.getElementById('posture-msg');
-      postureMsg.innerText = textInfo.msg;
-      postureMsg.style.color = theme.color;
-      document.getElementById('posture-sub').innerText = textInfo.sub;
-      
-      const mainCard = document.getElementById('main-status-card');
-      mainCard.style.backgroundColor = theme.bg;
-      mainCard.style.borderColor = theme.color;
-
-      // 4. 4대 지표 수치 적용 (null 금지 규칙에 따른 undefined 체크)
-      const m = data.metrics || {};
-      document.getElementById('val-blink').innerText = (m.blink_rate !== undefined) ? m.blink_rate.toFixed(1) : "-";
-      document.getElementById('val-dist').innerText = (m.face_distance_cm !== undefined) ? m.face_distance_cm.toFixed(1) : "-";
-      document.getElementById('val-static').innerText = (m.static_hold_sec !== undefined) ? m.static_hold_sec : "-";
-      
-      let balText = "-";
-      if (m.balance !== undefined && translations[currentLang]['bal_' + m.balance]) {
-          balText = translations[currentLang]['bal_' + m.balance];
-      }
-      document.getElementById('val-balance').innerText = balText;
-
-      // 5. 차트 실시간 갱신 (목 기울기가 아닌 '점수'로 대체)
-      if (stateKey !== "ABSENT") {
-          updateRealtimeChart(currentScore);
-      }
-  }
-  /* =========================================
-   로그인 팝업 및 API 통신 뼈대 로직
-   ========================================= */
-function openLoginModal() {
-    document.getElementById('loginModal').classList.remove('hidden');
-    document.getElementById('loginModal').classList.add('flex');
-}
-
-function closeLoginModal() {
-    document.getElementById('loginModal').classList.remove('flex');
-    document.getElementById('loginModal').classList.add('hidden');
-    document.getElementById('userId').value = '';
-    document.getElementById('userPw').value = '';
-}
-
-async function attemptLogin() {
-    const id = document.getElementById('userId').value;
-    const pw = document.getElementById('userPw').value;
-
-    if (!id || !pw) {
-        alert("아이디와 비밀번호를 입력해주세요.");
-        return;
-    }
-
-    /* 
-    TODO: 백엔드 API가 완성되면 아래 주석을 풀고 사용하세요.
-    try {
-        // 1. 백엔드로 ID/PW 전송
-        const response = await fetch("http://172.17.77.26:5000/api/login", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ username: id, password: pw })
-        });
-        
-        const data = await response.json();
-        
-        // 2. 발급받은 토큰을 브라우저에 저장
-        if (data.token) {
-            localStorage.setItem("authToken", data.token);
-            alert("로그인 성공!");
-            
-            // 3. 소켓을 끊고 토큰과 함께 재연결
-            socket.disconnect();
-            socket.auth = { token: data.token };
-            socket.connect();
+            // 언어 변경 시, 현재 측정 중일 때만 화면 갱신
+            if (lastPostureData && isMeasuring) updateDashboardUI(lastPostureData);
         }
-    } catch (error) {
-        console.error("로그인 실패:", error);
-    }
-    */
 
-    // 임시 확인용 알림
-    alert(`로그인 준비 완료!\n입력한 ID: ${id}\n(백엔드 API가 완성되면 실제 서버로 전송됩니다.)`);
-    closeLoginModal();
-}
-</script>
+        function switchView(viewId, clickedMenu) {
+            document.querySelectorAll('.view-section').forEach(section => { section.classList.remove('active'); });
+            document.getElementById('view-' + viewId).classList.add('active');
+            document.querySelectorAll('.menu-item').forEach(menu => { menu.classList.remove('active'); });
+            clickedMenu.classList.add('active');
+        }
+
+        function openSystemSettings(type) {
+            if (type === 'camera') document.getElementById('cameraSettingsFallback').style.display = 'block';
+        }
+
+        /* =========================================
+           2. 웹캠 및 차트 로직
+           ========================================= */
+        const videoElement = document.getElementById('webcamPreview');
+        const cameraSelect = document.getElementById('cameraSelect');
+
+        async function initCamera() {
+            if (!videoElement) return; // 신규: 비디오 태그가 없으면 오류 방지용으로 실행 안 함
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+            try {
+                currentStream = await navigator.mediaDevices.getUserMedia({ video: true });
+                videoElement.srcObject = currentStream;
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                if (cameraSelect) {
+                    cameraSelect.innerHTML = '';
+                    if (videoDevices.length === 0) return;
+                    videoDevices.forEach((device, index) => {
+                        const option = document.createElement('option');
+                        option.value = device.deviceId;
+                        option.text = device.label || `Camera ${index + 1}`;
+                        cameraSelect.appendChild(option);
+                    });
+                }
+            } catch (err) { console.error("웹캠 초기화 에러:", err); }
+        }
+
+        async function changeCamera(deviceId) {
+            if (!videoElement || !deviceId) return;
+            if (currentStream) currentStream.getTracks().forEach(track => track.stop());
+            try {
+                currentStream = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: deviceId } } });
+                videoElement.srcObject = currentStream;
+            } catch (err) { console.error("카메라 변경 중 에러:", err); }
+        }
+        window.addEventListener('load', initCamera);
+
+        const ctxRealtime = document.getElementById('realtimeChart').getContext('2d');
+        const MAX_POINTS = 30;
+        const realtimeChart = new Chart(ctxRealtime, {
+            type: 'line',
+            data: {
+                labels: Array(MAX_POINTS).fill(''),
+                datasets: [{ label: 'Score', data: Array(MAX_POINTS).fill(100), borderColor: '#2ecc71', backgroundColor: 'rgba(46, 204, 113, 0.1)', borderWidth: 2, fill: true, tension: 0.4, pointRadius: 0 }]
+            },
+            options: { responsive: true, maintainAspectRatio: false, scales: { y: { min: 0, max: 100 }, x: { display: false } }, animation: { duration: 0 } }
+        });
+
+        function updateRealtimeChart(val) {
+            const data = realtimeChart.data.datasets[0].data;
+            data.push(val);
+            if (data.length > MAX_POINTS) data.shift();
+            realtimeChart.update();
+        }
+
+        const ctxPie = document.getElementById('pieChart').getContext('2d');
+        new Chart(ctxPie, { type: 'doughnut', data: { labels: ['NORMAL', 'CAUTION', 'DANGER', 'ABSENT'], datasets: [{ data: [60, 20, 10, 10], backgroundColor: ['#2ecc71', '#f1c40f', '#e74c3c', '#95a5a6'], borderWidth: 0 }] }, options: { responsive: true, maintainAspectRatio: false } });
+        const ctxTimeline = document.getElementById('timelineChart').getContext('2d');
+        new Chart(ctxTimeline, { type: 'bar', data: { labels: ['09:00', '10:00', '11:00', '12:00', '13:00'], datasets: [{ label: 'Status', data: [1, 1, 1, 1, 1], backgroundColor: ['#2ecc71', '#f1c40f', '#e74c3c', '#95a5a6', '#2ecc71'], borderRadius: 4 }] }, options: { responsive: true, maintainAspectRatio: false, scales: { y: { display: false } } } });
+
+        const STATE_MAP = {
+            "NORMAL": { color: "var(--good-color)", bg: "rgba(46, 204, 113, 0.1)", ko: { label: "정상", msg: "안정적인 상태입니다", sub: "좋은 수치를 유지하고 있습니다.", topDetail: "바른 습관을 계속 유지해주세요." }, en: { label: "Normal", msg: "Stable Status", sub: "Maintaining good metrics.", topDetail: "Keep up the good habits." } },
+            "CAUTION": { color: "var(--warn-color)", bg: "rgba(241, 196, 15, 0.1)", ko: { label: "주의", msg: "수치 변화 감지", sub: "눈 깜빡임이나 움직임에 신경써주세요.", topDetail: "수치가 떨어지고 있습니다. 스트레칭을 권장합니다." }, en: { label: "Caution", msg: "Changes Detected", sub: "Pay attention to blinks/movement.", topDetail: "Metrics dropping. Stretch recommended." } },
+            "DANGER": { color: "var(--danger-color)", bg: "rgba(231, 76, 60, 0.1)", ko: { label: "위험", msg: "피로 누적 발생", sub: "즉각적인 휴식이 필요합니다.", topDetail: "장시간 정적 상태입니다. 자리에서 일어나세요!" }, en: { label: "Danger", msg: "Fatigue Accumulated", sub: "Immediate rest required.", topDetail: "Static for too long. Please stand up!" } },
+            "ABSENT": { color: "var(--neutral-color)", bg: "var(--card-bg)", ko: { label: "자리 비움", msg: "사용자 없음", sub: "누적 지표 계산이 일시 정지됩니다.", topDetail: "자리에 돌아오면 분석을 재개합니다." }, en: { label: "Absent", msg: "User Absent", sub: "Metric tracking paused.", topDetail: "Analysis will resume upon return." } },
+            "UNKNOWN": { color: "var(--text-main)", bg: "var(--card-bg)", ko: { label: "대기", msg: "분석 중...", sub: "데이터를 기다리고 있습니다.", topDetail: "..." }, en: { label: "Waiting", msg: "Analyzing...", sub: "Waiting for data.", topDetail: "..." } }
+        };
+
+        /* =========================================
+           3. Socket.IO 연동 
+           ========================================= */
+        const socket = io("http://172.17.77.26:5000");
+
+        const connDot = document.getElementById('conn-dot');
+        const connText = document.getElementById('conn-text');
+
+        socket.on("connect", () => {
+            lastServerStatus = true;
+            connDot.style.background = 'var(--good-color)';
+            connText.innerText = translations[currentLang].server_connected;
+            connText.style.color = 'var(--good-color)';
+        });
+
+        socket.on("disconnect", () => {
+            lastServerStatus = false;
+            connDot.style.background = 'var(--danger-color)';
+            connText.innerText = translations[currentLang].server_disconnected;
+            connText.style.color = 'var(--danger-color)';
+        });
+
+        socket.on("state", (data) => {
+            try {
+                lastPostureData = data;
+                updateDashboardUI(data);
+            } catch (e) {
+                console.error("데이터 파싱 에러:", e);
+            }
+        });
+
+        socket.on("feedback", (data) => {
+            // 신규: 측정 중일 때만 팝업 알림 작동
+            if (!isMeasuring) return;
+
+            if (data.target === "web_popup" && data.action) {
+                const action = data.action;
+                let iconType = "info";
+                if (action.level === "caution") iconType = "warning";
+                if (action.level === "risk") iconType = "error";
+
+                Swal.fire({
+                    icon: iconType,
+                    title: action.title,
+                    text: action.body,
+                    confirmButtonText: '확인',
+                    timer: action.level === "risk" ? undefined : 5000
+                });
+            }
+        });
+
+        function updateDashboardUI(data) {
+            // 🚨 신규: 측정 중이 아닐 때는 데이터 업데이트 무시
+            if (!isMeasuring) return;
+
+            const stateKey = data.state || "UNKNOWN";
+            const theme = STATE_MAP[stateKey] || STATE_MAP["UNKNOWN"];
+            const textInfo = theme[currentLang];
+
+            const currentScore = (data.score !== undefined) ? data.score : 0;
+            document.getElementById('currentScore').innerText = (data.score !== undefined) ? data.score : "-";
+            document.getElementById('scoreRing').style.borderColor = theme.color;
+
+            document.getElementById('topStatusDot').style.backgroundColor = theme.color;
+            document.getElementById('topStatusLabel').innerText = textInfo.label;
+            document.getElementById('topStatusMessage').innerText = textInfo.msg;
+            document.getElementById('topDetailFeedback').innerText = textInfo.topDetail;
+
+            const postureMsg = document.getElementById('posture-msg');
+            postureMsg.innerText = textInfo.msg;
+            postureMsg.style.color = theme.color;
+            document.getElementById('posture-sub').innerText = textInfo.sub;
+
+            const mainCard = document.getElementById('main-status-card');
+            mainCard.style.backgroundColor = theme.bg;
+            mainCard.style.borderColor = theme.color;
+
+            const m = data.metrics || {};
+            document.getElementById('val-blink').innerText = (m.blink_rate !== undefined) ? m.blink_rate.toFixed(1) : "-";
+            document.getElementById('val-dist').innerText = (m.face_distance_cm !== undefined) ? m.face_distance_cm.toFixed(1) : "-";
+            document.getElementById('val-static').innerText = (m.static_hold_sec !== undefined) ? m.static_hold_sec : "-";
+
+            let balText = "-";
+            if (m.balance !== undefined && translations[currentLang]['bal_' + m.balance]) {
+                balText = translations[currentLang]['bal_' + m.balance];
+            }
+            document.getElementById('val-balance').innerText = balText;
+
+            if (stateKey !== "ABSENT") {
+                updateRealtimeChart(currentScore);
+            }
+        }
+
+        /* =========================================
+           4. 실시간 측정 제어 로직 (시작/중지)
+           ========================================= */
+        function startMeasurement() {
+            isMeasuring = true; // 데이터 수신 허용
+
+            // 버튼 상태 UI 변경
+            document.getElementById('btn-start').disabled = true;
+            document.getElementById('btn-start').classList.add('opacity-50', 'cursor-not-allowed');
+            document.getElementById('btn-stop').disabled = false;
+            document.getElementById('btn-stop').classList.remove('opacity-50', 'cursor-not-allowed');
+
+            // 텍스트 및 상태등 변경
+            const statusText = document.getElementById('measure-status-text');
+            statusText.innerText = "현재 상태: 측정 중";
+            statusText.classList.remove('text-gray-500', 'text-red-500');
+            statusText.classList.add('text-green-600');
+            document.getElementById('measure-status-dot').style.backgroundColor = "#2ecc71";
+
+            Swal.fire({
+                icon: 'success',
+                title: '측정 시작',
+                text: '실시간 데이터 분석을 시작합니다.',
+                timer: 1500,
+                showConfirmButton: false
+            });
+        }
+
+        function stopMeasurement() {
+            isMeasuring = false; // 데이터 수신 차단
+
+            // 버튼 상태 UI 변경
+            document.getElementById('btn-stop').disabled = true;
+            document.getElementById('btn-stop').classList.add('opacity-50', 'cursor-not-allowed');
+            document.getElementById('btn-start').disabled = false;
+            document.getElementById('btn-start').classList.remove('opacity-50', 'cursor-not-allowed');
+
+            // 텍스트 및 상태등 변경
+            const statusText = document.getElementById('measure-status-text');
+            statusText.innerText = "현재 상태: 중지됨";
+            statusText.classList.remove('text-green-600', 'text-gray-500');
+            statusText.classList.add('text-red-500');
+            document.getElementById('measure-status-dot').style.backgroundColor = "#e74c3c";
+
+            // 대시보드 화면 초기화
+            resetDashboardUI();
+
+            Swal.fire({
+                icon: 'info',
+                title: '측정 중지',
+                text: '데이터 수집 및 표시를 중단했습니다.',
+                timer: 1500,
+                showConfirmButton: false
+            });
+        }
+
+        function resetDashboardUI() {
+            document.getElementById('currentScore').innerText = "-";
+            document.getElementById('val-blink').innerText = "-";
+            document.getElementById('val-dist').innerText = "-";
+            document.getElementById('val-static').innerText = "-";
+            document.getElementById('val-balance').innerText = "-";
+
+            document.getElementById('posture-msg').innerText = "측정 중지됨";
+            document.getElementById('posture-msg').style.color = "var(--neutral-color)";
+            document.getElementById('posture-sub').innerText = "시작 버튼을 눌러 측정을 재개하세요.";
+
+            document.getElementById('main-status-card').style.backgroundColor = "var(--card-bg)";
+            document.getElementById('main-status-card').style.borderColor = "transparent";
+
+            document.getElementById('topStatusLabel').innerText = "중지";
+            document.getElementById('topStatusMessage').innerText = "측정이 중지되었습니다";
+            document.getElementById('topDetailFeedback').innerText = "우측의 측정 시작 버튼을 눌러주세요.";
+            document.getElementById('topStatusDot').style.backgroundColor = "var(--neutral-color)";
+            document.getElementById('scoreRing').style.borderColor = "var(--neutral-color)";
+        }
+
+        /* =========================================
+           5. 로그인 모달 관련 로직 
+           ========================================= */
+        function openLoginModal() {
+            document.getElementById('loginModal').classList.remove('hidden');
+            document.getElementById('loginModal').classList.add('flex');
+        }
+
+        function closeLoginModal() {
+            document.getElementById('loginModal').classList.remove('flex');
+            document.getElementById('loginModal').classList.add('hidden');
+            document.getElementById('userId').value = '';
+            document.getElementById('userPw').value = '';
+        }
+    </script>
+
+    <!-- =========================================
+     6. Supabase 연동 및 회원가입/로그인 스크립트 
+     ========================================= -->
+    <script type="module">
+        import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm'
+
+        // 발급받은 키 2가지 입력
+        const supabaseUrl = 'https://dzkionspeweesqwlrxex.supabase.co';
+        const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR6a2lvbnNwZXdlZXNxd2xyeGV4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzNzkzNjAsImV4cCI6MjA5NDk1NTM2MH0.VoYhfIg7h1PGpm72NYPTe3sXGqk0pt54k_UCsNcQxVI';
+        const supabase = createClient(supabaseUrl, supabaseKey);
+
+        // [회원가입 기능]
+        window.attemptSignUp = async () => {
+            const email = document.getElementById('userId').value;
+            const password = document.getElementById('userPw').value;
+
+            if (!email || !password) {
+                alert("회원가입할 이메일과 비밀번호를 입력해주세요.");
+                return;
+            }
+
+            // Supabase 회원가입 요청
+            const { data, error } = await supabase.auth.signUp({
+                email: email,
+                password: password
+            });
+
+            if (error) {
+                alert("회원가입 실패: " + error.message);
+                return;
+            }
+
+            alert("회원가입 성공! 이제 접속(로그인) 버튼을 눌러주세요.");
+        };
+
+        // [로그인 기능]
+        window.attemptLogin = async () => {
+            const email = document.getElementById('userId').value;
+            const password = document.getElementById('userPw').value;
+
+            if (!email || !password) {
+                alert("이메일과 비밀번호를 입력해주세요.");
+                return;
+            }
+
+            // Supabase 로그인 요청
+            const { data, error } = await supabase.auth.signInWithPassword({
+                email: email,
+                password: password
+            });
+
+            if (error) {
+                alert("로그인 실패: " + error.message);
+                return;
+            }
+
+            // 브라우저 로컬 스토리지에 토큰 보관
+            localStorage.setItem('access_token', data.session.access_token);
+
+            alert("로그인 성공! 시스템과 연동됩니다.");
+            closeLoginModal();
+
+            // 소켓 재연결
+            if (typeof socket !== 'undefined') {
+                socket.disconnect();
+                socket.auth = { token: data.session.access_token };
+                socket.connect();
+            }
+        };
+    </script>
 
 </body>
+
 </html>
