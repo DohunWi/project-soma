@@ -101,7 +101,7 @@
                 return;
             }
 
-            const apiUrl = `http://127.0.0.1:5000/api/measurement/${action}`;
+            const apiUrl = `http://127.0.0.1:5000/api/measurement/${action}`; // 시연 시에 반드시 ip 수정할 것
             try {
                 const response = await fetch(apiUrl, {
                     method: 'POST',
@@ -135,7 +135,7 @@
             }
 
             try {
-                const response = await fetch(`http://127.0.0.1:5000/api/report/weekly`, {
+                const response = await fetch(`http://127.0.0.1:5000/api/report/weekly`, { // 시연 시에 반드시 ip 수정할 것
                     method: 'GET',
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
