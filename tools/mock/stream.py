@@ -8,8 +8,15 @@ docs/contracts/sensor_data.schema.json 을 그대로 따릅니다.
 사용법:
     python tools/mock/stream.py                    # 서버로 전송 (기본)
     python tools/mock/stream.py --stdout           # 서버 없이 jsonl 출력
+    python tools/mock/stream.py --source chair     # Chair-only 경로
     python tools/mock/stream.py --scenario fatigue # 시나리오 선택
     python tools/mock/stream.py --speed 10         # 10배속 (긴 세션 빠르게)
+
+Chair-only 상태 예:
+    normal    → NORMAL
+    imbalance → CAUTION
+    static    → DANGER
+    absent    → ABSENT
 """
 import argparse
 import json
@@ -18,13 +25,17 @@ import random
 import sys
 import time
 
-SCENARIOS = ("normal", "fatigue", "imbalance", "absent")
+SCENARIOS = ("normal", "fatigue", "imbalance", "static", "absent")
+SOURCES = ("all", "chair", "vision")
 
 
 def chair_sample(t, elapsed, scenario):
     """압력 4채널 [전좌, 전우, 후좌, 후우] + 적외선 1채널."""
-    if scenario == "absent" and 60 < elapsed < 180:
+    if scenario == "absent" and elapsed > 60:
         return {"pressure": [2, 1, 3, 2], "ir": [-1]}
+
+    if scenario == "static":
+        return {"pressure": [850, 850, 850, 850], "ir": [250]}
 
     base = 850
     drift = min(elapsed / 1800, 1.0)          # 30분에 걸쳐 서서히 앞으로
@@ -79,6 +90,8 @@ def main():
     p.add_argument("--url", default="http://127.0.0.1:5000")
     p.add_argument("--stdout", action="store_true", help="서버 없이 jsonl 로 출력")
     p.add_argument("--scenario", choices=SCENARIOS, default="fatigue")
+    p.add_argument("--source", choices=SOURCES, default="all",
+                   help="chair-only 개발은 --source chair")
     p.add_argument("--speed", type=float, default=1.0, help="배속")
     p.add_argument("--hz", type=float, default=1.0, help="초당 샘플 수")
     p.add_argument("--user", default="mock_user")
@@ -103,8 +116,10 @@ def main():
     step = 1.0 / args.hz
     try:
         while True:
-            now = time.time()
-            for source in ("chair", "vision"):
+            # simulated t도 elapsed를 따라가야 --speed가 fusion 누적 시간에 반영됩니다.
+            now = start + elapsed
+            sources = ("chair", "vision") if args.source == "all" else (args.source,)
+            for source in sources:
                 ev = build(source, now, elapsed, args.scenario, args.user)
                 if emit:
                     emit(ev)
