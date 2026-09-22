@@ -3,12 +3,13 @@ server/db_writer.py
 ───────────────────
 DB 쓰기 전용 스레드.
 
-**실제 Supabase 스키마에 맞춰 씁니다.** 새 테이블을 만들지 않습니다 —
-DB 담당이 이미 sensor_logs / fatigue_logs / feedback_logs 로 나눠 놓았습니다.
+**실제 Supabase 스키마에 맞춰 씁니다.** migration은 실행하지 않습니다.
+기존 legacy 경로와 신규 state_logs snapshot 경로를 함께 지원합니다.
 
     sensor_logs    원시 센서 + 간이 판정 (balance_status, posture_status)
     fatigue_logs   상태와 점수 (status enum, fatigue_score)
     feedback_logs  개입 기록과 수용 여부 (method enum, is_break_taken)
+    state_logs     Fusion decision snapshot
 
 **이벤트 루프에서 DB 를 직접 만지지 않습니다.**
 psycopg2 는 C 확장이라 eventlet 이 monkey_patch 하지 못합니다.
@@ -28,11 +29,14 @@ import logging
 import os
 import queue
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 log = logging.getLogger("db")
 
 _QUEUE_MAX = 2000
+_STATE_LOG_MAX_ATTEMPTS = 3
+_STATE_LOG_BACKOFF_BASE_SEC = 0.5
 KST = timezone(timedelta(hours=9))
 
 # 서버 판정 → DB enum. DB 가 정본입니다.
@@ -49,22 +53,50 @@ def kst_naive(epoch):
 
 
 class DBWriter:
-    def __init__(self, sensor_table=None):
+    def __init__(
+        self,
+        sensor_table=None,
+        *,
+        queue_max=_QUEUE_MAX,
+        state_log_max_attempts=_STATE_LOG_MAX_ATTEMPTS,
+        state_log_backoff_base_sec=_STATE_LOG_BACKOFF_BASE_SEC,
+        connection_factory=None,
+        sleep=time.sleep,
+    ):
         # 시연용 테이블을 따로 쓰고 싶으면 .env 의 DB_SENSOR_TABLE 로 바꿉니다
         self.sensor_table = sensor_table or os.getenv("DB_SENSOR_TABLE", "sensor_logs")
-        self.q: "queue.Queue" = queue.Queue(maxsize=_QUEUE_MAX)
+        self.q: "queue.Queue" = queue.Queue(maxsize=queue_max)
+        self.state_log_max_attempts = state_log_max_attempts
+        self.state_log_backoff_base_sec = state_log_backoff_base_sec
+        self._connection_factory = connection_factory
+        self._sleep = sleep
         self.dropped = 0
         self.written = 0
+        self.failed = 0
         self._stop = threading.Event()
         self._conn = None
         self._t = threading.Thread(target=self._run, name="db-writer", daemon=True)
+        self._started = False
+
+    @staticmethod
+    def is_configured():
+        """Return whether the direct PostgreSQL credentials are complete."""
+        return all(os.getenv(key) for key in ("DB_HOST", "DB_USER", "DB_PASSWORD"))
 
     def start(self):
+        if self._started:
+            return
+        self._started = True
         self._t.start()
 
-    def stop(self):
+    def stop(self, timeout=1.0):
         self._stop.set()
-        self.q.put(None)
+        try:
+            self.q.put_nowait(None)
+        except queue.Full:
+            pass
+        if self._started:
+            self._t.join(timeout=timeout)
 
     # ── 호출부 (이벤트 루프) ─────────────────────────────────────────────
     def put_sample(self, payload, decision):
@@ -74,18 +106,28 @@ class DBWriter:
         self._put(("state", decision))
 
     def put_feedback(self, cmd, accepted=None):
-        self._put(("feedback", cmd, accepted))
+        return self._put(("feedback", cmd, accepted))
+
+    def put_state_log(self, row):
+        """Queue one immutable logical snapshot for state_logs."""
+        return self._put(("state_log", row))
 
     def _put(self, item):
+        if self._stop.is_set():
+            return False
         try:
             self.q.put_nowait(item)
+            return True
         except queue.Full:
             self.dropped += 1
             if self.dropped % 100 == 1:
                 log.warning("DB 큐 포화 — %d건 버림", self.dropped)
+            return False
 
     # ── 워커 스레드 ──────────────────────────────────────────────────────
     def _connect(self):
+        if self._connection_factory is not None:
+            return self._connection_factory()
         import psycopg2
         host = os.getenv("DB_HOST")
         if not host:
@@ -98,27 +140,53 @@ class DBWriter:
             sslmode=os.getenv("DB_SSLMODE", "require"), connect_timeout=8)
 
     def _run(self):
-        while not self._stop.is_set():
-            item = self.q.get()
-            if item is None:
+        while True:
+            if self._stop.is_set() and self.q.empty():
                 break
+            try:
+                item = self.q.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            try:
+                if item is None:
+                    break
+                self._process_item(item)
+            finally:
+                self.q.task_done()
+        self._close_connection()
+
+    def _process_item(self, item):
+        max_attempts = self.state_log_max_attempts if item[0] == "state_log" else 1
+        for attempt in range(max_attempts):
             try:
                 if self._conn is None or self._conn.closed:
                     self._conn = self._connect()
                 if self._conn is None:
-                    continue
+                    raise ConnectionError("DB persistence is not configured")
                 self._write(item)
                 self.written += 1
-            except Exception as e:                     # noqa: BLE001
-                # 조용히 삼키지 않습니다. 이게 안 보이면 적재 0건인 채로 시연이 끝납니다.
-                log.warning("DB 쓰기 실패 (%s): %s", item[0], e)
-                try:
-                    self._conn.close()
-                except Exception:                      # noqa: BLE001
-                    pass
-                self._conn = None
-        if self._conn:
+                return
+            except Exception as error:                 # noqa: BLE001
+                log.warning(
+                    "DB 쓰기 실패 (%s, attempt %d/%d): %s",
+                    item[0],
+                    attempt + 1,
+                    max_attempts,
+                    error,
+                )
+                self._close_connection()
+                if attempt + 1 < max_attempts:
+                    self._sleep(self.state_log_backoff_base_sec * (2 ** attempt))
+        self.failed += 1
+
+    def _close_connection(self):
+        if self._conn is None:
+            return
+        try:
             self._conn.close()
+        except Exception:                              # noqa: BLE001
+            pass
+        self._conn = None
 
     def _write(self, item):
         kind = item[0]
@@ -167,6 +235,28 @@ class DBWriter:
                    ("timestamp", method, is_break_taken)
                    VALUES (%s, %s::feedback_method, %s)''',
                 (kst_naive(cmd["t"]), method, accepted))
+
+        elif kind == "state_log":
+            _, row = item
+            cur.execute(
+                '''INSERT INTO state_logs
+                   (event_id, user_id, user_name, device_id, measured_at,
+                    trigger, state, score, confidence, reasons, balance,
+                    static_hold_sec, low_blink_sec, session_sec,
+                    chair_distance_mm, blink_rate, face_distance_cm)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                           %s, %s, %s, %s, %s, %s, %s)
+                   ON CONFLICT (event_id) DO NOTHING''',
+                (
+                    row["event_id"], row["user_id"], row["user_name"],
+                    row["device_id"], row["measured_at"], row["trigger"],
+                    row["state"], row["score"], row["confidence"],
+                    row["reasons"], row["balance"], row["static_hold_sec"],
+                    row["low_blink_sec"], row["session_sec"],
+                    row["chair_distance_mm"], row["blink_rate"],
+                    row["face_distance_cm"],
+                ),
+            )
 
         self._conn.commit()
         cur.close()

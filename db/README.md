@@ -7,7 +7,7 @@
 | 테이블 | 용도 | 쓰는 쪽 |
 |---|---|---|
 | `sensor_logs` | legacy 원시 센서 + 간이 판정 보존 | 기존 `server/db_writer` |
-| `state_logs` | Fusion decision snapshot | 후속 persistence 단계에서 연결 예정 |
+| `state_logs` | Fusion decision snapshot | `server/state_persistence` → `server/db_writer` |
 | `fatigue_logs` | 상태(`status` enum) + `fatigue_score` | `server/db_writer` |
 | `feedback_logs` | 개입 기록 + `is_break_taken` | `server/db_writer` |
 | `posture_stats_30min` | 30분 집계 | `db/report/generate.py --save` |
@@ -21,19 +21,28 @@
 `migrations/003_create_state_logs.sql`의 `state_logs`에 저장합니다. 두 테이블은
 별개이며 migration 003은 `sensor_logs`를 삭제하거나 변경하거나 이전하지 않습니다.
 
-## Fusion snapshot 저장 — 후속 구현 예정
+## Fusion snapshot 저장
 
 `state_logs`는 Fusion이 만든 `state` decision과 장기 분석에 필요한 최소 feature를
 저장하기 위한 테이블입니다. 원시 압력 sample을 매초 저장하는 용도가 아닙니다.
 
-저장 정책은 다음과 같이 확정했지만, 현재 단계에서는 schema와 profile 설정만 있고
-Backend의 persistence scheduler 및 DBWriter 연결은 아직 구현되지 않았습니다.
+Backend는 다음 정책으로 snapshot을 선택해 bounded queue의 DBWriter에 비동기로
+전달합니다. Socket.IO Front emit이 항상 persistence 판단과 enqueue보다 먼저입니다.
 
 - state 변경: Front에 먼저 emit한 뒤 즉시 비동기 저장
 - state 유지: Demo 5초 / Normal 30초마다 periodic snapshot
 - Vision 미연결: `blink_rate`, `face_distance_cm`은 `NULL`
 - Chair IR 미감지 `-1`: persistence 계층에서 `NULL`로 변환
 - DB 또는 인터넷 장애: Chair → Backend → Fusion → Front 경로를 중단하지 않음
+
+DBWriter queue는 최대 2000건이며 producer는 `put_nowait`만 사용합니다. queue가
+가득 차면 새 snapshot을 버리고 경고를 남기며 실시간 경로는 계속 동작합니다.
+`state_logs` 쓰기는 동일한 `event_id`로 총 3회 시도하고, 실패 사이에 0.5초와
+1.0초의 exponential backoff를 적용합니다. 프로세스 재시작을 견디는 로컬 spool은
+아직 없으므로 retry 한도 이후 snapshot은 유실될 수 있습니다.
+
+`DB_HOST`, `DB_USER`, `DB_PASSWORD` 중 하나라도 없으면 Backend는 persistence worker를
+시작하지 않습니다. 이 경우에도 Fusion과 Socket.IO 실시간 경로는 그대로 동작합니다.
 
 `event_id`는 Backend가 snapshot을 만들 때 발급하며, 재시도 시 같은 값을 사용해
 중복 INSERT를 막습니다. `user_id`는 현재 payload에 없으므로 nullable이며 임의 UUID를

@@ -172,9 +172,9 @@ NORMAL → CAUTION → DANGER        (+ ABSENT: 자리 비움)
 | `close_distance_sec` 근접 지속 | 10초 | — | 300초 | — |
 | `imbalance_sec` 좌우 편중 지속 | 10초 | — | 300초 | — |
 
-DB periodic snapshot 주기는 Demo 5초, Normal 30초입니다. 현재는 profile 설정만
-정의하며 실제 저장 연결은 후속 단계에서 구현합니다. 저장 기능은 실시간 상태 계산
-경로와 분리하며 DB 장애가 Fusion 또는 UI 전송을 막아서는 안 됩니다.
+DB periodic snapshot 주기는 Demo 5초, Normal 30초입니다. state 변경은 즉시,
+동일 state는 이 주기로 bounded queue의 DBWriter에 비동기 저장합니다. 저장 기능은
+실시간 상태 계산 경로와 분리하며 DB 장애가 Fusion 또는 UI 전송을 막아서는 안 됩니다.
 
 **Demo 값은 기능 시연을 위해 시간축만 축소한 설정입니다. 생리학적·의학적 기준이나
 실사용 권고 시간으로 해석하거나 표현하지 않습니다.** Normal 값도 실측 데이터로

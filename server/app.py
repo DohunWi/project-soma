@@ -25,6 +25,8 @@ if str(ROOT) not in sys.path:
 
 from fusion.state import FusionState, step  # noqa: E402
 from server.config import DEMO_PROFILE, RuntimeProfile, load_runtime_profile  # noqa: E402
+from server.db_writer import DBWriter  # noqa: E402
+from server.state_persistence import StatePersistence  # noqa: E402
 
 try:
     from dotenv import load_dotenv
@@ -37,6 +39,7 @@ log = logging.getLogger("soma.server")
 
 SENSOR_SCHEMA_PATH = ROOT / "docs" / "contracts" / "sensor_data.schema.json"
 STATE_SCHEMA_PATH = ROOT / "docs" / "contracts" / "state.schema.json"
+_AUTO_PERSISTENCE = object()
 
 
 def _load_validator(path):
@@ -133,7 +136,12 @@ def _get_supabase_client():
         return None
 
 
-def create_app(*, testing=False, runtime_profile: RuntimeProfile | None = None):
+def create_app(
+    *,
+    testing=False,
+    runtime_profile: RuntimeProfile | None = None,
+    state_persistence=_AUTO_PERSISTENCE,
+):
     profile = runtime_profile or load_runtime_profile()
     app = Flask(__name__)
     app.config["TESTING"] = testing
@@ -146,8 +154,24 @@ def create_app(*, testing=False, runtime_profile: RuntimeProfile | None = None):
         engineio_logger=False,
     )
     pipeline = ChairPipeline(profile.fusion)
+    db_writer = None
+    persistence = state_persistence
+    if persistence is _AUTO_PERSISTENCE:
+        persistence = None
+        if not testing and DBWriter.is_configured():
+            db_writer = DBWriter()
+            db_writer.start()
+            persistence = StatePersistence(
+                db_writer,
+                profile.storage.db_snapshot_interval_sec,
+            )
+        elif not testing:
+            log.info("DB credentials가 없어 state_logs persistence를 비활성화합니다")
+
     app.extensions["chair_pipeline"] = pipeline
     app.extensions["runtime_profile"] = profile
+    app.extensions["state_persistence"] = persistence
+    app.extensions["db_writer"] = db_writer
 
     def token_required(function):
         @wraps(function)
@@ -219,6 +243,11 @@ def create_app(*, testing=False, runtime_profile: RuntimeProfile | None = None):
 
         # DB보다 Front가 먼저입니다. 이 경로에는 Supabase 호출이 없습니다.
         socketio.emit("state", decision)
+        if persistence is not None:
+            try:
+                persistence.handle(payload, decision)
+            except Exception as error:                 # noqa: BLE001
+                log.warning("state_logs enqueue 실패: %s", error)
 
     return app, socketio
 
@@ -230,4 +259,9 @@ if __name__ == "__main__":
     host = os.getenv("SERVER_HOST", "0.0.0.0")
     port = int(os.getenv("SERVER_PORT", "5000"))
     print(f"Project Soma backend: http://{host}:{port}")
-    socketio.run(app, host=host, port=port, allow_unsafe_werkzeug=True)
+    try:
+        socketio.run(app, host=host, port=port, allow_unsafe_werkzeug=True)
+    finally:
+        writer = app.extensions.get("db_writer")
+        if writer is not None:
+            writer.stop()

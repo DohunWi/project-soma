@@ -79,12 +79,66 @@ def test_required_field_must_be_present():
 def test_socketio_emits_state_without_supabase(monkeypatch):
     monkeypatch.delenv("SUPABASE_URL", raising=False)
     monkeypatch.delenv("SUPABASE_KEY", raising=False)
+    monkeypatch.delenv("DB_HOST", raising=False)
+    monkeypatch.delenv("DB_USER", raising=False)
+    monkeypatch.delenv("DB_PASSWORD", raising=False)
     app, socketio = create_app(testing=True)
 
     states = emitted_states(socketio, app, chair_payload())
 
     assert len(states) == 1
     assert states[0]["state"] == "NORMAL"
+    assert app.extensions["state_persistence"] is None
+
+
+def test_state_emit_happens_before_persistence_enqueue():
+    order = []
+
+    class RecordingPersistence:
+        def handle(self, _payload, _decision):
+            order.append("persistence")
+
+    app, socketio = create_app(
+        testing=True,
+        state_persistence=RecordingPersistence(),
+    )
+    original_emit = socketio.emit
+
+    def recording_emit(*args, **kwargs):
+        order.append("emit")
+        return original_emit(*args, **kwargs)
+
+    socketio.emit = recording_emit
+    states = emitted_states(socketio, app, chair_payload())
+
+    assert states[0]["state"] == "NORMAL"
+    assert order == ["emit", "persistence"]
+
+
+def test_persistence_failure_does_not_prevent_state_emit():
+    class FailingPersistence:
+        def handle(self, _payload, _decision):
+            raise RuntimeError("database unavailable")
+
+    app, socketio = create_app(
+        testing=True,
+        state_persistence=FailingPersistence(),
+    )
+
+    states = emitted_states(socketio, app, chair_payload())
+
+    assert states[0]["state"] == "NORMAL"
+
+
+def test_missing_db_credentials_disable_persistence(monkeypatch):
+    monkeypatch.delenv("DB_HOST", raising=False)
+    monkeypatch.delenv("DB_USER", raising=False)
+    monkeypatch.delenv("DB_PASSWORD", raising=False)
+
+    app, _socketio = create_app(testing=False)
+
+    assert app.extensions["state_persistence"] is None
+    assert app.extensions["db_writer"] is None
 
 
 def test_chair_only_demo_reaches_caution_with_low_confidence():
