@@ -13,6 +13,7 @@ from server.app import (  # noqa: E402
     PayloadError,
     create_app,
 )
+from server.config import DEMO_PROFILE, NORMAL_PROFILE  # noqa: E402
 from tools.mock.stream import build, chair_sample  # noqa: E402
 
 
@@ -86,6 +87,19 @@ def test_socketio_emits_state_without_supabase(monkeypatch):
     assert states[0]["state"] == "NORMAL"
 
 
+def test_chair_only_demo_reaches_caution_with_low_confidence():
+    app, _socketio = create_app(testing=True, runtime_profile=DEMO_PROFILE)
+    pipeline = app.extensions["chair_pipeline"]
+
+    decision = None
+    for elapsed in range(11):
+        decision = pipeline.process(chair_payload(t=1000.0 + elapsed))
+
+    assert decision["state"] == "CAUTION"
+    assert decision["confidence"] == 0.45
+    assert STATE_VALIDATOR.is_valid(decision)
+
+
 def test_socketio_does_not_emit_state_for_invalid_payload():
     app, socketio = create_app(testing=True)
 
@@ -118,7 +132,7 @@ def test_absent_mock_remains_absent_after_sixty_seconds():
     ],
 )
 def test_accumulated_chair_state_can_be_emitted(pressure, seconds, expected):
-    app, socketio = create_app(testing=True)
+    app, socketio = create_app(testing=True, runtime_profile=NORMAL_PROFILE)
     pipeline = app.extensions["chair_pipeline"]
     payload = chair_payload(t=1000.0, pressure=pressure, user=expected)
 

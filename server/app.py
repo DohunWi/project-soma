@@ -24,6 +24,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from fusion.state import FusionState, step  # noqa: E402
+from server.config import DEMO_PROFILE, RuntimeProfile, load_runtime_profile  # noqa: E402
 
 try:
     from dotenv import load_dotenv
@@ -67,9 +68,10 @@ def _validation_message(validator, payload):
 class ChairPipeline:
     """사용자·장치별 FusionState를 메모리에 유지하는 Chair 처리 계층."""
 
-    def __init__(self):
+    def __init__(self, timing=DEMO_PROFILE.fusion):
         self._states = {}
         self._lock = threading.Lock()
+        self._timing = timing
 
     def process(self, payload):
         """유효한 Chair payload를 state decision으로 변환합니다.
@@ -93,7 +95,12 @@ class ChairPipeline:
 
         with self._lock:
             previous = self._states.get(key, FusionState())
-            current, decision = step(previous, sample, payload["t"])
+            current, decision = step(
+                previous,
+                sample,
+                payload["t"],
+                timing=self._timing,
+            )
             message = _validation_message(STATE_VALIDATOR, decision)
             if message:
                 raise PayloadError(f"state 계약 위반: {message}")
@@ -126,7 +133,8 @@ def _get_supabase_client():
         return None
 
 
-def create_app(*, testing=False):
+def create_app(*, testing=False, runtime_profile: RuntimeProfile | None = None):
+    profile = runtime_profile or load_runtime_profile()
     app = Flask(__name__)
     app.config["TESTING"] = testing
     CORS(app, origins=_cors_origins())
@@ -137,8 +145,9 @@ def create_app(*, testing=False):
         logger=False,
         engineio_logger=False,
     )
-    pipeline = ChairPipeline()
+    pipeline = ChairPipeline(profile.fusion)
     app.extensions["chair_pipeline"] = pipeline
+    app.extensions["runtime_profile"] = profile
 
     def token_required(function):
         @wraps(function)
