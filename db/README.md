@@ -6,7 +6,8 @@
 
 | 테이블 | 용도 | 쓰는 쪽 |
 |---|---|---|
-| `sensor_logs` | 원시 센서 + 간이 판정 | `server/db_writer` |
+| `sensor_logs` | legacy 원시 센서 + 간이 판정 보존 | 기존 `server/db_writer` |
+| `state_logs` | Fusion decision snapshot | `server/state_persistence` → `server/db_writer` |
 | `fatigue_logs` | 상태(`status` enum) + `fatigue_score` | `server/db_writer` |
 | `feedback_logs` | 개입 기록 + `is_break_taken` | `server/db_writer` |
 | `posture_stats_30min` | 30분 집계 | `db/report/generate.py --save` |
@@ -15,6 +16,42 @@
 
 `test_30m` 에 **28분 24초 / 327행** 의 실제 시연 데이터가 있습니다.
 회의 항목 2 의 입력이 이미 존재하므로 새로 수집할 필요가 없습니다.
+
+`sensor_logs`는 기존 데이터 보존용 legacy 테이블입니다. 신규 Fusion 결과는
+`migrations/003_create_state_logs.sql`의 `state_logs`에 저장합니다. 두 테이블은
+별개이며 migration 003은 `sensor_logs`를 삭제하거나 변경하거나 이전하지 않습니다.
+
+## Fusion snapshot 저장
+
+`state_logs`는 Fusion이 만든 `state` decision과 장기 분석에 필요한 최소 feature를
+저장하기 위한 테이블입니다. 원시 압력 sample을 매초 저장하는 용도가 아닙니다.
+
+Backend는 다음 정책으로 snapshot을 선택해 bounded queue의 DBWriter에 비동기로
+전달합니다. Socket.IO Front emit이 항상 persistence 판단과 enqueue보다 먼저입니다.
+
+- state 변경: Front에 먼저 emit한 뒤 즉시 비동기 저장
+- state 유지: Demo 5초 / Normal 30초마다 periodic snapshot
+- Vision 미연결: `blink_rate`, `face_distance_cm`은 `NULL`
+- Chair IR 미감지 `-1`: persistence 계층에서 `NULL`로 변환
+- DB 또는 인터넷 장애: ACTIVE인 Chair → Backend → Fusion → Front 경로를 중단하지 않음
+
+DBWriter queue는 최대 2000건이며 producer는 `put_nowait`만 사용합니다. queue가
+가득 차면 새 snapshot을 버리고 경고를 남기며 실시간 경로는 계속 동작합니다.
+`state_logs` 쓰기는 동일한 `event_id`로 총 3회 시도하고, 실패 사이에 0.5초와
+1.0초의 exponential backoff를 적용합니다. 프로세스 재시작을 견디는 로컬 spool은
+아직 없으므로 retry 한도 이후 snapshot은 유실될 수 있습니다.
+
+`DB_HOST`, `DB_USER`, `DB_PASSWORD` 중 하나라도 없으면 Backend는 persistence worker를
+시작하지 않습니다. 이 경우에도 Fusion과 Socket.IO 실시간 경로는 그대로 동작합니다.
+
+`event_id`는 Backend가 snapshot을 만들 때 발급하며, 재시도 시 같은 값을 사용해
+중복 INSERT를 막습니다. migration 004 이후 신규 ACTIVE measurement 행은 검증된
+Supabase access token의 `sub`를 `user_id`로, start 때 생성한 UUID를 `session_id`로
+함께 저장합니다. 기존 행 보존을 위해 두 컬럼의 `NULL` 조합은 허용합니다.
+`user_name`은 표시용이고 `device_id`는 단일 Chair metadata이며 소유권 기준이 아닙니다.
+
+Measurement가 OFF이면 Backend는 sensor 계약 검증까지만 수행하고 Fusion, Front emit,
+persistence를 실행하지 않습니다. 서버 재시작 후 모든 measurement는 OFF입니다.
 
 ## enum
 
@@ -34,6 +71,20 @@ report_period    DAILY | WEEKLY | SESSION
 **서버의 `DANGER` 는 DB enum 을 따른 것입니다.** 코드에서 `RISK` 라 쓰지 마세요.
 
 ## 시각 규약
+
+### state_logs
+
+`state_logs.measured_at`과 `state_logs.created_at`은 모두 `timestamptz`지만 의미가
+다릅니다.
+
+- `measured_at`: Fusion decision의 `t`를 변환한 실제 측정 시각
+- `created_at`: Supabase가 행을 INSERT한 시각, 기본값 `now()`
+
+최근 5분 조회와 장기 시계열은 반드시 `measured_at` 기준으로 정렬합니다. 네트워크
+장애 후 늦게 저장된 행은 `created_at`이 늦어져도 `measured_at`을 원래 측정 시각으로
+유지해야 합니다.
+
+### legacy 테이블
 
 `time` / `timestamp` 컬럼은 **`timestamp without time zone` + KST 로컬**입니다.
 UTC 로 넣으면 9시간 어긋납니다. `db_writer.kst_naive()` 를 쓰세요.
@@ -89,6 +140,12 @@ RLS 켜진 테이블은 정책이 0개라 anon 이 차단됩니다 — 우연히
 
 `migrations/002` 에 켜는 문장을 주석으로 뒀습니다.
 프론트가 supabase-js 로 직접 읽는 부분이 없는지 확인한 뒤 켜세요.
+
+`state_logs`는 migration 003에서 RLS만 활성화하고 policy는 만들지 않습니다. 현재
+정확한 Backend DB role과 인증 정책이 확정되지 않았기 때문에 `USING (true)` 또는
+`WITH CHECK (true)` 같은 전체 허용 policy를 추가하지 않습니다. 따라서 일반 role은
+policy가 마련될 때까지 차단됩니다. 실제 DBWriter를 연결하기 전에 Backend 전용 role의
+INSERT/SELECT 방식과 Supabase의 현재 table privilege를 함께 확인해야 합니다.
 
 ### 2. 압력 센서 동적 범위 — 하드웨어
 

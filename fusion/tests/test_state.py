@@ -2,20 +2,36 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from state import FusionState, step, LOW_BLINK_CAUTION, STATIC_CAUTION  # noqa: E402
+from fusion.config import DEMO_FUSION_TIMING, NORMAL_FUSION_TIMING  # noqa: E402
+from fusion.state import FusionState, step  # noqa: E402
 
 SEATED = [900, 700, 1000, 910]
 EMPTY  = [1, 1, 1, 1]
 
 
-def run(samples, t0=1000.0, dt=1.0):
+def run(samples, t0=1000.0, dt=1.0, timing=DEMO_FUSION_TIMING):
     st, d = FusionState(), None
     t = t0
     for s in samples:
-        st, d = step(st, s, t)
+        st, d = step(st, s, t, timing=timing)
         t += dt
     return st, d
+
+
+def run_elapsed(builder, elapsed, timing=DEMO_FUSION_TIMING, t0=1000.0):
+    """Feed one sample per second, including both endpoints."""
+    st, decision = FusionState(), None
+    for offset in range(int(elapsed) + 1):
+        st, decision = step(
+            st,
+            builder(offset),
+            t0 + offset,
+            timing=timing,
+        )
+    return st, decision
 
 
 def sample(pressure=None, blink_rate=15.0, dist=60.0, jitter=0):
@@ -24,6 +40,11 @@ def sample(pressure=None, blink_rate=15.0, dist=60.0, jitter=0):
         p = [v + jitter for v in p]
     return {"pressure": p, "blink_rate": blink_rate,
             "face_distance_cm": dist, "face_detected": True, "user_name": "t"}
+
+
+def moving_sample(offset, *, blink_rate=15.0, dist=60.0):
+    pressure = [850 + (100 if offset % 2 else 0)] * 4
+    return sample(pressure=pressure, blink_rate=blink_rate, dist=dist)
 
 
 def test_정상():
@@ -38,8 +59,11 @@ def test_자리비움():
 
 
 def test_저깜빡임이_주의를_만든다():
-    n = int(LOW_BLINK_CAUTION) + 5
-    _, d = run([sample(blink_rate=5.0) for _ in range(n)])
+    _, d = run_elapsed(
+        lambda offset: moving_sample(offset, blink_rate=5.0),
+        NORMAL_FUSION_TIMING.low_blink_caution_sec,
+        timing=NORMAL_FUSION_TIMING,
+    )
     assert d["state"] == "CAUTION"
     assert "low_blink" in d["reasons"]
 
@@ -104,6 +128,164 @@ def test_좌우편중_히스테리시스():
     assert st.balance == "LEFT"                                        # 아직 유지
     st, _ = step(st, sample(pressure=[900, 890, 900, 890]), 1006.0)   # 차이 20 < 30
     assert st.balance == "CENTER"
+
+
+@pytest.mark.parametrize(
+    ("elapsed", "expected"),
+    [(9, "NORMAL"), (10, "CAUTION"), (20, "DANGER")],
+)
+def test_demo_static_elapsed_boundaries(elapsed, expected):
+    _, decision = run_elapsed(
+        lambda _offset: sample(pressure=[850, 850, 850, 850]),
+        elapsed,
+    )
+    assert decision["state"] == expected
+
+
+@pytest.mark.parametrize(
+    ("elapsed", "expected"),
+    [(9, "NORMAL"), (10, "CAUTION")],
+)
+def test_demo_imbalance_elapsed_boundaries(elapsed, expected):
+    pressure = [1000, 700, 1000, 700]
+    _, decision = run_elapsed(lambda _offset: sample(pressure=pressure), elapsed)
+    assert decision["state"] == expected
+
+
+@pytest.mark.parametrize(
+    ("elapsed", "expected"),
+    [(1199, "NORMAL"), (1200, "CAUTION"), (2700, "DANGER")],
+)
+def test_normal_static_threshold_regression(elapsed, expected):
+    _, decision = run_elapsed(
+        lambda _offset: sample(pressure=[850, 850, 850, 850]),
+        elapsed,
+        timing=NORMAL_FUSION_TIMING,
+    )
+    assert decision["state"] == expected
+
+
+@pytest.mark.parametrize(
+    ("timing", "elapsed", "expected"),
+    [
+        (DEMO_FUSION_TIMING, 9, "NORMAL"),
+        (DEMO_FUSION_TIMING, 10, "CAUTION"),
+        (DEMO_FUSION_TIMING, 20, "DANGER"),
+        (NORMAL_FUSION_TIMING, 299, "NORMAL"),
+        (NORMAL_FUSION_TIMING, 300, "CAUTION"),
+        (NORMAL_FUSION_TIMING, 900, "DANGER"),
+    ],
+)
+def test_low_blink_profile_boundaries(timing, elapsed, expected):
+    _, decision = run_elapsed(
+        lambda offset: moving_sample(offset, blink_rate=5.0),
+        elapsed,
+        timing=timing,
+    )
+    assert decision["state"] == expected
+    if expected != "NORMAL":
+        assert "low_blink" in decision["reasons"]
+
+
+@pytest.mark.parametrize(
+    ("timing", "elapsed", "expected"),
+    [
+        (DEMO_FUSION_TIMING, 9, "NORMAL"),
+        (DEMO_FUSION_TIMING, 10, "CAUTION"),
+        (NORMAL_FUSION_TIMING, 299, "NORMAL"),
+        (NORMAL_FUSION_TIMING, 300, "CAUTION"),
+    ],
+)
+def test_close_distance_profile_boundaries(timing, elapsed, expected):
+    _, decision = run_elapsed(
+        lambda offset: moving_sample(offset, dist=40.0),
+        elapsed,
+        timing=timing,
+    )
+    assert decision["state"] == expected
+    if expected == "CAUTION":
+        assert "close_distance" in decision["reasons"]
+
+
+@pytest.mark.parametrize("timing", [DEMO_FUSION_TIMING, NORMAL_FUSION_TIMING])
+def test_absent_is_immediate_for_every_profile(timing):
+    _, decision = run_elapsed(
+        lambda _offset: sample(pressure=EMPTY),
+        0,
+        timing=timing,
+    )
+    assert decision["state"] == "ABSENT"
+
+
+@pytest.mark.parametrize("timing", [DEMO_FUSION_TIMING, NORMAL_FUSION_TIMING])
+def test_max_gap_accepts_five_seconds_but_not_more(timing):
+    st, _ = step(FusionState(), sample(), 1000.0, timing=timing)
+    st, _ = step(st, sample(), 1005.0, timing=timing)
+    assert st.static_hold_sec == 5.0
+
+    st, _ = step(st, sample(), 1010.001, timing=timing)
+    assert st.static_hold_sec == 5.0
+
+
+@pytest.mark.parametrize("timing", [DEMO_FUSION_TIMING, NORMAL_FUSION_TIMING])
+def test_balance_hysteresis_is_profile_independent(timing):
+    st, _ = step(
+        FusionState(),
+        sample(pressure=[1000, 700, 1000, 700]),
+        1000.0,
+        timing=timing,
+    )
+    st, _ = step(
+        st,
+        sample(pressure=[900, 860, 900, 860]),
+        1001.0,
+        timing=timing,
+    )
+    assert st.balance == "LEFT"
+
+    st, _ = step(
+        st,
+        sample(pressure=[900, 890, 900, 890]),
+        1002.0,
+        timing=timing,
+    )
+    assert st.balance == "CENTER"
+
+
+@pytest.mark.parametrize("timing", [DEMO_FUSION_TIMING, NORMAL_FUSION_TIMING])
+def test_vision_hysteresis_is_profile_independent(timing):
+    st, _ = step(
+        FusionState(),
+        moving_sample(0, blink_rate=5.0, dist=40.0),
+        1000.0,
+        timing=timing,
+    )
+    st, _ = step(
+        st,
+        moving_sample(1, blink_rate=5.0, dist=40.0),
+        1001.0,
+        timing=timing,
+    )
+    assert st.low_blink_sec == 1.0
+    assert st.close_dist_sec == 1.0
+
+    st, _ = step(
+        st,
+        moving_sample(2, blink_rate=9.5, dist=47.0),
+        1002.0,
+        timing=timing,
+    )
+    assert st.low_blink_sec == 1.0
+    assert st.close_dist_sec == 1.0
+
+    st, _ = step(
+        st,
+        moving_sample(3, blink_rate=11.0, dist=50.0),
+        1003.0,
+        timing=timing,
+    )
+    assert st.low_blink_sec == 0.0
+    assert st.close_dist_sec == 0.0
 
 
 def test_웹캠_값이_없으면_metrics_에서_키를_뺀다():

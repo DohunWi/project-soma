@@ -2,10 +2,11 @@
 -r ../requirements.txt
 
 flask>=3.0
-python-socketio>=5.11
-eventlet>=0.35
+flask-cors>=4.0
+flask-socketio>=5.3
 psycopg2-binary>=2.9
+pytest>=8.0
+supabase>=2.28,<3
 
-# 주의: psycopg2 는 C 확장이라 eventlet 이 monkey_patch 하지 못합니다.
-# DB 쓰기를 이벤트 루프에서 직접 하면 소켓 전체가 멈춥니다.
-# 큐 + 쓰기 전용 스레드로 분리하세요.
+# DB 쓰기는 실시간 Socket.IO 처리와 분리된 큐 + 전용 스레드에서 수행합니다.
+# Supabase SDK는 기존 DB API에서만 선택적으로 사용하며 실시간 경로의 의존성이 아닙니다.

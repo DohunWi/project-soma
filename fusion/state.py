@@ -19,6 +19,8 @@ fusion/state.py
 from dataclasses import dataclass, field, replace
 from typing import Optional
 
+from fusion.config import DEMO_FUSION_TIMING, FusionTiming
+
 # ── 임계값 ───────────────────────────────────────────────────────────────────
 # 전부 추정치입니다. 실측 데이터로 재조정하기 전까지 확정값으로 쓰지 마세요.
 
@@ -28,17 +30,10 @@ BALANCE_RELEASE   = 30     # 편중 해제 임계 (히스테리시스)
 
 BLINK_RATE_LOW    = 8.0    # 분당 깜빡임이 이 값 미만이면 저깜빡임
 BLINK_RATE_OK     = 11.0   # 회복 임계 (히스테리시스)
-LOW_BLINK_CAUTION = 300.0  # 저깜빡임 연속 초 → 주의
-LOW_BLINK_RISK    = 900.0  # → 위험
-
 DISTANCE_CLOSE_CM = 45.0   # 이보다 가까우면 근접
 DISTANCE_OK_CM    = 50.0   # 회복 임계
 
 STATIC_EPS        = 25     # 압력 변화량이 이 값 이하면 "안 움직임"
-STATIC_CAUTION    = 1200.0 # 정적 유지 초 → 주의
-STATIC_RISK       = 2700.0 # → 위험
-
-MAX_GAP_SEC       = 5.0    # 샘플 간격이 이보다 크면 절전·재시작으로 보고 리셋
 
 
 @dataclass(frozen=True)
@@ -81,7 +76,13 @@ def _activity(pressure, prev):
     return sum(abs(a - b) for a, b in zip(pressure, prev))
 
 
-def step(st: FusionState, s: dict, now: float):
+def step(
+    st: FusionState,
+    s: dict,
+    now: float,
+    *,
+    timing: FusionTiming = DEMO_FUSION_TIMING,
+):
     """
     Args:
         st:  직전 FusionState
@@ -94,7 +95,7 @@ def step(st: FusionState, s: dict, now: float):
         (새 FusionState, decision dict)
     """
     dt = 0.0 if st.last_t is None else now - st.last_t
-    if dt < 0 or dt > MAX_GAP_SEC:
+    if dt < 0 or dt > timing.max_gap_sec:
         dt = 0.0                     # 시계 점프는 누적하지 않습니다
 
     pressure = list(s.get("pressure") or [])
@@ -150,16 +151,28 @@ def step(st: FusionState, s: dict, now: float):
 
     # ── 상태 판정 ──────────────────────────────────────────────────────────
     reasons, level = [], 0
-    if low_blink >= LOW_BLINK_RISK:      reasons.append("low_blink");      level = max(level, 2)
-    elif low_blink >= LOW_BLINK_CAUTION: reasons.append("low_blink");      level = max(level, 1)
-    if static_hold >= STATIC_RISK:       reasons.append("static_hold");    level = max(level, 2)
-    elif static_hold >= STATIC_CAUTION:  reasons.append("static_hold");    level = max(level, 1)
-    if close_dist >= LOW_BLINK_CAUTION:  reasons.append("close_distance"); level = max(level, 1)
-    if imbalance_sec >= LOW_BLINK_CAUTION: reasons.append("imbalance");    level = max(level, 1)
+    if low_blink >= timing.low_blink_danger_sec:
+        reasons.append("low_blink")
+        level = max(level, 2)
+    elif low_blink >= timing.low_blink_caution_sec:
+        reasons.append("low_blink")
+        level = max(level, 1)
+    if static_hold >= timing.static_danger_sec:
+        reasons.append("static_hold")
+        level = max(level, 2)
+    elif static_hold >= timing.static_caution_sec:
+        reasons.append("static_hold")
+        level = max(level, 1)
+    if close_dist >= timing.close_distance_caution_sec:
+        reasons.append("close_distance")
+        level = max(level, 1)
+    if imbalance_sec >= timing.imbalance_caution_sec:
+        reasons.append("imbalance")
+        level = max(level, 1)
 
     state = ("NORMAL", "CAUTION", "DANGER")[level]
 
-    # 웹캠이 없으면 신뢰도를 낮춥니다. 서버는 confidence < 0.5 면 승격하지 않습니다.
+    # 웹캠이 없으면 신뢰도만 낮춥니다. 상태 판정과 서버 emit은 그대로 유지합니다.
     # 검출률(detect_rate)이 오면 그것을 씁니다. 프레임 하나가 우연히 잡힌 것과
     # 계속 안정적으로 잡히는 것을 불리언 하나로는 구분할 수 없었습니다.
     detect = s.get("detect_rate")

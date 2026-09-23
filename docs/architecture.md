@@ -153,6 +153,25 @@
 그래서 녹화 로그를 재생해 *"임계 A 면 하루 알림 N 회"* 같은 표를 뽑을 수 있고,
 그 표가 파라미터 결정의 근거이자 발표 자료가 됩니다.
 
+### 인증된 측정 세션
+
+현재 제품은 실제 Chair 1대를 전제로 하며 동시에 하나의 measurement session만
+`ACTIVE`가 될 수 있습니다. Backend는 Supabase access token을 검증한 뒤 JWT의
+`sub`를 `user_id`로 사용하고, start마다 별도의 `session_id`를 만듭니다. 클라이언트가
+보낸 `user_id`와 표시용 `user_name`은 데이터 소유권 판단에 사용하지 않습니다.
+
+측정이 `OFF`이면 `sensor_data`를 계약으로 검증하는 데서 멈춥니다. `ACTIVE`일 때만
+검증 → Fusion → 인증 사용자의 Socket.IO room 전송 → 비동기 DB 저장 순서로 처리합니다.
+서버 재시작 후에는 session을 복원하지 않고 `OFF`로 시작합니다. `device_id`는 Chair
+metadata로 저장하지만 사용자 데이터 격리나 history 소유권 기준으로 사용하지 않습니다.
+
+`GET /api/state/history`는 Supabase Bearer access token 인증이 필수입니다. Backend는
+token의 `sub`와 현재 ACTIVE measurement의 `session_id`를 결합해 `state_logs`를
+조회하며, 클라이언트가 보낸 `user_id`, `user_name`, `device_id` 또는 `session_id`로
+현재-session의 소유권을 정하지 않습니다. 기본 조회 범위는 최근 5분이고 최대 60분이며,
+baseline도 동일한 `user_id + session_id` 안에서만 선택합니다. 과거 session 조회는
+향후 별도 API에서 session 소유권을 검증한 뒤 제공할 수 있습니다.
+
 ---
 
 ## 6. 상태
@@ -161,14 +180,24 @@
 NORMAL → CAUTION → DANGER        (+ ABSENT: 자리 비움)
 ```
 
-| 판정 근거 | 주의 | 위험 |
-|---|---|---|
-| `low_blink_sec` 저깜빡임 지속 | 300초 | 900초 |
-| `static_hold_sec` 정적 유지 | 1200초 | 2700초 |
-| `close_distance_sec` 근접 지속 | 300초 | — |
-| `imbalance_sec` 좌우 편중 지속 | 300초 | — |
+실행 profile은 `.env`의 `SOMA_MODE=demo|normal`로 선택합니다. 환경변수가 없으면
+졸업작품 내부 시연을 위한 `demo`가 기본입니다. 두 profile은 같은 Fusion 알고리즘과
+센서 임계값을 사용하며, 아래 시간 임계값과 DB periodic snapshot 주기만 다릅니다.
 
-**전부 추정치입니다.** 실측 데이터로 재조정하기 전까지 확정값으로 취급하지 않습니다.
+| 판정 근거 | Demo 주의 | Demo 위험 | Normal 주의 | Normal 위험 |
+|---|---:|---:|---:|---:|
+| `low_blink_sec` 저깜빡임 지속 | 10초 | 20초 | 300초 | 900초 |
+| `static_hold_sec` 정적 유지 | 10초 | 20초 | 1200초 | 2700초 |
+| `close_distance_sec` 근접 지속 | 10초 | — | 300초 | — |
+| `imbalance_sec` 좌우 편중 지속 | 10초 | — | 300초 | — |
+
+DB periodic snapshot 주기는 Demo 5초, Normal 30초입니다. state 변경은 즉시,
+동일 state는 이 주기로 bounded queue의 DBWriter에 비동기 저장합니다. 저장 기능은
+실시간 상태 계산 경로와 분리하며 DB 장애가 Fusion 또는 UI 전송을 막아서는 안 됩니다.
+
+**Demo 값은 기능 시연을 위해 시간축만 축소한 설정입니다. 생리학적·의학적 기준이나
+실사용 권고 시간으로 해석하거나 표현하지 않습니다.** Normal 값도 실측 데이터로
+재조정하기 전까지 확정값으로 취급하지 않습니다.
 
 **히스테리시스**: 승격 임계와 강등 임계를 다르게 둡니다 (예: 깜빡임 8 미만 승격 / 11 이상 회복).
 단일 임계는 경계에서 반드시 채터링을 만들고, 표시가 초당 몇 번 깜빡이면 사용자는 그 자리에서 끕니다.
