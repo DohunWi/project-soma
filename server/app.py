@@ -1,12 +1,14 @@
 """Project Soma 실시간 백엔드.
 
-수집 계층의 ``sensor_data`` 를 계약으로 검증하고, Chair 샘플을 메모리의
-``FusionState`` 에 반영한 뒤 ``state`` 이벤트를 즉시 발행합니다.
+수집 계층의 ``sensor_data`` 를 항상 계약으로 검증합니다. 인증 사용자의 measurement가
+ACTIVE일 때만 Chair 샘플을 새 ``FusionState`` 에 반영하고 사용자 room에 ``state``를
+발행한 뒤 비동기 persistence를 시도합니다.
 
-실시간 경로는 Supabase와 독립적입니다. DB 연결은 해당 HTTP API 요청 안에서만
-지연 생성하므로 DB 설정이나 인터넷 연결이 없어도 Chair → Front 경로는 계속
-동작합니다.
+실시간 경로는 Supabase와 독립적입니다. snapshot 저장은 비동기 DBWriter로 넘기고
+History DB 조회는 해당 HTTP 요청에서만 수행하므로, DB 설정이나 인터넷 연결이 없어도
+Chair → Front 경로는 계속 동작합니다.
 """
+import hmac
 import logging
 import os
 import sys
@@ -16,7 +18,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-from flask_socketio import SocketIO
+from flask_socketio import SocketIO, join_room
 from jsonschema import Draft202012Validator
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,8 +26,19 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from fusion.state import FusionState, step  # noqa: E402
+from server.auth import (  # noqa: E402
+    AuthenticationError,
+    AuthenticationUnavailable,
+    SupabaseAuthVerifier,
+    bearer_token,
+)
 from server.config import DEMO_PROFILE, RuntimeProfile, load_runtime_profile  # noqa: E402
 from server.db_writer import DBWriter  # noqa: E402
+from server.measurement_sessions import (  # noqa: E402
+    MeasurementInUse,
+    MeasurementSessionRegistry,
+    NoMeasurementSession,
+)
 from server.state_history import (  # noqa: E402
     HistoryRequestError,
     HistoryUnavailable,
@@ -79,22 +92,30 @@ def _validation_message(validator, payload):
 
 
 class ChairPipeline:
-    """사용자·장치별 FusionState를 메모리에 유지하는 Chair 처리 계층."""
+    """단일 실제 Chair의 FusionState를 메모리에 유지하는 처리 계층."""
 
     def __init__(self, timing=DEMO_PROFILE.fusion):
-        self._states = {}
+        self._state = FusionState()
         self._lock = threading.Lock()
         self._timing = timing
 
+    def validate(self, payload):
+        """Validate sensor_data without advancing Fusion state."""
+        message = _validation_message(SENSOR_VALIDATOR, payload)
+        if message:
+            raise PayloadError(f"sensor_data 계약 위반: {message}")
+
     def process(self, payload):
-        """유효한 Chair payload를 state decision으로 변환합니다.
+        """Validate and convert one Chair payload to a state decision.
 
         Vision은 이번 단계의 처리 대상이 아닙니다. 유효한 Vision payload는
         오류로 취급하지 않고 ``None`` 을 반환해 독립 source 확장을 보존합니다.
         """
-        message = _validation_message(SENSOR_VALIDATOR, payload)
-        if message:
-            raise PayloadError(f"sensor_data 계약 위반: {message}")
+        self.validate(payload)
+        return self.process_validated(payload)
+
+    def process_validated(self, payload):
+        """Advance Fusion for one payload already checked against the contract."""
         if payload["source"] != "chair":
             return None
 
@@ -104,12 +125,10 @@ class ChairPipeline:
             "ir": chair.get("ir", []),
             "user_name": payload["user_name"],
         }
-        key = (payload["user_name"], payload.get("device_id", "smart_chair_01"))
 
         with self._lock:
-            previous = self._states.get(key, FusionState())
             current, decision = step(
-                previous,
+                self._state,
                 sample,
                 payload["t"],
                 timing=self._timing,
@@ -117,8 +136,13 @@ class ChairPipeline:
             message = _validation_message(STATE_VALIDATOR, decision)
             if message:
                 raise PayloadError(f"state 계약 위반: {message}")
-            self._states[key] = current
+            self._state = current
         return decision
+
+    def reset(self):
+        """Start a measurement session with no prior accumulated Fusion state."""
+        with self._lock:
+            self._state = FusionState()
 
 
 def _cors_origins():
@@ -131,7 +155,7 @@ def _cors_origins():
 def _get_supabase_client():
     """DB API를 실제로 호출할 때만 선택적으로 Supabase에 연결합니다."""
     url = os.getenv("SUPABASE_URL")
-    key = os.getenv("SUPABASE_KEY")
+    key = os.getenv("SUPABASE_PUBLISHABLE_KEY") or os.getenv("SUPABASE_KEY")
     if not url or not key:
         return None
     try:
@@ -153,6 +177,9 @@ def create_app(
     state_persistence=_AUTO_PERSISTENCE,
     history_reader=_AUTO_HISTORY_READER,
     history_now=None,
+    auth_verifier=None,
+    session_registry=None,
+    sensor_auth_token=None,
 ):
     profile = runtime_profile or load_runtime_profile()
     app = Flask(__name__)
@@ -166,6 +193,13 @@ def create_app(
         engineio_logger=False,
     )
     pipeline = ChairPipeline(profile.fusion)
+    verifier = auth_verifier or SupabaseAuthVerifier()
+    sessions = session_registry or MeasurementSessionRegistry()
+    measurement_lock = threading.RLock()
+    socket_identities = {}
+    socket_identity_lock = threading.Lock()
+    if sensor_auth_token is None:
+        sensor_auth_token = os.getenv("SOCKET_AUTH_TOKEN")
     db_writer = None
     persistence = state_persistence
     if persistence is _AUTO_PERSISTENCE:
@@ -184,6 +218,8 @@ def create_app(
     app.extensions["runtime_profile"] = profile
     app.extensions["state_persistence"] = persistence
     app.extensions["db_writer"] = db_writer
+    app.extensions["auth_verifier"] = verifier
+    app.extensions["measurement_sessions"] = sessions
     if history_reader is _AUTO_HISTORY_READER:
         history_reader = StateHistoryReader()
     app.extensions["state_history_reader"] = history_reader
@@ -191,22 +227,25 @@ def create_app(
     def token_required(function):
         @wraps(function)
         def decorated(*args, **kwargs):
-            token = None
-            auth_header = request.headers.get("Authorization")
-            if auth_header and auth_header.startswith("Bearer "):
-                token = auth_header.split(" ", 1)[1]
-            if not token:
-                return jsonify({"message": "토큰이 없습니다."}), 401
-
-            client = _get_supabase_client()
-            if client is None:
-                return jsonify({"message": "Supabase가 설정되지 않았습니다."}), 503
             try:
-                user = client.auth.get_user(token)
-                user_id = user.user.id
-            except Exception as error:
-                return jsonify({"message": f"토큰 검증 실패: {error}"}), 401
-            return function(user_id, *args, **kwargs)
+                token = bearer_token(request.headers.get("Authorization"))
+                identity = verifier.verify(token)
+            except AuthenticationError:
+                return jsonify({
+                    "v": 1,
+                    "status": "error",
+                    "error": {"code": "invalid_token", "message": "인증이 필요합니다."},
+                }), 401
+            except AuthenticationUnavailable:
+                return jsonify({
+                    "v": 1,
+                    "status": "error",
+                    "error": {
+                        "code": "auth_unavailable",
+                        "message": "인증 서비스를 사용할 수 없습니다.",
+                    },
+                }), 503
+            return function(identity.user_id, *args, **kwargs)
 
         return decorated
 
@@ -215,20 +254,30 @@ def create_app(
         return jsonify({"status": "ok", "realtime": True})
 
     @app.get("/api/state/history")
-    def get_state_history():
-        # Demo-only stream identity: state_logs.user_id is currently NULL.
-        # Replace this with authenticated user_id filtering when identity wiring lands.
-        user_name = (request.args.get("user_name") or "").strip()
-        device_id = (request.args.get("device_id") or "").strip()
-        if not user_name or not device_id:
+    @token_required
+    def get_state_history(user_id):
+        unsupported = sorted(set(request.args) - {"start", "end"})
+        if unsupported:
             return jsonify({
                 "v": 1,
                 "status": "error",
                 "error": {
                     "code": "invalid_request",
-                    "message": "user_name과 device_id가 필요합니다.",
+                    "message": "지원하지 않는 query parameter입니다.",
                 },
             }), 400
+
+        with measurement_lock:
+            measurement = sessions.active()
+            if measurement is None or measurement.user_id != user_id:
+                return jsonify({
+                    "v": 1,
+                    "status": "error",
+                    "error": {
+                        "code": "no_active_session",
+                        "message": "활성 측정 세션이 없습니다.",
+                    },
+                }), 409
 
         try:
             start, end = resolve_history_period(
@@ -245,8 +294,8 @@ def create_app(
 
         try:
             baseline, states = history_reader.fetch(
-                user_name,
-                device_id,
+                user_id,
+                measurement.session_id,
                 start,
                 end,
             )
@@ -264,7 +313,10 @@ def create_app(
         response = {
             "v": 1,
             "status": "success",
-            "stream": {"user_name": user_name, "device_id": device_id},
+            "stream": {
+                "user_id": str(user_id),
+                "session_id": str(measurement.session_id),
+            },
             "period": {
                 "start": utc_iso8601(start),
                 "end": utc_iso8601(end),
@@ -290,11 +342,50 @@ def create_app(
     @app.post("/api/measurement/start")
     @token_required
     def start_measurement(user_id):
-        return jsonify({"status": "success", "message": "측정 시작", "user_id": user_id})
+        try:
+            with measurement_lock:
+                measurement, created = sessions.start(user_id)
+                if created:
+                    pipeline.reset()
+        except MeasurementInUse:
+            return jsonify({
+                "v": 1,
+                "status": "error",
+                "error": {
+                    "code": "measurement_in_use",
+                    "message": "다른 측정 세션이 진행 중입니다.",
+                },
+            }), 409
+        return jsonify({
+            "v": 1,
+            "status": "success",
+            "measurement": measurement.as_dict(),
+            "created": created,
+        }), 201 if created else 200
 
     @app.post("/api/measurement/stop")
-    def stop_measurement():
-        return jsonify({"status": "success", "message": "측정 종료"})
+    @token_required
+    def stop_measurement(user_id):
+        try:
+            with measurement_lock:
+                measurement, already_stopped = sessions.stop(user_id)
+                if persistence is not None:
+                    persistence.end_session(user_id, measurement.session_id)
+        except NoMeasurementSession:
+            return jsonify({
+                "v": 1,
+                "status": "error",
+                "error": {
+                    "code": "no_active_session",
+                    "message": "활성 측정 세션이 없습니다.",
+                },
+            }), 409
+        return jsonify({
+            "v": 1,
+            "status": "success",
+            "measurement": measurement.as_dict(),
+            "already_stopped": already_stopped,
+        })
 
     @app.get("/api/report/weekly")
     @token_required
@@ -314,28 +405,75 @@ def create_app(
         except Exception as error:
             return jsonify({"status": "error", "message": str(error)}), 503
 
+    @socketio.on("connect")
+    def handle_connect(auth):
+        token = auth.get("token") if isinstance(auth, dict) else None
+        if (
+            isinstance(token, str)
+            and isinstance(sensor_auth_token, str)
+            and sensor_auth_token
+            and hmac.compare_digest(token, sensor_auth_token)
+        ):
+            with socket_identity_lock:
+                socket_identities[request.sid] = ("sensor", None)
+            return True
+        try:
+            identity = verifier.verify(token)
+        except (AuthenticationError, AuthenticationUnavailable):
+            return False
+        with socket_identity_lock:
+            socket_identities[request.sid] = ("user", identity.user_id)
+        join_room(f"user:{identity.user_id}")
+        return True
+
+    @socketio.on("disconnect")
+    def handle_disconnect():
+        with socket_identity_lock:
+            socket_identities.pop(request.sid, None)
+
     @socketio.on("sensor_data")
     def handle_sensor_data(payload):
+        with socket_identity_lock:
+            socket_identity = socket_identities.get(request.sid)
+        if socket_identity is None or socket_identity[0] != "sensor":
+            log.warning("인증되지 않은 sensor_data 전송을 거부합니다")
+            return
         try:
-            decision = pipeline.process(payload)
+            with measurement_lock:
+                pipeline.validate(payload)
+                measurement = sessions.active()
+                if measurement is None:
+                    return
+                decision = pipeline.process_validated(payload)
+                if decision is None:
+                    log.debug(
+                        "이번 단계에서 처리하지 않는 source입니다: %s",
+                        payload.get("source"),
+                    )
+                    return
+
+                # DB보다 인증 사용자의 Front room이 먼저입니다.
+                socketio.emit(
+                    "state",
+                    decision,
+                    to=f"user:{measurement.user_id}",
+                )
+                if persistence is not None:
+                    try:
+                        persistence.handle(
+                            payload,
+                            decision,
+                            user_id=measurement.user_id,
+                            session_id=measurement.session_id,
+                        )
+                    except Exception as error:          # noqa: BLE001
+                        log.warning("state_logs enqueue 실패: %s", error)
         except PayloadError as error:
             log.warning("payload 형식 오류, 이 샘플은 버립니다: %s", error)
             return
         except (KeyError, TypeError, ValueError) as error:
             log.warning("sensor_data 처리 오류, 이 샘플은 버립니다: %s", error)
             return
-
-        if decision is None:
-            log.debug("이번 단계에서 처리하지 않는 source입니다: %s", payload.get("source"))
-            return
-
-        # DB보다 Front가 먼저입니다. 이 경로에는 Supabase 호출이 없습니다.
-        socketio.emit("state", decision)
-        if persistence is not None:
-            try:
-                persistence.handle(payload, decision)
-            except Exception as error:                 # noqa: BLE001
-                log.warning("state_logs enqueue 실패: %s", error)
 
     return app, socketio
 

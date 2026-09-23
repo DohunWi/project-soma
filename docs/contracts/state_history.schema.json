@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "state_history",
-  "description": "public.state_logs → Backend GET /api/state/history → Front. Front는 Supabase에 직접 접근하지 않습니다. 현재 state_logs.user_id가 NULL이므로 Demo 단계에서는 user_name + device_id를 임시 stream identifier로 사용하며, 향후 인증/user_id 연동 시 변경될 수 있습니다.",
+  "description": "public.state_logs → Backend GET /api/state/history → Front. Supabase access token의 sub와 Backend의 현재 ACTIVE session으로 조회 범위를 정하며 Front는 Supabase에 직접 접근하지 않습니다.",
   "type": "object",
   "required": ["v", "status", "stream", "period", "states"],
   "additionalProperties": false,
@@ -10,11 +10,11 @@
     "status": { "const": "success" },
     "stream": {
       "type": "object",
-      "required": ["user_name", "device_id"],
+      "required": ["user_id", "session_id"],
       "additionalProperties": false,
       "properties": {
-        "user_name": { "type": "string", "minLength": 1 },
-        "device_id": { "type": "string", "minLength": 1 }
+        "user_id": { "type": "string", "format": "uuid" },
+        "session_id": { "type": "string", "format": "uuid" }
       }
     },
     "period": {

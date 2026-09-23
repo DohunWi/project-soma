@@ -240,21 +240,21 @@ class DBWriter:
             _, row = item
             cur.execute(
                 '''INSERT INTO state_logs
-                   (event_id, user_id, user_name, device_id, measured_at,
+                   (event_id, user_id, session_id, user_name, device_id, measured_at,
                     trigger, state, score, confidence, reasons, balance,
                     static_hold_sec, low_blink_sec, session_sec,
                     chair_distance_mm, blink_rate, face_distance_cm)
                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                           %s, %s, %s, %s, %s, %s, %s)
+                           %s, %s, %s, %s, %s, %s, %s, %s)
                    ON CONFLICT (event_id) DO NOTHING''',
                 (
-                    row["event_id"], row["user_id"], row["user_name"],
-                    row["device_id"], row["measured_at"], row["trigger"],
-                    row["state"], row["score"], row["confidence"],
-                    row["reasons"], row["balance"], row["static_hold_sec"],
-                    row["low_blink_sec"], row["session_sec"],
-                    row["chair_distance_mm"], row["blink_rate"],
-                    row["face_distance_cm"],
+                    row["event_id"], row["user_id"], row["session_id"],
+                    row["user_name"], row["device_id"], row["measured_at"],
+                    row["trigger"], row["state"], row["score"],
+                    row["confidence"], row["reasons"], row["balance"],
+                    row["static_hold_sec"], row["low_blink_sec"],
+                    row["session_sec"], row["chair_distance_mm"],
+                    row["blink_rate"], row["face_distance_cm"],
                 ),
             )
 

@@ -21,11 +21,14 @@
 | `feedback.schema.json` | 서버 → 액추에이터 | `server` → `chair`(진동), `feedback/ambient_led`, `web` |
 | `report.schema.json` | DB → 서버 → 프론트 | `db/report` → `server` → `web` |
 | `state_history.schema.json` | DB → 서버 → 프론트 | `state_logs` → `server` → `web` |
+| `measurement_session.schema.json` | 인증 사용자 ↔ 서버 | `web` → `server` start/stop 응답 |
 
-`state_history`의 stream은 현재 `state_logs.user_id`가 `NULL`인 Demo 단계이므로
-`user_name + device_id`로 임시 식별합니다. 향후 인증과 `user_id` 저장이 연결되면
-인증된 `user_id` 기준으로 변경될 수 있습니다. Front는 Supabase를 직접 조회하지 않고
-Backend의 `GET /api/state/history`만 사용합니다.
+`state_history`는 Supabase Bearer access token의 `sub`에서 얻은 `user_id`와
+Backend가 관리하는 현재 ACTIVE measurement의 `session_id`를 함께 사용합니다.
+`user_name`과 `device_id`는 소유권이나 조회 경계가 아닙니다. Front는 Supabase를 직접
+조회하지 않고 인증된 Backend의 `GET /api/state/history`만 사용합니다. 현재-session
+조회에서는 클라이언트가 `session_id`를 전달하지 않으며, 과거 session 조회는 향후
+별도 API에서 동일한 `user_id + session_id` 소유권 검사를 거쳐 확장합니다.
 
 ## 왜 `t` 와 `source` 가 필수인가
 

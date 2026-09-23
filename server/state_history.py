@@ -1,10 +1,4 @@
-"""Read recent Fusion state snapshots without touching the realtime pipeline.
-
-The Demo stream is temporarily identified by ``user_name`` and ``device_id``
-because current ``state_logs`` rows have a NULL ``user_id``. This boundary can
-move to authenticated ``user_id`` lookup later without changing Socket.IO state
-processing or asynchronous persistence.
-"""
+"""Read authenticated measurement history without touching realtime state."""
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -69,8 +63,8 @@ WITH baseline AS (
            static_hold_sec, low_blink_sec, session_sec, chair_distance_mm,
            blink_rate, face_distance_cm, TRUE AS is_baseline
       FROM public.state_logs
-     WHERE user_name = %s
-       AND device_id = %s
+     WHERE user_id = %s
+       AND session_id = %s
        AND measured_at < %s
      ORDER BY measured_at DESC, id DESC
      LIMIT 1
@@ -79,8 +73,8 @@ WITH baseline AS (
            static_hold_sec, low_blink_sec, session_sec, chair_distance_mm,
            blink_rate, face_distance_cm, FALSE AS is_baseline
       FROM public.state_logs
-     WHERE user_name = %s
-       AND device_id = %s
+     WHERE user_id = %s
+       AND session_id = %s
        AND measured_at >= %s
        AND measured_at <= %s
 )
@@ -97,12 +91,12 @@ SELECT measured_at, state, score, confidence, reasons, balance,
 
 
 class StateHistoryReader:
-    """Fetch one Demo stream's baseline and measured-at-bounded snapshots."""
+    """Fetch one authenticated session's measured-at-bounded snapshots."""
 
     def __init__(self, connection_factory=None):
         self._connection_factory = connection_factory
 
-    def fetch(self, user_name, device_id, start, end):
+    def fetch(self, user_id, session_id, start, end):
         """Read a period in one DB statement and return API-ready snapshots."""
         connection = None
         cursor = None
@@ -111,7 +105,15 @@ class StateHistoryReader:
             cursor = connection.cursor()
             cursor.execute(
                 HISTORY_SQL,
-                (user_name, device_id, start, user_name, device_id, start, end),
+                (
+                    str(user_id),
+                    str(session_id),
+                    start,
+                    str(user_id),
+                    str(session_id),
+                    start,
+                    end,
+                ),
             )
             rows = cursor.fetchall()
         except Exception as error:  # DB driver exceptions vary by failure mode.

@@ -20,7 +20,7 @@ Chair-only 상태 예:
 """
 import argparse
 import json
-import math
+import os
 import random
 import sys
 import time
@@ -99,6 +99,7 @@ def main():
     args = p.parse_args()
 
     emit = None
+    sio = None
     if not args.stdout:
         try:
             import socketio
@@ -106,7 +107,8 @@ def main():
             sys.exit("python-socketio 가 없습니다.  pip install python-socketio[client]\n"
                      "또는 --stdout 으로 서버 없이 실행하세요.")
         sio = socketio.Client()
-        sio.connect(args.url)
+        auth_token = os.getenv("SOCKET_AUTH_TOKEN")
+        sio.connect(args.url, auth={"token": auth_token} if auth_token else None)
         emit = lambda ev: sio.emit("sensor_data", ev)
         print(f"연결됨: {args.url}  시나리오={args.scenario}  {args.speed}배속",
               file=sys.stderr)
@@ -131,6 +133,11 @@ def main():
             time.sleep(step / args.speed)
     except (KeyboardInterrupt, BrokenPipeError):
         pass
+    finally:
+        if sio is not None and sio.connected:
+            # disconnect() drains the Engine.IO send queue before its worker
+            # loops exit, so a finite stream does not abandon its last emit.
+            sio.disconnect()
 
 
 if __name__ == "__main__":

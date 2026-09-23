@@ -153,6 +153,25 @@
 그래서 녹화 로그를 재생해 *"임계 A 면 하루 알림 N 회"* 같은 표를 뽑을 수 있고,
 그 표가 파라미터 결정의 근거이자 발표 자료가 됩니다.
 
+### 인증된 측정 세션
+
+현재 제품은 실제 Chair 1대를 전제로 하며 동시에 하나의 measurement session만
+`ACTIVE`가 될 수 있습니다. Backend는 Supabase access token을 검증한 뒤 JWT의
+`sub`를 `user_id`로 사용하고, start마다 별도의 `session_id`를 만듭니다. 클라이언트가
+보낸 `user_id`와 표시용 `user_name`은 데이터 소유권 판단에 사용하지 않습니다.
+
+측정이 `OFF`이면 `sensor_data`를 계약으로 검증하는 데서 멈춥니다. `ACTIVE`일 때만
+검증 → Fusion → 인증 사용자의 Socket.IO room 전송 → 비동기 DB 저장 순서로 처리합니다.
+서버 재시작 후에는 session을 복원하지 않고 `OFF`로 시작합니다. `device_id`는 Chair
+metadata로 저장하지만 사용자 데이터 격리나 history 소유권 기준으로 사용하지 않습니다.
+
+`GET /api/state/history`는 Supabase Bearer access token 인증이 필수입니다. Backend는
+token의 `sub`와 현재 ACTIVE measurement의 `session_id`를 결합해 `state_logs`를
+조회하며, 클라이언트가 보낸 `user_id`, `user_name`, `device_id` 또는 `session_id`로
+현재-session의 소유권을 정하지 않습니다. 기본 조회 범위는 최근 5분이고 최대 60분이며,
+baseline도 동일한 `user_id + session_id` 안에서만 선택합니다. 과거 session 조회는
+향후 별도 API에서 session 소유권을 검증한 뒤 제공할 수 있습니다.
+
 ---
 
 ## 6. 상태

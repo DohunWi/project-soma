@@ -14,12 +14,11 @@ class StatePersistence:
         self._last_snapshots = {}
         self._lock = threading.Lock()
 
-    def handle(self, payload, decision):
+    def handle(self, payload, decision, *, user_id, session_id):
         """Enqueue a state change or due periodic snapshot without DB I/O."""
-        stream_key = (
-            payload["user_name"],
-            payload.get("device_id", "smart_chair_01"),
-        )
+        if user_id is None or session_id is None:
+            raise ValueError("ACTIVE persistence requires user_id and session_id")
+        stream_key = (str(user_id), str(session_id))
         measured_t = float(decision["t"])
 
         with self._lock:
@@ -31,7 +30,13 @@ class StatePersistence:
             else:
                 return None
 
-            row = self._build_row(payload, decision, trigger)
+            row = self._build_row(
+                payload,
+                decision,
+                trigger,
+                user_id=user_id,
+                session_id=session_id,
+            )
             if not self.writer.put_state_log(row):
                 return None
 
@@ -41,7 +46,12 @@ class StatePersistence:
             }
             return row
 
-    def _build_row(self, payload, decision, trigger):
+    def end_session(self, user_id, session_id):
+        """Forget one stopped session's periodic checkpoint."""
+        with self._lock:
+            self._last_snapshots.pop((str(user_id), str(session_id)), None)
+
+    def _build_row(self, payload, decision, trigger, *, user_id, session_id):
         metrics = decision.get("metrics") or {}
         chair = payload.get("chair") or {}
         ir = chair.get("ir") or []
@@ -49,7 +59,8 @@ class StatePersistence:
 
         return {
             "event_id": str(self._uuid_factory()),
-            "user_id": None,
+            "user_id": str(user_id),
+            "session_id": str(session_id),
             "user_name": decision["user_name"],
             "device_id": payload.get("device_id", "smart_chair_01"),
             "measured_at": datetime.fromtimestamp(

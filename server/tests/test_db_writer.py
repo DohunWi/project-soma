@@ -52,7 +52,8 @@ class FakeCursor:
 def state_log_row(event_id="event-1"):
     return {
         "event_id": event_id,
-        "user_id": None,
+        "user_id": "11111111-1111-4111-8111-111111111111",
+        "session_id": "22222222-2222-4222-8222-222222222222",
         "user_name": "guest",
         "device_id": "chair-1",
         "measured_at": datetime.fromtimestamp(1000.0, timezone.utc),
@@ -93,6 +94,7 @@ def test_successful_state_log_insert_runs_in_worker():
     assert "INSERT INTO state_logs" in sql
     assert "ON CONFLICT (event_id) DO NOTHING" in sql
     assert params[0] == "event-1"
+    assert params[2] == "22222222-2222-4222-8222-222222222222"
     assert database.commits == 1
 
 

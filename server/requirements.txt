@@ -6,6 +6,7 @@ flask-cors>=4.0
 flask-socketio>=5.3
 psycopg2-binary>=2.9
 pytest>=8.0
+supabase>=2.28,<3
 
 # DB 쓰기는 실시간 Socket.IO 처리와 분리된 큐 + 전용 스레드에서 수행합니다.
 # Supabase SDK는 기존 DB API에서만 선택적으로 사용하며 실시간 경로의 의존성이 아닙니다.

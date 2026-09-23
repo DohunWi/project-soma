@@ -11,7 +11,7 @@ class ProfileConfigError(ValueError):
 
 @dataclass(frozen=True)
 class StoragePolicy:
-    """Storage cadence reserved for the later state_logs implementation."""
+    """Periodic state_logs snapshot cadence for one runtime profile."""
 
     db_snapshot_interval_sec: float
 

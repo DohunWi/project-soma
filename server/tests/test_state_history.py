@@ -1,5 +1,6 @@
 """State history period validation and database query tests."""
 import sys
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -18,6 +19,9 @@ from server.state_history import (  # noqa: E402
     resolve_history_period,
     utc_iso8601,
 )
+
+USER_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
+SESSION_ID = uuid.UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 
 
 class FakeCursor:
@@ -120,7 +124,7 @@ def test_reader_separates_baseline_and_states_and_omits_null_metrics():
     connection = FakeConnection(cursor)
     reader = StateHistoryReader(connection_factory=lambda: connection)
 
-    baseline, states = reader.fetch("guest", "chair-1", start, end)
+    baseline, states = reader.fetch(USER_ID, SESSION_ID, start, end)
 
     assert baseline["measured_at"] == "2026-09-23T02:59:59Z"
     assert "metrics" not in baseline
@@ -132,7 +136,7 @@ def test_reader_separates_baseline_and_states_and_omits_null_metrics():
     assert connection.closed is True
 
 
-def test_reader_query_uses_measured_at_boundaries_and_stream_identifiers():
+def test_reader_query_uses_user_and_session_boundaries_for_range_and_baseline():
     start = datetime(2026, 9, 23, 3, 0, tzinfo=timezone.utc)
     end = start + timedelta(minutes=5)
     cursor = FakeCursor()
@@ -140,20 +144,24 @@ def test_reader_query_uses_measured_at_boundaries_and_stream_identifiers():
         connection_factory=lambda: FakeConnection(cursor),
     )
 
-    reader.fetch("guest", "chair-1", start, end)
+    reader.fetch(USER_ID, SESSION_ID, start, end)
 
     sql, params = cursor.execution
     assert sql == HISTORY_SQL
     assert "created_at" not in sql
+    assert sql.count("user_id = %s") == 2
+    assert sql.count("session_id = %s") == 2
+    assert "user_name" not in sql
+    assert "device_id" not in sql
     assert "measured_at < %s" in sql
     assert "measured_at >= %s" in sql
     assert "measured_at <= %s" in sql
     assert params == (
-        "guest",
-        "chair-1",
+        str(USER_ID),
+        str(SESSION_ID),
         start,
-        "guest",
-        "chair-1",
+        str(USER_ID),
+        str(SESSION_ID),
         start,
         end,
     )
@@ -167,7 +175,7 @@ def test_reader_without_preceding_state_returns_no_baseline():
         connection_factory=lambda: FakeConnection(cursor),
     )
 
-    baseline, states = reader.fetch("guest", "chair-1", start, end)
+    baseline, states = reader.fetch(USER_ID, SESSION_ID, start, end)
 
     assert baseline is None
     assert len(states) == 1
@@ -180,7 +188,7 @@ def test_reader_without_db_credentials_is_unavailable(monkeypatch):
     start = datetime(2026, 9, 23, 3, 0, tzinfo=timezone.utc)
 
     with pytest.raises(HistoryUnavailable, match="state history query failed"):
-        reader.fetch("guest", "chair-1", start, start + timedelta(minutes=5))
+        reader.fetch(USER_ID, SESSION_ID, start, start + timedelta(minutes=5))
 
 
 def test_reader_closes_resources_and_hides_driver_error():
@@ -190,7 +198,7 @@ def test_reader_closes_resources_and_hides_driver_error():
     start = datetime(2026, 9, 23, 3, 0, tzinfo=timezone.utc)
 
     with pytest.raises(HistoryUnavailable, match="state history query failed") as caught:
-        reader.fetch("guest", "chair-1", start, start + timedelta(minutes=5))
+        reader.fetch(USER_ID, SESSION_ID, start, start + timedelta(minutes=5))
 
     assert "password leaked" not in str(caught.value)
     assert cursor.closed is True

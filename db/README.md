@@ -33,7 +33,7 @@ Backend는 다음 정책으로 snapshot을 선택해 bounded queue의 DBWriter�
 - state 유지: Demo 5초 / Normal 30초마다 periodic snapshot
 - Vision 미연결: `blink_rate`, `face_distance_cm`은 `NULL`
 - Chair IR 미감지 `-1`: persistence 계층에서 `NULL`로 변환
-- DB 또는 인터넷 장애: Chair → Backend → Fusion → Front 경로를 중단하지 않음
+- DB 또는 인터넷 장애: ACTIVE인 Chair → Backend → Fusion → Front 경로를 중단하지 않음
 
 DBWriter queue는 최대 2000건이며 producer는 `put_nowait`만 사용합니다. queue가
 가득 차면 새 snapshot을 버리고 경고를 남기며 실시간 경로는 계속 동작합니다.
@@ -45,13 +45,13 @@ DBWriter queue는 최대 2000건이며 producer는 `put_nowait`만 사용합니�
 시작하지 않습니다. 이 경우에도 Fusion과 Socket.IO 실시간 경로는 그대로 동작합니다.
 
 `event_id`는 Backend가 snapshot을 만들 때 발급하며, 재시도 시 같은 값을 사용해
-중복 INSERT를 막습니다. `user_id`는 현재 payload에 없으므로 nullable이며 임의 UUID를
-생성하지 않습니다. 현재 식별값은 `user_name`과 `device_id`입니다.
+중복 INSERT를 막습니다. migration 004 이후 신규 ACTIVE measurement 행은 검증된
+Supabase access token의 `sub`를 `user_id`로, start 때 생성한 UUID를 `session_id`로
+함께 저장합니다. 기존 행 보존을 위해 두 컬럼의 `NULL` 조합은 허용합니다.
+`user_name`은 표시용이고 `device_id`는 단일 Chair metadata이며 소유권 기준이 아닙니다.
 
-> TODO: Demo에서 같은 `user_name + device_id`를 반복 사용하면 서로 다른 실행의
-> snapshot이 하나의 History stream에 포함될 수 있습니다. 현재 단계에서는 오류로
-> 취급하거나 API contract와 DB schema를 바꾸지 않습니다. 향후 세션 경계를 명확히
-> 해야 할 때 `session_id` 도입과 기존 행 처리 방식을 함께 검토합니다.
+Measurement가 OFF이면 Backend는 sensor 계약 검증까지만 수행하고 Fusion, Front emit,
+persistence를 실행하지 않습니다. 서버 재시작 후 모든 measurement는 OFF입니다.
 
 ## enum
 

@@ -1,5 +1,6 @@
 """State snapshot selection and state_logs row mapping tests."""
 import sys
+import uuid
 from datetime import timezone
 from pathlib import Path
 
@@ -10,6 +11,9 @@ sys.path.insert(0, str(ROOT))
 
 from server.config import DEMO_PROFILE, NORMAL_PROFILE  # noqa: E402
 from server.state_persistence import StatePersistence  # noqa: E402
+
+USER_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
+SESSION_ID = uuid.UUID("22222222-2222-4222-8222-222222222222")
 
 
 class CollectingWriter:
@@ -66,9 +70,15 @@ def persistence(writer, profile=DEMO_PROFILE):
     )
 
 
+def store(persistence_, payload_, decision_, *, session_id=SESSION_ID):
+    return persistence_.handle(
+        payload_, decision_, user_id=USER_ID, session_id=session_id
+    )
+
+
 def test_first_decision_is_state_change_snapshot():
     writer = CollectingWriter()
-    row = persistence(writer).handle(payload(), decision())
+    row = store(persistence(writer), payload(), decision())
 
     assert row["trigger"] == "state_change"
     assert writer.rows == [row]
@@ -76,10 +86,10 @@ def test_first_decision_is_state_change_snapshot():
 
 def test_same_state_before_interval_is_not_stored():
     writer = CollectingWriter()
-    store = persistence(writer)
-    store.handle(payload(), decision(t=1000.0))
+    persistence_ = persistence(writer)
+    store(persistence_, payload(), decision(t=1000.0))
 
-    assert store.handle(payload(), decision(t=1004.999)) is None
+    assert store(persistence_, payload(), decision(t=1004.999)) is None
     assert len(writer.rows) == 1
 
 
@@ -92,34 +102,36 @@ def test_same_state_before_interval_is_not_stored():
 )
 def test_profile_interval_creates_periodic_snapshot(profile, before, due):
     writer = CollectingWriter()
-    store = persistence(writer, profile)
-    store.handle(payload(), decision(t=1000.0))
+    persistence_ = persistence(writer, profile)
+    store(persistence_, payload(), decision(t=1000.0))
 
-    assert store.handle(payload(), decision(t=1000.0 + before)) is None
-    row = store.handle(payload(), decision(t=1000.0 + due))
+    assert store(persistence_, payload(), decision(t=1000.0 + before)) is None
+    row = store(persistence_, payload(), decision(t=1000.0 + due))
 
     assert row["trigger"] == "periodic"
 
 
 def test_state_change_is_stored_before_interval():
     writer = CollectingWriter()
-    store = persistence(writer)
-    store.handle(payload(), decision(t=1000.0, state="NORMAL"))
+    persistence_ = persistence(writer)
+    store(persistence_, payload(), decision(t=1000.0, state="NORMAL"))
 
-    row = store.handle(payload(), decision(t=1001.0, state="CAUTION"))
+    row = store(persistence_, payload(), decision(t=1001.0, state="CAUTION"))
 
     assert row["trigger"] == "state_change"
     assert row["state"] == "CAUTION"
 
 
-def test_streams_are_independent_by_user_and_device():
+def test_sessions_have_independent_snapshot_checkpoints():
     writer = CollectingWriter()
-    store = persistence(writer)
-    store.handle(payload(user="a", device="one"), decision(t=1000.0))
+    persistence_ = persistence(writer)
+    store(persistence_, payload(user="a", device="one"), decision(t=1000.0))
 
-    other = store.handle(
+    other = store(
+        persistence_,
         payload(user="b", device="two"),
         {**decision(t=1001.0), "user_name": "b"},
+        session_id=uuid.UUID("33333333-3333-4333-8333-333333333333"),
     )
 
     assert other["trigger"] == "state_change"
@@ -128,9 +140,9 @@ def test_streams_are_independent_by_user_and_device():
 
 def test_each_snapshot_gets_a_new_event_id():
     writer = CollectingWriter()
-    store = persistence(writer)
-    first = store.handle(payload(), decision(t=1000.0))
-    second = store.handle(payload(), decision(t=1005.0))
+    persistence_ = persistence(writer)
+    first = store(persistence_, payload(), decision(t=1000.0))
+    second = store(persistence_, payload(), decision(t=1005.0))
 
     assert first["event_id"] != second["event_id"]
 
@@ -140,27 +152,28 @@ def test_each_snapshot_gets_a_new_event_id():
     [(-1, None), (250, 250), (0, 0), (None, None)],
 )
 def test_chair_distance_mapping(ir, expected):
-    row = persistence(CollectingWriter()).handle(payload(ir=ir), decision())
+    row = store(persistence(CollectingWriter()), payload(ir=ir), decision())
     assert row["chair_distance_mm"] == expected
 
 
-def test_chair_only_row_has_null_vision_fields_and_user_id():
-    row = persistence(CollectingWriter()).handle(payload(), decision())
+def test_chair_only_row_has_authenticated_identity_and_null_vision_fields():
+    row = store(persistence(CollectingWriter()), payload(), decision())
 
-    assert row["user_id"] is None
+    assert row["user_id"] == str(USER_ID)
+    assert row["session_id"] == str(SESSION_ID)
     assert row["blink_rate"] is None
     assert row["face_distance_cm"] is None
 
 
 def test_vision_metrics_are_copied_when_present():
-    row = persistence(CollectingWriter()).handle(payload(), decision(vision=True))
+    row = store(persistence(CollectingWriter()), payload(), decision(vision=True))
 
     assert row["blink_rate"] == 12.5
     assert row["face_distance_cm"] == 55.0
 
 
 def test_measured_at_is_timezone_aware_utc():
-    row = persistence(CollectingWriter()).handle(payload(), decision(t=1000.25))
+    row = store(persistence(CollectingWriter()), payload(), decision(t=1000.25))
 
     assert row["measured_at"].tzinfo is timezone.utc
     assert row["measured_at"].timestamp() == 1000.25
@@ -168,10 +181,28 @@ def test_measured_at_is_timezone_aware_utc():
 
 def test_rejected_enqueue_does_not_advance_snapshot_checkpoint():
     writer = CollectingWriter(accepts=False)
-    store = persistence(writer)
-    assert store.handle(payload(), decision(t=1000.0)) is None
+    persistence_ = persistence(writer)
+    assert store(persistence_, payload(), decision(t=1000.0)) is None
 
     writer.accepts = True
-    row = store.handle(payload(), decision(t=1001.0))
+    row = store(persistence_, payload(), decision(t=1001.0))
 
     assert row["trigger"] == "state_change"
+
+
+def test_stopped_session_checkpoint_is_removed():
+    writer = CollectingWriter()
+    persistence_ = persistence(writer)
+    store(persistence_, payload(), decision(t=1000.0))
+
+    persistence_.end_session(USER_ID, SESSION_ID)
+    row = store(persistence_, payload(), decision(t=1001.0))
+
+    assert row["trigger"] == "state_change"
+
+
+def test_identity_is_required_for_active_persistence():
+    with pytest.raises(ValueError, match="user_id and session_id"):
+        persistence(CollectingWriter()).handle(
+            payload(), decision(), user_id=None, session_id=None
+        )
