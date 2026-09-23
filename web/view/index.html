@@ -400,16 +400,6 @@
                             </div>
                         </div>
 
-                        <!-- 웹캠 모니터링 (주석 처리됨) -->
-                        <!--
-              <div class="col-span-1 bg-black rounded-xl overflow-hidden relative shadow-sm aspect-video flex items-center justify-center">
-                  <video id="webcamPreview" autoplay playsinline muted class="w-full h-full object-cover opacity-80"></video>
-                  <div class="absolute bottom-2 left-2 bg-black bg-opacity-60 text-white text-[10px] px-2 py-1 rounded" data-i18n="live_detecting">
-                      🔴 웹캠 모니터링
-                  </div>
-              </div>
-              -->
-
                         <!-- 신규 추가: 측정 제어 버튼 영역 -->
                         <div
                             class="col-span-1 bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex flex-col justify-center items-center gap-5 aspect-video">
@@ -421,6 +411,10 @@
                                 <button id="btn-stop" onclick="stopMeasurement()"
                                     class="flex-1 py-3 bg-red-500 hover:bg-red-600 text-white font-bold rounded-lg transition-colors shadow-sm opacity-50 cursor-not-allowed"
                                     disabled>측정 중지</button>
+                                <!-- 🔽 새로 추가할 팝업 테스트 버튼 나중에 삭제 🔽 -->
+                                <button onclick="testPopup()"
+                                    class="flex-1 py-3 bg-purple-500 hover:bg-purple-600 text-white font-bold rounded-lg transition-colors shadow-sm">팝업
+                                    테스트</button>
                             </div>
                             <div class="flex items-center gap-2">
                                 <span id="measure-status-dot" class="w-3 h-3 rounded-full bg-gray-400"></span>
@@ -484,8 +478,8 @@
                     <div class="feedback-card">
                         <div class="feedback-icon">🌟</div>
                         <div class="feedback-text">
-                            <h4 data-i18n="excellent">훌륭합니다!</h4>
-                            <p data-i18n="excellent_desc">오늘 하루 종일 좋은 자세 패턴을 유지하셨네요.</p>
+                            <h4 data-i18n="excellent">데이터 수집 대기 중</h4>
+                            <p data-i18n="excellent_desc">오늘 수집된 자세 분석 데이터가 아직 없습니다.</p>
                         </div>
                     </div>
                     <div class="card half-chart">
@@ -558,7 +552,6 @@
             <input type="password" id="userPw" placeholder="비밀번호"
                 class="w-full px-4 py-2 mb-6 border border-gray-300 rounded-md outline-none focus:border-blue-500">
 
-            <!-- 회원가입 버튼 추가 -->
             <div class="flex gap-2 justify-center">
                 <button onclick="closeLoginModal()"
                     class="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors">취소</button>
@@ -613,7 +606,7 @@
         let lastServerStatus = false;
         let lastPostureData = null;
         let currentStream = null;
-        let isMeasuring = false; // 신규: 측정 상태를 관리하는 변수
+        let isMeasuring = false;
 
         function changeLanguage(lang) {
             currentLang = lang;
@@ -628,7 +621,6 @@
             if (lastServerStatus) connText.innerText = translations[lang].server_connected;
             else connText.innerText = translations[lang].server_disconnected;
 
-            // 언어 변경 시, 현재 측정 중일 때만 화면 갱신
             if (lastPostureData && isMeasuring) updateDashboardUI(lastPostureData);
         }
 
@@ -637,6 +629,11 @@
             document.getElementById('view-' + viewId).classList.add('active');
             document.querySelectorAll('.menu-item').forEach(menu => { menu.classList.remove('active'); });
             clickedMenu.classList.add('active');
+
+            // 대시보드 화면에 진입할 때마다 백엔드(Supabase)에서 일간 데이터를 가져옵니다.
+            if (viewId === 'dashboard' && window.fetchDailyReport) {
+                window.fetchDailyReport();
+            }
         }
 
         function openSystemSettings(type) {
@@ -650,7 +647,7 @@
         const cameraSelect = document.getElementById('cameraSelect');
 
         async function initCamera() {
-            if (!videoElement) return; // 신규: 비디오 태그가 없으면 오류 방지용으로 실행 안 함
+            if (!videoElement) return;
             if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
             try {
                 currentStream = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -680,6 +677,7 @@
         }
         window.addEventListener('load', initCamera);
 
+        // 실시간 차트
         const ctxRealtime = document.getElementById('realtimeChart').getContext('2d');
         const MAX_POINTS = 30;
         const realtimeChart = new Chart(ctxRealtime, {
@@ -698,23 +696,83 @@
             realtimeChart.update();
         }
 
+        // 상태 비율(파이 차트) 및 시간대별 이력(타임라인 차트) - 글로벌 변수로 관리
         const ctxPie = document.getElementById('pieChart').getContext('2d');
-        new Chart(ctxPie, { type: 'doughnut', data: { labels: ['NORMAL', 'CAUTION', 'DANGER', 'ABSENT'], datasets: [{ data: [60, 20, 10, 10], backgroundColor: ['#2ecc71', '#f1c40f', '#e74c3c', '#95a5a6'], borderWidth: 0 }] }, options: { responsive: true, maintainAspectRatio: false } });
+        window.pieChartObj = new Chart(ctxPie, {
+            type: 'doughnut',
+            data: {
+                labels: ['NORMAL', 'CAUTION', 'DANGER', 'ABSENT'],
+                datasets: [{ data: [0, 0, 0, 0], backgroundColor: ['#2ecc71', '#f1c40f', '#e74c3c', '#95a5a6'], borderWidth: 0 }]
+            },
+            options: { responsive: true, maintainAspectRatio: false }
+        });
+
         const ctxTimeline = document.getElementById('timelineChart').getContext('2d');
-        new Chart(ctxTimeline, { type: 'bar', data: { labels: ['09:00', '10:00', '11:00', '12:00', '13:00'], datasets: [{ label: 'Status', data: [1, 1, 1, 1, 1], backgroundColor: ['#2ecc71', '#f1c40f', '#e74c3c', '#95a5a6', '#2ecc71'], borderRadius: 4 }] }, options: { responsive: true, maintainAspectRatio: false, scales: { y: { display: false } } } });
+        window.timelineChartObj = new Chart(ctxTimeline, {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: []
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                scales: {
+                    x: { stacked: true },
+                    y: { stacked: true, display: false }
+                }
+            }
+        });
+
+        // 상태 비율에 따른 맞춤형 피드백 UI 업데이트 함수
+        window.updateFeedbackUI = function (normal, caution, danger) {
+            const feedbackCard = document.querySelector('.feedback-card');
+            const icon = document.querySelector('.feedback-icon');
+            const h4 = document.querySelector('.feedback-text h4');
+            const p = document.querySelector('.feedback-text p');
+
+            const total = normal + caution + danger;
+            if (total === 0) {
+                icon.innerText = "⏳";
+                h4.innerText = "데이터 수집 대기 중";
+                p.innerText = "오늘 수집된 자세 분석 데이터가 아직 없습니다.";
+                feedbackCard.style.borderLeftColor = "var(--neutral-color)";
+                feedbackCard.style.backgroundColor = "#f3f4f6";
+                return;
+            }
+
+            if (danger > caution && danger > normal) {
+                icon.innerText = "🚨";
+                h4.innerText = "위험합니다!";
+                p.innerText = "위험 상태의 비율이 너무 높습니다. 즉각적인 휴식과 스트레칭이 필요합니다.";
+                feedbackCard.style.borderLeftColor = "var(--danger-color)";
+                feedbackCard.style.backgroundColor = "rgba(231, 76, 60, 0.1)";
+            } else if (caution > normal) {
+                icon.innerText = "⚠️";
+                h4.innerText = "주의가 필요해요";
+                p.innerText = "자세가 무너지거나 눈 깜빡임이 줄어들고 있습니다.";
+                feedbackCard.style.borderLeftColor = "var(--warn-color)";
+                feedbackCard.style.backgroundColor = "rgba(241, 196, 15, 0.1)";
+            } else {
+                icon.innerText = "🌟";
+                h4.innerText = "훌륭합니다!";
+                p.innerText = "오늘 하루 종일 좋은 자세 패턴을 유지하셨네요.";
+                feedbackCard.style.borderLeftColor = "var(--good-color)";
+                feedbackCard.style.backgroundColor = "rgba(46, 204, 113, 0.1)";
+            }
+        };
 
         const STATE_MAP = {
-            "NORMAL": { color: "var(--good-color)", bg: "rgba(46, 204, 113, 0.1)", ko: { label: "정상", msg: "안정적인 상태입니다", sub: "좋은 수치를 유지하고 있습니다.", topDetail: "바른 습관을 계속 유지해주세요." }, en: { label: "Normal", msg: "Stable Status", sub: "Maintaining good metrics.", topDetail: "Keep up the good habits." } },
-            "CAUTION": { color: "var(--warn-color)", bg: "rgba(241, 196, 15, 0.1)", ko: { label: "주의", msg: "수치 변화 감지", sub: "눈 깜빡임이나 움직임에 신경써주세요.", topDetail: "수치가 떨어지고 있습니다. 스트레칭을 권장합니다." }, en: { label: "Caution", msg: "Changes Detected", sub: "Pay attention to blinks/movement.", topDetail: "Metrics dropping. Stretch recommended." } },
-            "DANGER": { color: "var(--danger-color)", bg: "rgba(231, 76, 60, 0.1)", ko: { label: "위험", msg: "피로 누적 발생", sub: "즉각적인 휴식이 필요합니다.", topDetail: "장시간 정적 상태입니다. 자리에서 일어나세요!" }, en: { label: "Danger", msg: "Fatigue Accumulated", sub: "Immediate rest required.", topDetail: "Static for too long. Please stand up!" } },
-            "ABSENT": { color: "var(--neutral-color)", bg: "var(--card-bg)", ko: { label: "자리 비움", msg: "사용자 없음", sub: "누적 지표 계산이 일시 정지됩니다.", topDetail: "자리에 돌아오면 분석을 재개합니다." }, en: { label: "Absent", msg: "User Absent", sub: "Metric tracking paused.", topDetail: "Analysis will resume upon return." } },
-            "UNKNOWN": { color: "var(--text-main)", bg: "var(--card-bg)", ko: { label: "대기", msg: "분석 중...", sub: "데이터를 기다리고 있습니다.", topDetail: "..." }, en: { label: "Waiting", msg: "Analyzing...", sub: "Waiting for data.", topDetail: "..." } }
+            "NORMAL": { color: "var(--good-color)", bg: "rgba(46, 204, 113, 0.1)", ko: { label: "정상", msg: "안정적인 상태입니다", sub: "좋은 수치를 유지하고 있습니다.", topDetail: "바른 습관을 계속 유지해주세요." } },
+            "CAUTION": { color: "var(--warn-color)", bg: "rgba(241, 196, 15, 0.1)", ko: { label: "주의", msg: "수치 변화 감지", sub: "눈 깜빡임이나 움직임에 신경써주세요.", topDetail: "수치가 떨어지고 있습니다. 스트레칭을 권장합니다." } },
+            "DANGER": { color: "var(--danger-color)", bg: "rgba(231, 76, 60, 0.1)", ko: { label: "위험", msg: "피로 누적 발생", sub: "즉각적인 휴식이 필요합니다.", topDetail: "장시간 정적 상태입니다. 자리에서 일어나세요!" } },
+            "ABSENT": { color: "var(--neutral-color)", bg: "var(--card-bg)", ko: { label: "자리 비움", msg: "사용자 없음", sub: "누적 지표 계산이 일시 정지됩니다.", topDetail: "자리에 돌아오면 분석을 재개합니다." } },
+            "UNKNOWN": { color: "var(--text-main)", bg: "var(--card-bg)", ko: { label: "대기", msg: "분석 중...", sub: "데이터를 기다리고 있습니다.", topDetail: "..." } }
         };
 
         /* =========================================
            3. Socket.IO 연동 
            ========================================= */
-        const socket = io("http://172.17.77.26:5000");
+        const socket = io("http://127.0.0.1:5000");
 
         const connDot = document.getElementById('conn-dot');
         const connText = document.getElementById('conn-text');
@@ -743,32 +801,38 @@
         });
 
         socket.on("feedback", (data) => {
-            // 신규: 측정 중일 때만 팝업 알림 작동
+            // 🚨 신규: 측정 중일 때만 팝업 알림 작동
             if (!isMeasuring) return;
 
             if (data.target === "web_popup" && data.action) {
                 const action = data.action;
                 let iconType = "info";
+                
+                // 위험 수준에 따라 아이콘 변경
                 if (action.level === "caution") iconType = "warning";
                 if (action.level === "risk") iconType = "error";
 
                 Swal.fire({
+                    toast: true,                  // 모달 대신 토스트 팝업 활성화
+                    position: 'bottom-end',       // 오른쪽 아래에 배치
                     icon: iconType,
                     title: action.title,
                     text: action.body,
-                    confirmButtonText: '확인',
-                    timer: action.level === "risk" ? undefined : 5000
+                    showConfirmButton: false,     // 화면을 가리는 확인 버튼 제거
+                    showCloseButton: true,        // 대신 우측 상단에 작게 닫기(X) 버튼 추가
+                    // 위험(risk) 등급은 자동으로 안 닫힘, 그 외는 5초 뒤 사라짐
+                    timer: action.level === "risk" ? undefined : 5000,
+                    timerProgressBar: action.level !== "risk"
                 });
             }
         });
 
         function updateDashboardUI(data) {
-            // 🚨 신규: 측정 중이 아닐 때는 데이터 업데이트 무시
             if (!isMeasuring) return;
 
             const stateKey = data.state || "UNKNOWN";
             const theme = STATE_MAP[stateKey] || STATE_MAP["UNKNOWN"];
-            const textInfo = theme[currentLang];
+            const textInfo = theme[currentLang] || STATE_MAP["UNKNOWN"]["ko"];
 
             const currentScore = (data.score !== undefined) ? data.score : 0;
             document.getElementById('currentScore').innerText = (data.score !== undefined) ? data.score : "-";
@@ -808,15 +872,13 @@
            4. 실시간 측정 제어 로직 (시작/중지)
            ========================================= */
         function startMeasurement() {
-            isMeasuring = true; // 데이터 수신 허용
+            isMeasuring = true;
 
-            // 버튼 상태 UI 변경
             document.getElementById('btn-start').disabled = true;
             document.getElementById('btn-start').classList.add('opacity-50', 'cursor-not-allowed');
             document.getElementById('btn-stop').disabled = false;
             document.getElementById('btn-stop').classList.remove('opacity-50', 'cursor-not-allowed');
 
-            // 텍스트 및 상태등 변경
             const statusText = document.getElementById('measure-status-text');
             statusText.innerText = "현재 상태: 측정 중";
             statusText.classList.remove('text-gray-500', 'text-red-500');
@@ -833,22 +895,19 @@
         }
 
         function stopMeasurement() {
-            isMeasuring = false; // 데이터 수신 차단
+            isMeasuring = false;
 
-            // 버튼 상태 UI 변경
             document.getElementById('btn-stop').disabled = true;
             document.getElementById('btn-stop').classList.add('opacity-50', 'cursor-not-allowed');
             document.getElementById('btn-start').disabled = false;
             document.getElementById('btn-start').classList.remove('opacity-50', 'cursor-not-allowed');
 
-            // 텍스트 및 상태등 변경
             const statusText = document.getElementById('measure-status-text');
             statusText.innerText = "현재 상태: 중지됨";
             statusText.classList.remove('text-green-600', 'text-gray-500');
             statusText.classList.add('text-red-500');
             document.getElementById('measure-status-dot').style.backgroundColor = "#e74c3c";
 
-            // 대시보드 화면 초기화
             resetDashboardUI();
 
             Swal.fire({
@@ -880,6 +939,21 @@
             document.getElementById('topStatusDot').style.backgroundColor = "var(--neutral-color)";
             document.getElementById('scoreRing').style.borderColor = "var(--neutral-color)";
         }
+        /* =========================================
+       [추가] 팝업 UI 테스트 버튼 로직 나중에 삭제 가능성
+       ========================================= */
+            function testPopup() {
+                    Swal.fire({
+                        toast: true,
+                        position: 'bottom-end', 
+                        icon: 'warning',
+                        title: '눈 깜빡임이 줄었어요',
+                        text: '23분째 분당 6회예요.',
+                        showConfirmButton: false, // 확인 버튼 숨김
+                        timer: 4000, // 4초 뒤 자동 사라짐
+                        timerProgressBar: true
+                    });
+                }
 
         /* =========================================
            5. 로그인 모달 관련 로직 
@@ -903,12 +977,10 @@
     <script type="module">
         import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm'
 
-        // 발급받은 키 2가지 입력
         const supabaseUrl = 'https://dzkionspeweesqwlrxex.supabase.co';
         const supabaseKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR6a2lvbnNwZXdlZXNxd2xyeGV4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzNzkzNjAsImV4cCI6MjA5NDk1NTM2MH0.VoYhfIg7h1PGpm72NYPTe3sXGqk0pt54k_UCsNcQxVI';
         const supabase = createClient(supabaseUrl, supabaseKey);
 
-        // [회원가입 기능]
         window.attemptSignUp = async () => {
             const email = document.getElementById('userId').value;
             const password = document.getElementById('userPw').value;
@@ -918,7 +990,6 @@
                 return;
             }
 
-            // Supabase 회원가입 요청
             const { data, error } = await supabase.auth.signUp({
                 email: email,
                 password: password
@@ -932,7 +1003,6 @@
             alert("회원가입 성공! 이제 접속(로그인) 버튼을 눌러주세요.");
         };
 
-        // [로그인 기능]
         window.attemptLogin = async () => {
             const email = document.getElementById('userId').value;
             const password = document.getElementById('userPw').value;
@@ -942,7 +1012,6 @@
                 return;
             }
 
-            // Supabase 로그인 요청
             const { data, error } = await supabase.auth.signInWithPassword({
                 email: email,
                 password: password
@@ -953,21 +1022,82 @@
                 return;
             }
 
-            // 브라우저 로컬 스토리지에 토큰 보관
             localStorage.setItem('access_token', data.session.access_token);
-
             alert("로그인 성공! 시스템과 연동됩니다.");
             closeLoginModal();
 
-            // 소켓 재연결
             if (typeof socket !== 'undefined') {
                 socket.disconnect();
                 socket.auth = { token: data.session.access_token };
                 socket.connect();
             }
         };
-    </script>
 
+        // [일간 통계 리포트 데이터 로드]
+        window.fetchDailyReport = async () => {
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            const todayStr = today.toISOString();
+
+            // 백엔드의 fatigue_logs 테이블에서 오늘의 로그만 오름차순으로 불러옵니다.
+            const { data, error } = await supabase
+                .from('fatigue_logs')
+                .select('timestamp, status')
+                .gte('timestamp', todayStr)
+                .order('timestamp', { ascending: true });
+
+            if (error) {
+                console.error("일간 데이터 로드 실패:", error);
+                return;
+            }
+
+            let normal = 0, caution = 0, danger = 0, absent = 0;
+            const timelineMap = {};
+
+            // 로그 데이터를 분석 및 집계
+            data.forEach(log => {
+                // 파이 차트용 집계
+                if (log.status === 'NORMAL') normal++;
+                else if (log.status === 'CAUTION') caution++;
+                else if (log.status === 'DANGER') danger++;
+                else if (log.status === 'ABSENT') absent++;
+
+                // 타임라인용 집계 (시간별)
+                const dateObj = new Date(log.timestamp);
+                const hourLabel = `${dateObj.getHours().toString().padStart(2, '0')}:00`;
+
+                if (!timelineMap[hourLabel]) {
+                    timelineMap[hourLabel] = { NORMAL: 0, CAUTION: 0, DANGER: 0, ABSENT: 0 };
+                }
+                timelineMap[hourLabel][log.status]++;
+            });
+
+            // 파이 차트 업데이트
+            if (window.pieChartObj) {
+                window.pieChartObj.data.datasets[0].data = [normal, caution, danger, absent];
+                window.pieChartObj.update();
+            }
+
+            // 타임라인 차트 업데이트
+            if (window.timelineChartObj) {
+                const labels = Object.keys(timelineMap).sort();
+                window.timelineChartObj.data.labels = labels;
+
+                window.timelineChartObj.data.datasets = [
+                    { label: 'NORMAL', data: labels.map(l => timelineMap[l].NORMAL), backgroundColor: '#2ecc71', borderRadius: 4 },
+                    { label: 'CAUTION', data: labels.map(l => timelineMap[l].CAUTION), backgroundColor: '#f1c40f', borderRadius: 4 },
+                    { label: 'DANGER', data: labels.map(l => timelineMap[l].DANGER), backgroundColor: '#e74c3c', borderRadius: 4 },
+                    { label: 'ABSENT', data: labels.map(l => timelineMap[l].ABSENT), backgroundColor: '#95a5a6', borderRadius: 4 }
+                ];
+                window.timelineChartObj.update();
+            }
+
+            // 가장 비중이 높은 상태를 기준으로 피드백 업데이트
+            if (window.updateFeedbackUI) {
+                window.updateFeedbackUI(normal, caution, danger);
+            }
+        };
+    </script>
 </body>
 
 </html>
