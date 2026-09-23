@@ -20,6 +20,12 @@
 | `state.schema.json` | 분석 → 서버 → UI | `fusion` → `server` → `web`, `feedback` |
 | `feedback.schema.json` | 서버 → 액추에이터 | `server` → `chair`(진동), `feedback/ambient_led`, `web` |
 | `report.schema.json` | DB → 서버 → 프론트 | `db/report` → `server` → `web` |
+| `state_history.schema.json` | DB → 서버 → 프론트 | `state_logs` → `server` → `web` |
+
+`state_history`의 stream은 현재 `state_logs.user_id`가 `NULL`인 Demo 단계이므로
+`user_name + device_id`로 임시 식별합니다. 향후 인증과 `user_id` 저장이 연결되면
+인증된 `user_id` 기준으로 변경될 수 있습니다. Front는 Supabase를 직접 조회하지 않고
+Backend의 `GET /api/state/history`만 사용합니다.
 
 ## 왜 `t` 와 `source` 가 필수인가
 

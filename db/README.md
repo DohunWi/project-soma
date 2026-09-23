@@ -48,6 +48,11 @@ DBWriter queue는 최대 2000건이며 producer는 `put_nowait`만 사용합니�
 중복 INSERT를 막습니다. `user_id`는 현재 payload에 없으므로 nullable이며 임의 UUID를
 생성하지 않습니다. 현재 식별값은 `user_name`과 `device_id`입니다.
 
+> TODO: Demo에서 같은 `user_name + device_id`를 반복 사용하면 서로 다른 실행의
+> snapshot이 하나의 History stream에 포함될 수 있습니다. 현재 단계에서는 오류로
+> 취급하거나 API contract와 DB schema를 바꾸지 않습니다. 향후 세션 경계를 명확히
+> 해야 할 때 `session_id` 도입과 기존 행 처리 방식을 함께 검토합니다.
+
 ## enum
 
 ```

@@ -1,5 +1,6 @@
 """Chair → server → fusion → state 실시간 경로 테스트."""
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -9,11 +10,13 @@ sys.path.insert(0, str(ROOT))
 
 from server.app import (  # noqa: E402
     STATE_VALIDATOR,
+    STATE_HISTORY_VALIDATOR,
     ChairPipeline,
     PayloadError,
     create_app,
 )
 from server.config import DEMO_PROFILE, NORMAL_PROFILE  # noqa: E402
+from server.state_history import HistoryUnavailable  # noqa: E402
 from tools.mock.stream import build, chair_sample  # noqa: E402
 
 
@@ -43,6 +46,31 @@ def emitted_states(socketio, app, payload):
     producer.disconnect()
     front.disconnect()
     return events
+
+
+class RecordingHistoryReader:
+    def __init__(self, *, baseline=None, states=None, error=None):
+        self.baseline = baseline
+        self.states = states or []
+        self.error = error
+        self.calls = []
+
+    def fetch(self, user_name, device_id, start, end):
+        self.calls.append((user_name, device_id, start, end))
+        if self.error is not None:
+            raise self.error
+        return self.baseline, self.states
+
+
+def history_snapshot(measured_at="2026-09-23T02:59:59Z"):
+    return {
+        "measured_at": measured_at,
+        "state": "NORMAL",
+        "score": 90,
+        "confidence": 0.45,
+        "reasons": [],
+        "metrics": {"balance": "CENTER", "static_hold_sec": 3.0},
+    }
 
 
 def test_normal_chair_payload_without_vision_creates_state():
@@ -89,6 +117,104 @@ def test_socketio_emits_state_without_supabase(monkeypatch):
     assert len(states) == 1
     assert states[0]["state"] == "NORMAL"
     assert app.extensions["state_persistence"] is None
+
+
+def test_history_endpoint_defaults_to_recent_five_minutes():
+    now = datetime(2026, 9, 23, 3, 5, tzinfo=timezone.utc)
+    reader = RecordingHistoryReader(
+        baseline=history_snapshot(),
+        states=[history_snapshot("2026-09-23T03:00:00Z")],
+    )
+    app, _socketio = create_app(
+        testing=True,
+        history_reader=reader,
+        history_now=lambda: now,
+    )
+
+    response = app.test_client().get(
+        "/api/state/history?user_name=guest&device_id=chair-1"
+    )
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert body["period"] == {
+        "start": "2026-09-23T03:00:00Z",
+        "end": "2026-09-23T03:05:00Z",
+    }
+    assert body["baseline"]["measured_at"] == "2026-09-23T02:59:59Z"
+    assert len(body["states"]) == 1
+    assert STATE_HISTORY_VALIDATOR.is_valid(body)
+    assert reader.calls[0][:2] == ("guest", "chair-1")
+
+
+def test_history_endpoint_accepts_explicit_sixty_minute_period():
+    reader = RecordingHistoryReader()
+    app, _socketio = create_app(testing=True, history_reader=reader)
+
+    response = app.test_client().get(
+        "/api/state/history",
+        query_string={
+            "user_name": "guest",
+            "device_id": "chair-1",
+            "start": "2026-09-23T02:00:00Z",
+            "end": "2026-09-23T03:00:00Z",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()["states"] == []
+    assert "baseline" not in response.get_json()
+
+
+@pytest.mark.parametrize(
+    "query_string",
+    [
+        {},
+        {"user_name": "guest", "device_id": "chair-1", "start": "2026-09-23"},
+        {
+            "user_name": "guest",
+            "device_id": "chair-1",
+            "start": "2026-09-23T01:59:59Z",
+            "end": "2026-09-23T03:00:00Z",
+        },
+    ],
+)
+def test_history_endpoint_rejects_invalid_request(query_string):
+    app, _socketio = create_app(
+        testing=True,
+        history_reader=RecordingHistoryReader(),
+    )
+
+    response = app.test_client().get(
+        "/api/state/history",
+        query_string=query_string,
+    )
+
+    assert response.status_code == 400
+
+
+def test_history_database_failure_is_503_and_realtime_still_emits():
+    reader = RecordingHistoryReader(
+        error=HistoryUnavailable("credentials rejected: secret"),
+    )
+    app, socketio = create_app(testing=True, history_reader=reader)
+
+    response = app.test_client().get(
+        "/api/state/history?user_name=guest&device_id=chair-1"
+    )
+    states = emitted_states(socketio, app, chair_payload())
+
+    assert response.status_code == 503
+    assert response.get_json() == {
+        "v": 1,
+        "status": "error",
+        "error": {
+            "code": "history_unavailable",
+            "message": "최근 상태 기록을 불러올 수 없습니다.",
+        },
+    }
+    assert "secret" not in response.get_data(as_text=True)
+    assert states[-1]["state"] == "NORMAL"
 
 
 def test_state_emit_happens_before_persistence_enqueue():

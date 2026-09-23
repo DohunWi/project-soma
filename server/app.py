@@ -3,9 +3,9 @@
 수집 계층의 ``sensor_data`` 를 계약으로 검증하고, Chair 샘플을 메모리의
 ``FusionState`` 에 반영한 뒤 ``state`` 이벤트를 즉시 발행합니다.
 
-실시간 경로는 Supabase와 독립적입니다. DB 관련 API를 호출할 때만 Supabase
-클라이언트를 지연 생성하므로 DB 설정이나 인터넷 연결이 없어도 Chair → Front
-경로는 계속 동작합니다.
+실시간 경로는 Supabase와 독립적입니다. DB 연결은 해당 HTTP API 요청 안에서만
+지연 생성하므로 DB 설정이나 인터넷 연결이 없어도 Chair → Front 경로는 계속
+동작합니다.
 """
 import logging
 import os
@@ -26,6 +26,13 @@ if str(ROOT) not in sys.path:
 from fusion.state import FusionState, step  # noqa: E402
 from server.config import DEMO_PROFILE, RuntimeProfile, load_runtime_profile  # noqa: E402
 from server.db_writer import DBWriter  # noqa: E402
+from server.state_history import (  # noqa: E402
+    HistoryRequestError,
+    HistoryUnavailable,
+    StateHistoryReader,
+    resolve_history_period,
+    utc_iso8601,
+)
 from server.state_persistence import StatePersistence  # noqa: E402
 
 try:
@@ -39,7 +46,9 @@ log = logging.getLogger("soma.server")
 
 SENSOR_SCHEMA_PATH = ROOT / "docs" / "contracts" / "sensor_data.schema.json"
 STATE_SCHEMA_PATH = ROOT / "docs" / "contracts" / "state.schema.json"
+STATE_HISTORY_SCHEMA_PATH = ROOT / "docs" / "contracts" / "state_history.schema.json"
 _AUTO_PERSISTENCE = object()
+_AUTO_HISTORY_READER = object()
 
 
 def _load_validator(path):
@@ -53,6 +62,7 @@ def _load_validator(path):
 
 SENSOR_VALIDATOR = _load_validator(SENSOR_SCHEMA_PATH)
 STATE_VALIDATOR = _load_validator(STATE_SCHEMA_PATH)
+STATE_HISTORY_VALIDATOR = _load_validator(STATE_HISTORY_SCHEMA_PATH)
 
 
 class PayloadError(ValueError):
@@ -141,6 +151,8 @@ def create_app(
     testing=False,
     runtime_profile: RuntimeProfile | None = None,
     state_persistence=_AUTO_PERSISTENCE,
+    history_reader=_AUTO_HISTORY_READER,
+    history_now=None,
 ):
     profile = runtime_profile or load_runtime_profile()
     app = Flask(__name__)
@@ -172,6 +184,9 @@ def create_app(
     app.extensions["runtime_profile"] = profile
     app.extensions["state_persistence"] = persistence
     app.extensions["db_writer"] = db_writer
+    if history_reader is _AUTO_HISTORY_READER:
+        history_reader = StateHistoryReader()
+    app.extensions["state_history_reader"] = history_reader
 
     def token_required(function):
         @wraps(function)
@@ -198,6 +213,79 @@ def create_app(
     @app.get("/api/health")
     def health():
         return jsonify({"status": "ok", "realtime": True})
+
+    @app.get("/api/state/history")
+    def get_state_history():
+        # Demo-only stream identity: state_logs.user_id is currently NULL.
+        # Replace this with authenticated user_id filtering when identity wiring lands.
+        user_name = (request.args.get("user_name") or "").strip()
+        device_id = (request.args.get("device_id") or "").strip()
+        if not user_name or not device_id:
+            return jsonify({
+                "v": 1,
+                "status": "error",
+                "error": {
+                    "code": "invalid_request",
+                    "message": "user_name과 device_id가 필요합니다.",
+                },
+            }), 400
+
+        try:
+            start, end = resolve_history_period(
+                request.args.get("start"),
+                request.args.get("end"),
+                now=history_now() if history_now is not None else None,
+            )
+        except HistoryRequestError as error:
+            return jsonify({
+                "v": 1,
+                "status": "error",
+                "error": {"code": "invalid_time_range", "message": str(error)},
+            }), 400
+
+        try:
+            baseline, states = history_reader.fetch(
+                user_name,
+                device_id,
+                start,
+                end,
+            )
+        except HistoryUnavailable as error:
+            log.warning("state history 조회 실패: %s", error)
+            return jsonify({
+                "v": 1,
+                "status": "error",
+                "error": {
+                    "code": "history_unavailable",
+                    "message": "최근 상태 기록을 불러올 수 없습니다.",
+                },
+            }), 503
+
+        response = {
+            "v": 1,
+            "status": "success",
+            "stream": {"user_name": user_name, "device_id": device_id},
+            "period": {
+                "start": utc_iso8601(start),
+                "end": utc_iso8601(end),
+            },
+            "states": states,
+        }
+        if baseline is not None:
+            response["baseline"] = baseline
+
+        message = _validation_message(STATE_HISTORY_VALIDATOR, response)
+        if message:
+            log.error("state history 응답 계약 위반: %s", message)
+            return jsonify({
+                "v": 1,
+                "status": "error",
+                "error": {
+                    "code": "invalid_history_response",
+                    "message": "최근 상태 응답을 만들 수 없습니다.",
+                },
+            }), 500
+        return jsonify(response)
 
     @app.post("/api/measurement/start")
     @token_required
