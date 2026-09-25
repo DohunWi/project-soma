@@ -548,6 +548,7 @@ def test_new_session_resets_accumulated_fusion_state():
         if event["name"] == "state"
     ]
     assert first_states[-1]["state"] == "CAUTION"
+    assert first_states[-1]["score"] == 95
 
     http.post("/api/measurement/stop", headers=headers)
     restarted = http.post("/api/measurement/start", headers=headers)
@@ -563,6 +564,7 @@ def test_new_session_resets_accumulated_fusion_state():
 
     assert restarted.status_code == 201
     assert restarted_states[-1]["state"] == "NORMAL"
+    assert restarted_states[-1]["score"] == 100
     assert restarted_states[-1]["metrics"]["static_hold_sec"] == 0.0
     assert restarted_states[-1]["metrics"]["session_sec"] == 0.0
 

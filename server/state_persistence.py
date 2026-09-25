@@ -3,14 +3,23 @@ import threading
 import uuid
 from datetime import datetime, timezone
 
+from fusion.config import SOMA_LOAD_MODEL_VERSION
+
 
 class StatePersistence:
     """Track the last enqueued snapshot independently for each logical stream."""
 
-    def __init__(self, writer, snapshot_interval_sec, uuid_factory=uuid.uuid4):
+    def __init__(
+        self,
+        writer,
+        snapshot_interval_sec,
+        uuid_factory=uuid.uuid4,
+        score_model_version=SOMA_LOAD_MODEL_VERSION,
+    ):
         self.writer = writer
         self.snapshot_interval_sec = snapshot_interval_sec
         self._uuid_factory = uuid_factory
+        self.score_model_version = score_model_version
         self._last_snapshots = {}
         self._lock = threading.Lock()
 
@@ -70,6 +79,7 @@ class StatePersistence:
             "trigger": trigger,
             "state": decision["state"],
             "score": decision["score"],
+            "score_model_version": self.score_model_version,
             "confidence": decision["confidence"],
             "reasons": list(decision.get("reasons") or []),
             "balance": metrics.get("balance"),

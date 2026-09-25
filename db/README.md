@@ -84,6 +84,10 @@ report_period    DAILY | WEEKLY | SESSION
 장애 후 늦게 저장된 행은 `created_at`이 늦어져도 `measured_at`을 원래 측정 시각으로
 유지해야 합니다.
 
+`migrations/005_add_state_logs_score_model_version.sql`은 기존 행을 변경하지 않고 nullable
+`score_model_version`만 추가합니다. SOMA Load Model v1으로 새로 저장하는 행은
+`soma_load_v1`을 기록하며, migration 이전 행은 모델을 추정하지 않고 NULL로 보존합니다.
+
 ### legacy 테이블
 
 `time` / `timestamp` 컬럼은 **`timestamp without time zone` + KST 로컬**입니다.

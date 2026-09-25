@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from server.config import DEMO_PROFILE, NORMAL_PROFILE  # noqa: E402
+from fusion.config import SOMA_LOAD_MODEL_VERSION  # noqa: E402
 from server.state_persistence import StatePersistence  # noqa: E402
 
 USER_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
@@ -163,6 +164,7 @@ def test_chair_only_row_has_authenticated_identity_and_null_vision_fields():
     assert row["session_id"] == str(SESSION_ID)
     assert row["blink_rate"] is None
     assert row["face_distance_cm"] is None
+    assert row["score_model_version"] == SOMA_LOAD_MODEL_VERSION
 
 
 def test_vision_metrics_are_copied_when_present():

@@ -5,23 +5,40 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from fusion.config import DEMO_FUSION_TIMING, NORMAL_FUSION_TIMING  # noqa: E402
+from fusion.config import (  # noqa: E402
+    DEMO_FUSION_TIMING,
+    DEMO_SOMA_LOAD_CONFIG,
+    NORMAL_FUSION_TIMING,
+    NORMAL_SOMA_LOAD_CONFIG,
+)
 from fusion.state import FusionState, step  # noqa: E402
 
 SEATED = [900, 700, 1000, 910]
 EMPTY  = [1, 1, 1, 1]
 
 
-def run(samples, t0=1000.0, dt=1.0, timing=DEMO_FUSION_TIMING):
+def run(
+    samples,
+    t0=1000.0,
+    dt=1.0,
+    timing=DEMO_FUSION_TIMING,
+    load_config=DEMO_SOMA_LOAD_CONFIG,
+):
     st, d = FusionState(), None
     t = t0
     for s in samples:
-        st, d = step(st, s, t, timing=timing)
+        st, d = step(st, s, t, timing=timing, load_config=load_config)
         t += dt
     return st, d
 
 
-def run_elapsed(builder, elapsed, timing=DEMO_FUSION_TIMING, t0=1000.0):
+def run_elapsed(
+    builder,
+    elapsed,
+    timing=DEMO_FUSION_TIMING,
+    load_config=DEMO_SOMA_LOAD_CONFIG,
+    t0=1000.0,
+):
     """Feed one sample per second, including both endpoints."""
     st, decision = FusionState(), None
     for offset in range(int(elapsed) + 1):
@@ -30,6 +47,7 @@ def run_elapsed(builder, elapsed, timing=DEMO_FUSION_TIMING, t0=1000.0):
             builder(offset),
             t0 + offset,
             timing=timing,
+            load_config=load_config,
         )
     return st, decision
 
@@ -315,3 +333,106 @@ def test_검출률이_낮으면_신뢰도가_낮다():
     _, dp = run([poor])
     assert dg["confidence"] > dp["confidence"]
     assert dp["confidence"] < 0.55
+
+
+@pytest.mark.parametrize(
+    ("elapsed", "penalty", "score"),
+    [(5, 0.0, 100), (10, 5.0, 95), (20, 10.0, 90), (60, 25.0, 75)],
+)
+def test_demo_static_load_boundaries(elapsed, penalty, score):
+    st, decision = run_elapsed(
+        lambda _offset: sample(pressure=[850, 850, 850, 850]), elapsed
+    )
+    assert st.load.static_penalty == penalty
+    assert decision["score"] == score
+
+
+def test_normal_static_load_curve_is_selected_explicitly():
+    st, decision = run_elapsed(
+        lambda _offset: sample(pressure=[850, 850, 850, 850]),
+        600,
+        timing=NORMAL_FUSION_TIMING,
+        load_config=NORMAL_SOMA_LOAD_CONFIG,
+    )
+    assert st.load.static_penalty == 5.0
+    assert decision["score"] == 95
+
+
+def test_state_and_score_are_independent_during_recovery():
+    st, decision = run_elapsed(
+        lambda _offset: sample(pressure=[850, 850, 850, 850]), 10
+    )
+    assert decision["state"] == "CAUTION"
+    assert decision["score"] == 95
+
+    st, decision = step(
+        st,
+        sample(pressure=[1050, 1050, 1050, 1050]),
+        1011.0,
+    )
+    assert decision["state"] == "NORMAL"
+    assert decision["score"] == 98
+    assert st.load.static_penalty == 2.5
+
+
+def test_balance_penalty_accumulates_then_recovers_at_center():
+    def moving_left(offset):
+        delta = 50 if offset % 2 else 0
+        return sample(pressure=[1000 + delta, 700 + delta, 1000 + delta, 700 + delta])
+
+    st, decision = run_elapsed(moving_left, 10)
+    assert st.load.balance_penalty == 10.0
+    assert decision["score"] == 90
+
+    st, decision = step(st, sample(pressure=[850, 850, 850, 850]), 1011.0)
+    assert st.balance == "CENTER"
+    assert st.load.balance_penalty == pytest.approx(10 - 25 / 6)
+    assert decision["score"] == 94
+
+
+def test_absent_resets_continuous_state_but_retains_recovering_load():
+    st, _ = run_elapsed(
+        lambda _offset: sample(pressure=[850, 850, 850, 850]), 20
+    )
+    assert st.load.static_penalty == 10.0
+
+    st, decision = step(st, sample(pressure=EMPTY), 1021.0)
+    assert decision["state"] == "ABSENT"
+    assert st.static_hold_sec == 0.0
+    assert st.load.static_penalty == 7.5
+    assert decision["score"] == 93
+
+
+def test_invalid_time_gap_and_clock_reversal_do_not_advance_load():
+    st, _ = run_elapsed(
+        lambda _offset: sample(pressure=[850, 850, 850, 850]), 20
+    )
+    before = st.load
+
+    st, _ = step(st, sample(), 5000.0)
+    assert st.load == before
+    st, _ = step(st, sample(), 4999.0)
+    assert st.load == before
+
+
+def test_first_sample_has_zero_dt_and_new_state_has_no_penalty():
+    initial = FusionState()
+    assert initial.load.static_penalty == 0.0
+    assert initial.load.balance_penalty == 0.0
+
+    st, decision = step(initial, sample(pressure=[850, 850, 850, 850]), 1000.0)
+    assert st.static_hold_sec == 0.0
+    assert st.load.static_penalty == 0.0
+    assert decision["score"] == 100
+
+
+def test_large_gap_while_absent_is_not_assumed_to_be_a_break():
+    st, _ = run_elapsed(
+        lambda _offset: sample(pressure=[850, 850, 850, 850]), 20
+    )
+    before = st.load.static_penalty
+
+    st, decision = step(st, sample(pressure=EMPTY), 2000.0)
+    assert decision["state"] == "ABSENT"
+    assert st.load.static_penalty == before
+    assert st.load.absent_sec == 0.0

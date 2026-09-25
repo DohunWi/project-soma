@@ -94,10 +94,15 @@ def _validation_message(validator, payload):
 class ChairPipeline:
     """단일 실제 Chair의 FusionState를 메모리에 유지하는 처리 계층."""
 
-    def __init__(self, timing=DEMO_PROFILE.fusion):
+    def __init__(
+        self,
+        timing=DEMO_PROFILE.fusion,
+        load_config=DEMO_PROFILE.load,
+    ):
         self._state = FusionState()
         self._lock = threading.Lock()
         self._timing = timing
+        self._load_config = load_config
 
     def validate(self, payload):
         """Validate sensor_data without advancing Fusion state."""
@@ -132,6 +137,7 @@ class ChairPipeline:
                 sample,
                 payload["t"],
                 timing=self._timing,
+                load_config=self._load_config,
             )
             message = _validation_message(STATE_VALIDATOR, decision)
             if message:
@@ -192,7 +198,7 @@ def create_app(
         logger=False,
         engineio_logger=False,
     )
-    pipeline = ChairPipeline(profile.fusion)
+    pipeline = ChairPipeline(profile.fusion, profile.load)
     verifier = auth_verifier or SupabaseAuthVerifier()
     sessions = session_registry or MeasurementSessionRegistry()
     measurement_lock = threading.RLock()

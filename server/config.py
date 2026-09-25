@@ -2,7 +2,14 @@
 import os
 from dataclasses import dataclass
 
-from fusion.config import DEMO_FUSION_TIMING, NORMAL_FUSION_TIMING, FusionTiming
+from fusion.config import (
+    DEMO_FUSION_TIMING,
+    DEMO_SOMA_LOAD_CONFIG,
+    NORMAL_FUSION_TIMING,
+    NORMAL_SOMA_LOAD_CONFIG,
+    FusionTiming,
+    SomaLoadConfig,
+)
 
 
 class ProfileConfigError(ValueError):
@@ -22,18 +29,21 @@ class RuntimeProfile:
 
     name: str
     fusion: FusionTiming
+    load: SomaLoadConfig
     storage: StoragePolicy
 
 
 DEMO_PROFILE = RuntimeProfile(
     name="demo",
     fusion=DEMO_FUSION_TIMING,
+    load=DEMO_SOMA_LOAD_CONFIG,
     storage=StoragePolicy(db_snapshot_interval_sec=5.0),
 )
 
 NORMAL_PROFILE = RuntimeProfile(
     name="normal",
     fusion=NORMAL_FUSION_TIMING,
+    load=NORMAL_SOMA_LOAD_CONFIG,
     storage=StoragePolicy(db_snapshot_interval_sec=30.0),
 )
 

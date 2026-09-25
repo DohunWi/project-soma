@@ -13,7 +13,7 @@
     "confidence": { "type": "number", "minimum": 0, "maximum": 1,
                     "description": "0.5 미만이면 피드백을 올리지 않습니다 (조용해지는 방향으로만)" },
     "score":      { "type": "integer", "minimum": 0, "maximum": 100,
-                    "description": "대시보드 표시용. 계산은 fusion 이 합니다" },
+                    "description": "Fusion의 관측 부하 인지용 SOMA Load 점수(100에서 penalty를 차감한 정수). 의료·질병 위험·자세 정답 점수가 아니며 state와 독립적으로 계산합니다." },
 
     "reasons": {
       "type": "array",

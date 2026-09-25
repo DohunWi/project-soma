@@ -19,7 +19,13 @@ fusion/state.py
 from dataclasses import dataclass, field, replace
 from typing import Optional
 
-from fusion.config import DEMO_FUSION_TIMING, FusionTiming
+from fusion.config import (
+    DEMO_FUSION_TIMING,
+    DEMO_SOMA_LOAD_CONFIG,
+    FusionTiming,
+    SomaLoadConfig,
+)
+from fusion.load import SomaLoadState, score_integer, update_chair_load
 
 # ── 임계값 ───────────────────────────────────────────────────────────────────
 # 전부 추정치입니다. 실측 데이터로 재조정하기 전까지 확정값으로 쓰지 마세요.
@@ -50,6 +56,7 @@ class FusionState:
 
     static_total:    float = 0.0   # 세션 누적. 리포트용, 리셋 없음
     balance:         str = "CENTER"
+    load:            SomaLoadState = field(default_factory=SomaLoadState)
 
     _last_pressure:  tuple = field(default=())
 
@@ -82,6 +89,7 @@ def step(
     now: float,
     *,
     timing: FusionTiming = DEMO_FUSION_TIMING,
+    load_config: SomaLoadConfig = DEMO_SOMA_LOAD_CONFIG,
 ):
     """
     Args:
@@ -101,13 +109,24 @@ def step(
     pressure = list(s.get("pressure") or [])
     seated   = len(pressure) == 4 and sum(pressure) >= OCCUPANCY_MIN
 
-    # ── 자리 비움: 연속 누적값을 전부 리셋합니다 ────────────────────────────
+    # ── 자리 비움: State 연속값은 리셋하고 Load memory는 회복시킵니다 ───────
     if not seated:
+        load = update_chair_load(
+            st.load,
+            previous_static_sec=st.static_hold_sec,
+            static_sec=0.0,
+            previous_imbalance_sec=st.imbalance_sec,
+            imbalance_sec=0.0,
+            balance="CENTER",
+            seated=False,
+            dt=dt,
+            config=load_config,
+        )
         st2 = replace(
             st, last_t=now, seated=False,
             low_blink_sec=0.0, static_hold_sec=0.0,
             close_dist_sec=0.0, imbalance_sec=0.0,
-            balance="CENTER", _last_pressure=(),
+            balance="CENTER", load=load, _last_pressure=(),
         )
         return st2, _decision(st2, s, now, "ABSENT", 1.0, [])
 
@@ -141,11 +160,23 @@ def step(
     else:
         close_dist = st.close_dist_sec
 
+    load = update_chair_load(
+        st.load,
+        previous_static_sec=st.static_hold_sec,
+        static_sec=static_hold,
+        previous_imbalance_sec=st.imbalance_sec,
+        imbalance_sec=imbalance_sec,
+        balance=balance,
+        seated=True,
+        dt=dt,
+        config=load_config,
+    )
+
     st2 = replace(
         st, last_t=now, seated=True, session_start=session_start,
         balance=balance, imbalance_sec=imbalance_sec,
         static_hold_sec=static_hold, static_total=static_total,
-        low_blink_sec=low_blink, close_dist_sec=close_dist,
+        low_blink_sec=low_blink, close_dist_sec=close_dist, load=load,
         _last_pressure=tuple(pressure),
     )
 
@@ -187,7 +218,7 @@ def step(
 
 
 def _decision(st, s, now, state, confidence, reasons):
-    score = {"NORMAL": 90, "CAUTION": 60, "DANGER": 30, "ABSENT": 0}[state]
+    score = score_integer(st.load)
     metrics = {
         "balance":         st.balance,
         "seated":          st.seated,

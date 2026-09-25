@@ -47,3 +47,10 @@ def test_invalid_soma_mode_raises_clear_error(monkeypatch, value):
 def test_runtime_profiles_include_reserved_storage_intervals():
     assert DEMO_PROFILE.storage.db_snapshot_interval_sec == 5.0
     assert NORMAL_PROFILE.storage.db_snapshot_interval_sec == 30.0
+
+
+def test_runtime_profiles_select_independent_load_time_scales():
+    assert DEMO_PROFILE.load.static_recovery_sec == 10.0
+    assert DEMO_PROFILE.load.balance_recovery_sec == 6.0
+    assert NORMAL_PROFILE.load.static_recovery_sec == 600.0
+    assert NORMAL_PROFILE.load.balance_recovery_sec == 180.0

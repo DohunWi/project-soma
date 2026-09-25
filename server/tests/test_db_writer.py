@@ -60,6 +60,7 @@ def state_log_row(event_id="event-1"):
         "trigger": "state_change",
         "state": "NORMAL",
         "score": 90,
+        "score_model_version": "soma_load_v1",
         "confidence": 0.45,
         "reasons": [],
         "balance": "CENTER",
@@ -95,6 +96,7 @@ def test_successful_state_log_insert_runs_in_worker():
     assert "ON CONFLICT (event_id) DO NOTHING" in sql
     assert params[0] == "event-1"
     assert params[2] == "22222222-2222-4222-8222-222222222222"
+    assert params[-1] == "soma_load_v1"
     assert database.commits == 1
 
 
