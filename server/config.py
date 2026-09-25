@@ -24,6 +24,14 @@ class StoragePolicy:
 
 
 @dataclass(frozen=True)
+class SensorMergePolicy:
+    """Source freshness rules shared by every runtime profile."""
+
+    vision_freshness_sec: float
+    vision_max_skew_sec: float
+
+
+@dataclass(frozen=True)
 class RuntimeProfile:
     """Independent Fusion and storage settings selected for one server run."""
 
@@ -31,6 +39,12 @@ class RuntimeProfile:
     fusion: FusionTiming
     load: SomaLoadConfig
     storage: StoragePolicy
+
+
+DEFAULT_SENSOR_MERGE_POLICY = SensorMergePolicy(
+    vision_freshness_sec=3.0,
+    vision_max_skew_sec=3.0,
+)
 
 
 DEMO_PROFILE = RuntimeProfile(

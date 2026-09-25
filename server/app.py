@@ -1,8 +1,9 @@
 """Project Soma 실시간 백엔드.
 
 수집 계층의 ``sensor_data`` 를 항상 계약으로 검증합니다. 인증 사용자의 measurement가
-ACTIVE일 때만 Chair 샘플을 새 ``FusionState`` 에 반영하고 사용자 room에 ``state``를
-발행한 뒤 비동기 persistence를 시도합니다.
+ACTIVE일 때 Vision은 session cache를 갱신하고, Chair tick은 fresh Vision과 병합한 값을
+새 ``FusionState`` 에 반영합니다. 결정은 사용자 room에 발행한 뒤 비동기 persistence를
+시도합니다.
 
 실시간 경로는 Supabase와 독립적입니다. snapshot 저장은 비동기 DBWriter로 넘기고
 History DB 조회는 해당 HTTP 요청에서만 수행하므로, DB 설정이나 인터넷 연결이 없어도
@@ -32,7 +33,12 @@ from server.auth import (  # noqa: E402
     SupabaseAuthVerifier,
     bearer_token,
 )
-from server.config import DEMO_PROFILE, RuntimeProfile, load_runtime_profile  # noqa: E402
+from server.config import (  # noqa: E402
+    DEFAULT_SENSOR_MERGE_POLICY,
+    DEMO_PROFILE,
+    RuntimeProfile,
+    load_runtime_profile,
+)
 from server.db_writer import DBWriter  # noqa: E402
 from server.measurement_sessions import (  # noqa: E402
     MeasurementInUse,
@@ -47,6 +53,7 @@ from server.state_history import (  # noqa: E402
     utc_iso8601,
 )
 from server.state_persistence import StatePersistence  # noqa: E402
+from server.sensor_merge import SessionSensorCache  # noqa: E402
 
 try:
     from dotenv import load_dotenv
@@ -92,17 +99,25 @@ def _validation_message(validator, payload):
 
 
 class ChairPipeline:
-    """단일 실제 Chair의 FusionState를 메모리에 유지하는 처리 계층."""
+    """Chair-authoritative Fusion state with a session-scoped Vision cache."""
 
     def __init__(
         self,
         timing=DEMO_PROFILE.fusion,
         load_config=DEMO_PROFILE.load,
+        merge_policy=DEFAULT_SENSOR_MERGE_POLICY,
+        monotonic=None,
     ):
         self._state = FusionState()
         self._lock = threading.Lock()
         self._timing = timing
         self._load_config = load_config
+        cache_kwargs = {} if monotonic is None else {"monotonic": monotonic}
+        self._sensor_cache = SessionSensorCache(merge_policy, **cache_kwargs)
+
+    @property
+    def sensor_cache(self):
+        return self._sensor_cache
 
     def validate(self, payload):
         """Validate sensor_data without advancing Fusion state."""
@@ -111,27 +126,20 @@ class ChairPipeline:
             raise PayloadError(f"sensor_data 계약 위반: {message}")
 
     def process(self, payload):
-        """Validate and convert one Chair payload to a state decision.
-
-        Vision은 이번 단계의 처리 대상이 아닙니다. 유효한 Vision payload는
-        오류로 취급하지 않고 ``None`` 을 반환해 독립 source 확장을 보존합니다.
-        """
+        """Validate and process one source event using Chair-authoritative ticks."""
         self.validate(payload)
         return self.process_validated(payload)
 
     def process_validated(self, payload):
         """Advance Fusion for one payload already checked against the contract."""
-        if payload["source"] != "chair":
-            return None
-
-        chair = payload["chair"]
-        sample = {
-            "pressure": chair["pressure"],
-            "ir": chair.get("ir", []),
-            "user_name": payload["user_name"],
-        }
-
         with self._lock:
+            if payload["source"] == "vision":
+                self._sensor_cache.update_vision(payload)
+                return None
+
+            sample = self._sensor_cache.merged_chair_sample(payload)
+            if sample is None:
+                return None
             current, decision = step(
                 self._state,
                 sample,
@@ -143,12 +151,19 @@ class ChairPipeline:
             if message:
                 raise PayloadError(f"state 계약 위반: {message}")
             self._state = current
+            self._sensor_cache.mark_chair_processed(payload)
         return decision
 
     def reset(self):
         """Start a measurement session with no prior accumulated Fusion state."""
         with self._lock:
             self._state = FusionState()
+            self._sensor_cache.reset()
+
+    def clear_cache(self):
+        """Forget source samples immediately when an ACTIVE session stops."""
+        with self._lock:
+            self._sensor_cache.reset()
 
 
 def _cors_origins():
@@ -186,6 +201,8 @@ def create_app(
     auth_verifier=None,
     session_registry=None,
     sensor_auth_token=None,
+    sensor_merge_policy=DEFAULT_SENSOR_MERGE_POLICY,
+    sensor_monotonic=None,
 ):
     profile = runtime_profile or load_runtime_profile()
     app = Flask(__name__)
@@ -198,7 +215,12 @@ def create_app(
         logger=False,
         engineio_logger=False,
     )
-    pipeline = ChairPipeline(profile.fusion, profile.load)
+    pipeline = ChairPipeline(
+        profile.fusion,
+        profile.load,
+        merge_policy=sensor_merge_policy,
+        monotonic=sensor_monotonic,
+    )
     verifier = auth_verifier or SupabaseAuthVerifier()
     sessions = session_registry or MeasurementSessionRegistry()
     measurement_lock = threading.RLock()
@@ -221,6 +243,7 @@ def create_app(
             log.info("DB credentials가 없어 state_logs persistence를 비활성화합니다")
 
     app.extensions["chair_pipeline"] = pipeline
+    app.extensions["sensor_cache"] = pipeline.sensor_cache
     app.extensions["runtime_profile"] = profile
     app.extensions["state_persistence"] = persistence
     app.extensions["db_writer"] = db_writer
@@ -375,6 +398,8 @@ def create_app(
         try:
             with measurement_lock:
                 measurement, already_stopped = sessions.stop(user_id)
+                if not already_stopped:
+                    pipeline.clear_cache()
                 if persistence is not None:
                     persistence.end_session(user_id, measurement.session_id)
         except NoMeasurementSession:
@@ -452,10 +477,6 @@ def create_app(
                     return
                 decision = pipeline.process_validated(payload)
                 if decision is None:
-                    log.debug(
-                        "이번 단계에서 처리하지 않는 source입니다: %s",
-                        payload.get("source"),
-                    )
                     return
 
                 # DB보다 인증 사용자의 Front room이 먼저입니다.

@@ -94,6 +94,13 @@ Vision은 Chair-only 핵심 경로를 막지 않는 선택적 producer입니다.
 capture를 해제하고 backoff를 두어 다시 엽니다. 시연 실행기에서도 Vision만 종료된
 경우 Chair·Backend·대시보드는 계속 실행합니다.
 
+ACTIVE measurement에서 Backend는 최신 Vision payload를 session cache에 보관하지만
+Vision event 자체로 Fusion을 실행하지 않습니다. Chair event가 authoritative tick이며,
+서버 monotonic 수신 나이가 3초 미만이고 Chair/Vision sender `t` 차이도 3초 미만인
+Vision만 Chair sample에 병합합니다. stale Vision은 병합하지 않아 Chair-only 경로를
+유지합니다. 신규 session start는 빈 cache로 시작하고 stop은 cache를 즉시 비우므로,
+OFF 중 도착한 Vision이나 이전 session 값은 다음 session에서 재사용하지 않습니다.
+
 ### 4-3. 왜 깜빡임인가 — 자세 각도 대신
 
 깜빡임은 **사건(event)** 이고 지표는 **빈도(rate)** 입니다.
