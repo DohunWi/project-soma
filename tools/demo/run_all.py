@@ -20,6 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PY = sys.executable
 procs = []
+OPTIONAL_PROCESSES = frozenset({"vision"})
 
 
 def spawn(name, args):
@@ -27,6 +28,24 @@ def spawn(name, args):
     p = subprocess.Popen(args, cwd=ROOT)
     procs.append((name, p))
     return p
+
+
+def find_core_exit(processes, handled_optional):
+    """Return an exited core process, while isolating optional failures."""
+    for name, process in processes:
+        if name in handled_optional:
+            continue
+        if process.poll() is None:
+            continue
+        if name in OPTIONAL_PROCESSES:
+            handled_optional.add(name)
+            print(
+                f"[{name}] 선택 구성요소 종료됨 (code {process.returncode}); "
+                "나머지 시스템은 계속 실행합니다."
+            )
+            continue
+        return name, process
+    return None
 
 
 def main():
@@ -71,11 +90,13 @@ def main():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
+    handled_optional = set()
     while True:
-        for name, p in procs:
-            if p.poll() is not None:
-                print(f"[{name}] 종료됨 (code {p.returncode})")
-                shutdown()
+        exited = find_core_exit(procs, handled_optional)
+        if exited is not None:
+            name, p = exited
+            print(f"[{name}] 종료됨 (code {p.returncode})")
+            shutdown()
         time.sleep(1)
 
 

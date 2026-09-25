@@ -17,9 +17,9 @@ vision/run.py
 """
 import argparse
 import json
+import logging
 import os
 import sys
-import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,8 +43,11 @@ from geometry import face_width_px, is_frontal, yaw_asymmetry   # vision/geometr
 from landmarks import FaceLandmarks                     # vision/landmarks.py
 from payload import vision_payload                      # vision/payload.py
 from quality import FrameQuality                        # vision/quality.py
+from runtime import (CameraManager, FrameResult, StdoutTransport,
+                     VisionSocketTransport, run_guarded, run_vision_loop)
 
 SEND_HZ = 2.0     # 서버 전송 주기. 깜빡임 사건은 발생 즉시 별도로 보냅니다
+LOG = logging.getLogger("soma.vision")
 
 
 def main():
@@ -58,57 +61,77 @@ def main():
     ap.add_argument("--calib-cm", type=float, default=60.0)
     args = ap.parse_args()
 
-    calib = Calibrator(calib_distance_cm=args.calib_cm)
-    if args.recalibrate:
-        calib.start()
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    LOG.info(
+        "Vision starting camera=%d backend=%s mode=%s",
+        args.cam,
+        args.url,
+        "stdout" if args.stdout else "socket",
+    )
 
-    emit = None
-    if not args.stdout:
-        try:
-            import socketio
-        except ImportError:
-            sys.exit("python-socketio 가 없습니다.  pip install -r vision/requirements.txt")
-        sio = socketio.Client()
-        auth = os.getenv("SOCKET_AUTH_TOKEN")
-        sio.connect(args.url, auth={"token": auth} if auth else None)
-        emit = lambda ev: sio.emit("sensor_data", ev)
-        print(f"[vision] 서버 연결: {args.url}", file=sys.stderr)
+    resources = {"camera": None, "detector": None, "transport": None}
 
-    cap = cv2.VideoCapture(args.cam)
-    if not cap.isOpened():
-        sys.exit(f"카메라 {args.cam} 를 열 수 없습니다. --cam 으로 다른 인덱스를 시도하세요.")
-    print(f"[vision] 카메라 {args.cam} 시작", file=sys.stderr)
+    def initialize_and_run():
+        calib = Calibrator(calib_distance_cm=args.calib_cm)
+        if args.recalibrate:
+            calib.start()
 
-    # 카메라가 실제로 열린 뒤에 캘리브레이션을 시작합니다.
-    # 열기 전에 시작하면 3초 창이 카메라 준비 대기에 소모돼 샘플이 1~2개만 모입니다.
-    if not calib.is_done() and not calib.is_calibrating():
-        calib.start()
-
-    # mediapipe 를 직접 부르지 않습니다 — vision/landmarks.py 가 유일한 창구입니다
-    try:
-        det = FaceLandmarks()
-    except ImportError:
-        sys.exit("mediapipe 가 없습니다.  pip install -r vision/requirements.txt")
-    print(f"[vision] 랜드마크 백엔드: {det.backend}", file=sys.stderr)
-
-    counter = BlinkCounter()
-    quality = FrameQuality()
-    last_send = 0.0
-
-    def send(ev):
-        if emit:
-            emit(ev)
+        if args.stdout:
+            transport = StdoutTransport(
+                lambda event: print(
+                    json.dumps(event, ensure_ascii=False), flush=True
+                )
+            )
         else:
-            print(json.dumps(ev, ensure_ascii=False), flush=True)
+            try:
+                import socketio
+            except ImportError as exc:
+                raise RuntimeError(
+                    "python-socketio 가 없습니다. "
+                    "pip install -r vision/requirements.txt"
+                ) from exc
+            transport = VisionSocketTransport(
+                socketio.Client(reconnection=False),
+                args.url,
+                os.getenv("SOCKET_AUTH_TOKEN"),
+            )
+        resources["transport"] = transport
 
-    try:
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                time.sleep(0.03)
-                continue
+        # mediapipe 를 직접 부르지 않습니다 — vision/landmarks.py 가 유일한 창구입니다
+        try:
+            det = FaceLandmarks()
+        except ImportError as exc:
+            raise RuntimeError(
+                "mediapipe 가 없습니다. pip install -r vision/requirements.txt"
+            ) from exc
+        resources["detector"] = det
+        LOG.info("Vision detector backend=%s", det.backend)
+        LOG.info(
+            "Vision calibration status=%s",
+            "recalibrating" if args.recalibrate else (
+                "ready" if calib.is_done() else "pending"
+            ),
+        )
 
-            now = time.time()
+        camera = CameraManager(cv2.VideoCapture, args.cam)
+        resources["camera"] = camera
+        transport.start()
+
+        counter = BlinkCounter()
+        quality = FrameQuality()
+        last_send = 0.0
+
+        def process_frame(frame, now):
+            nonlocal last_send
+
+            # 카메라가 실제로 열린 뒤에 캘리브레이션을 시작합니다.
+            # 열기 전에 시작하면 3초 창이 준비 대기에 소모됩니다.
+            if not calib.is_done() and not calib.is_calibrating():
+                calib.start()
+
             pts = det.detect(frame, now)
 
             detected = pts is not None
@@ -155,14 +178,16 @@ def main():
                     yaw_dropped_rate=quality.yaw_dropped_rate(now),
                     calibrating=calib.is_calibrating())
 
+            payloads = []
             # 깜빡임 사건은 즉시 보냅니다 — 초 단위 사건이라 주기 전송에 묻히면 안 됩니다
             if blinked:
-                send(build(True))
+                payloads.append(build(True))
 
             if now - last_send >= 1.0 / SEND_HZ:
                 last_send = now
-                send(build(False))
+                payloads.append(build(False))
 
+            stop = False
             if args.preview:
                 txt = (f"EAR {ear:.3f}  " if ear else "no face  ") + \
                       (f"{dist_cm:.0f}cm  " if dist_cm
@@ -175,17 +200,26 @@ def main():
                             0.6, (0, 255, 0), 2)
                 cv2.imshow("soma vision", frame)
                 if cv2.waitKey(1) & 0xFF == 27:      # ESC
-                    break
+                    stop = True
+            return FrameResult(payloads=payloads, stop=stop)
 
-    except (KeyboardInterrupt, BrokenPipeError):
-        pass
-    finally:
-        cap.release()
-        det.close()
-        if args.preview:
-            cv2.destroyAllWindows()
-        print("\n[vision] 종료", file=sys.stderr)
+        run_vision_loop(camera, process_frame, transport)
+
+    def close_resource(name):
+        resource = resources[name]
+        if resource is not None:
+            resource.close()
+
+    cleanups = [
+        ("camera", lambda: close_resource("camera")),
+        ("detector", lambda: close_resource("detector")),
+        ("socket", lambda: close_resource("transport")),
+    ]
+    if args.preview:
+        cleanups.append(("preview windows", cv2.destroyAllWindows))
+
+    return run_guarded(initialize_and_run, cleanups)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
