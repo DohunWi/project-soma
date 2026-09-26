@@ -62,8 +62,11 @@ def chair_payload(*, t=1000.0, pressure=None, user="test", device="chair-test"):
 
 def emitted_states(socketio, app, payload, *, activate=True):
     if activate and app.extensions["measurement_sessions"].active() is None:
-        app.extensions["measurement_sessions"].start(USER_ID)
+        measurement, _created = app.extensions["measurement_sessions"].start(USER_ID)
         app.extensions["chair_pipeline"].reset()
+        app.extensions["feedback_coordinator"].start_session(
+            measurement.session_id
+        )
     producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
     front = socketio.test_client(app, auth={"token": USER_TOKEN})
     producer.emit("sensor_data", payload)
@@ -317,14 +320,14 @@ def test_state_emit_happens_before_persistence_enqueue():
     original_emit = socketio.emit
 
     def recording_emit(*args, **kwargs):
-        order.append("emit")
+        order.append(args[0])
         return original_emit(*args, **kwargs)
 
     socketio.emit = recording_emit
     states = emitted_states(socketio, app, chair_payload())
 
     assert states[0]["state"] == "NORMAL"
-    assert order == ["emit", "persistence"]
+    assert order == ["state", "feedback", "persistence"]
 
 
 def test_persistence_failure_does_not_prevent_state_emit():

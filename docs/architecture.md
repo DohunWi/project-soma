@@ -338,6 +338,19 @@ Normal의 초기 engineering parameter는 score 60 이하 120초, DANGER 60초, 
 정책의 시간축만 각각 10초, 10초, 60초, 10초, 20초, 30초로 줄입니다. 이 값들은
 의학적·생리학적 기준이 아니며 실제 사용 및 hardware E2E 결과로 조정합니다.
 
+Backend F2 경로는 유효한 Chair tick마다 `Fusion → state 계약 검증 → user room state
+emit → Feedback Coordinator → Feedback Policy → feedback_decision 계약 검증 → 동일 user
+room feedback emit → persistence` 순서로 실행합니다. Feedback의 timestamp는 wall clock이
+아니라 같은 Fusion tick의 Chair `t`입니다. Vision event는 session cache만 갱신하며 Fusion
+또는 Feedback tick을 만들지 않습니다.
+
+현재 feedback decision은 level 변화 때뿐 아니라 매 유효 Chair tick마다 발행합니다. 따라서
+재연결한 consumer도 현재 level을 다시 받을 수 있고, popup과 단발성 개입은 `level=BREAK`
+이면서 `transition=true`일 때만 실행해야 합니다. Feedback Policy·계약 검증·feedback emit의
+실패는 이미 발행된 state나 이후 persistence를 막지 않습니다. Session START는 새 policy
+state를 만들고 duplicate START는 유지하며, STOP은 즉시 폐기합니다. Backend 재시작 뒤
+policy state 복구와 Feedback Nano serial/LED/진동 출력은 아직 연결하지 않았습니다.
+
 ### 7-6. 개입 원칙
 
 1. **정보량 없는 메시지는 무시됩니다.** "자세가 안 좋아요" 는 정보량 0입니다.

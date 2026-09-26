@@ -2,8 +2,8 @@
 
 수집 계층의 ``sensor_data`` 를 항상 계약으로 검증합니다. 인증 사용자의 measurement가
 ACTIVE일 때 Vision은 session cache를 갱신하고, Chair tick은 fresh Vision과 병합한 값을
-새 ``FusionState`` 에 반영합니다. 결정은 사용자 room에 발행한 뒤 비동기 persistence를
-시도합니다.
+새 ``FusionState`` 에 반영합니다. state를 사용자 room에 먼저 발행하고 session-scoped
+Feedback Policy의 logical feedback을 발행한 뒤 비동기 persistence를 시도합니다.
 
 실시간 경로는 Supabase와 독립적입니다. snapshot 저장은 비동기 DBWriter로 넘기고
 History DB 조회는 해당 HTTP 요청에서만 수행하므로, DB 설정이나 인터넷 연결이 없어도
@@ -27,6 +27,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from fusion.state import FusionState, step  # noqa: E402
+from feedback.config import feedback_config_for_mode  # noqa: E402
 from server.auth import (  # noqa: E402
     AuthenticationError,
     AuthenticationUnavailable,
@@ -40,6 +41,7 @@ from server.config import (  # noqa: E402
     load_runtime_profile,
 )
 from server.db_writer import DBWriter  # noqa: E402
+from server.feedback_coordinator import FeedbackCoordinator  # noqa: E402
 from server.measurement_sessions import (  # noqa: E402
     MeasurementInUse,
     MeasurementSessionRegistry,
@@ -203,6 +205,7 @@ def create_app(
     sensor_auth_token=None,
     sensor_merge_policy=DEFAULT_SENSOR_MERGE_POLICY,
     sensor_monotonic=None,
+    feedback_coordinator=None,
 ):
     profile = runtime_profile or load_runtime_profile()
     app = Flask(__name__)
@@ -223,6 +226,9 @@ def create_app(
     )
     verifier = auth_verifier or SupabaseAuthVerifier()
     sessions = session_registry or MeasurementSessionRegistry()
+    feedback = feedback_coordinator or FeedbackCoordinator(
+        feedback_config_for_mode(profile.name)
+    )
     measurement_lock = threading.RLock()
     socket_identities = {}
     socket_identity_lock = threading.Lock()
@@ -249,6 +255,7 @@ def create_app(
     app.extensions["db_writer"] = db_writer
     app.extensions["auth_verifier"] = verifier
     app.extensions["measurement_sessions"] = sessions
+    app.extensions["feedback_coordinator"] = feedback
     if history_reader is _AUTO_HISTORY_READER:
         history_reader = StateHistoryReader()
     app.extensions["state_history_reader"] = history_reader
@@ -376,6 +383,7 @@ def create_app(
                 measurement, created = sessions.start(user_id)
                 if created:
                     pipeline.reset()
+                    feedback.start_session(measurement.session_id)
         except MeasurementInUse:
             return jsonify({
                 "v": 1,
@@ -400,6 +408,7 @@ def create_app(
                 measurement, already_stopped = sessions.stop(user_id)
                 if not already_stopped:
                     pipeline.clear_cache()
+                    feedback.stop_session(measurement.session_id)
                 if persistence is not None:
                     persistence.end_session(user_id, measurement.session_id)
         except NoMeasurementSession:
@@ -485,6 +494,23 @@ def create_app(
                     decision,
                     to=f"user:{measurement.user_id}",
                 )
+                try:
+                    feedback_decision = feedback.process_decision(
+                        measurement.session_id,
+                        decision,
+                        payload["t"],
+                    )
+                    socketio.emit(
+                        "feedback",
+                        feedback_decision,
+                        to=f"user:{measurement.user_id}",
+                    )
+                except Exception as error:  # noqa: BLE001
+                    # Logical feedback is optional output; core state and DB continue.
+                    log.warning(
+                        "feedback 처리 실패 (%s)",
+                        type(error).__name__,
+                    )
                 if persistence is not None:
                     try:
                         persistence.handle(
