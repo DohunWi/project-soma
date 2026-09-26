@@ -141,7 +141,11 @@ def step(
 
     # ── 웹캠: 값이 없으면 누적을 멈추되 리셋하지는 않습니다 ─────────────────
     rate = s.get("blink_rate")
-    if rate is None:
+    detect = s.get("detect_rate")
+    # blink_rate 는 rolling 값이므로 한 프레임의 face_detected 만으로 버리지
+    # 않습니다. 다만 최근 품질창에 얼굴 관측이 전혀 없으면 오래된 rate 가
+    # 0으로 수렴해 저깜빡임으로 오인되므로 unavailable 과 동일하게 멈춥니다.
+    if rate is None or detect == 0:
         low_blink = st.low_blink_sec
     elif rate < BLINK_RATE_LOW:
         low_blink = st.low_blink_sec + dt
@@ -206,7 +210,6 @@ def step(
     # 웹캠이 없으면 신뢰도만 낮춥니다. 상태 판정과 서버 emit은 그대로 유지합니다.
     # 검출률(detect_rate)이 오면 그것을 씁니다. 프레임 하나가 우연히 잡힌 것과
     # 계속 안정적으로 잡히는 것을 불리언 하나로는 구분할 수 없었습니다.
-    detect = s.get("detect_rate")
     if detect is not None:
         confidence = round(0.45 + 0.45 * min(max(detect, 0.0), 1.0), 2)
     else:

@@ -295,6 +295,43 @@ def test_fresh_vision_is_reused_only_until_timeout():
     assert "blink_rate" not in stale[0]["metrics"]
 
 
+def test_zero_detection_rate_freezes_blink_after_merge_and_recovery_resumes():
+    clock = FakeClock()
+    app, socketio = make_app(clock)
+    start_measurement(app)
+    producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
+    front = socketio.test_client(app, auth={"token": USER_TOKEN})
+
+    producer.emit(
+        "sensor_data",
+        vision_payload(t=1000.0, blink_rate=5.0, detect_rate=0.5),
+    )
+    producer.emit("sensor_data", chair_payload(t=1000.0))
+    clock.advance(1.0)
+    producer.emit("sensor_data", chair_payload(t=1001.0))
+    observed = state_events(front)
+    assert observed[-1]["metrics"]["low_blink_sec"] == 1.0
+
+    producer.emit(
+        "sensor_data",
+        vision_payload(t=1002.0, blink_rate=0.0, detect_rate=0.0),
+    )
+    clock.advance(1.0)
+    producer.emit("sensor_data", chair_payload(t=1002.0))
+    unavailable = state_events(front)
+    assert unavailable[-1]["metrics"]["low_blink_sec"] == 1.0
+    assert unavailable[-1]["metrics"]["blink_rate"] == 0.0
+
+    producer.emit(
+        "sensor_data",
+        vision_payload(t=1003.0, blink_rate=5.0, detect_rate=0.1),
+    )
+    clock.advance(1.0)
+    producer.emit("sensor_data", chair_payload(t=1003.0))
+    recovered = state_events(front)
+    assert recovered[-1]["metrics"]["low_blink_sec"] == 2.0
+
+
 def test_duplicate_and_older_chair_events_do_not_advance_fusion_time():
     clock = FakeClock()
     app, socketio = make_app(clock)

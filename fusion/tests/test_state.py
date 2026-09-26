@@ -196,7 +196,10 @@ def test_normal_static_threshold_regression(elapsed, expected):
 )
 def test_low_blink_profile_boundaries(timing, elapsed, expected):
     _, decision = run_elapsed(
-        lambda offset: moving_sample(offset, blink_rate=5.0),
+        lambda offset: {
+            **moving_sample(offset, blink_rate=5.0),
+            "detect_rate": 0.5,
+        },
         elapsed,
         timing=timing,
     )
@@ -304,6 +307,116 @@ def test_vision_hysteresis_is_profile_independent(timing):
     )
     assert st.low_blink_sec == 0.0
     assert st.close_dist_sec == 0.0
+
+
+def test_blink_availability_and_recovery_semantics():
+    st, _ = step(FusionState(), moving_sample(0, blink_rate=5.0), 1000.0)
+    st, _ = step(st, moving_sample(1, blink_rate=5.0), 1001.0)
+    assert st.low_blink_sec == 1.0
+
+    st, _ = step(st, moving_sample(2, blink_rate=9.5), 1002.0)
+    assert st.low_blink_sec == 1.0
+
+    missing = moving_sample(3)
+    missing.pop("blink_rate")
+    st, _ = step(st, missing, 1003.0)
+    assert st.low_blink_sec == 1.0
+
+    unavailable = moving_sample(4, blink_rate=0.0)
+    unavailable["detect_rate"] = 0.0
+    st, decision = step(st, unavailable, 1004.0)
+    assert st.low_blink_sec == 1.0
+    assert decision["metrics"]["blink_rate"] == 0.0
+    assert decision["confidence"] == 0.45
+
+    recovered_low = moving_sample(5, blink_rate=0.0)
+    recovered_low["detect_rate"] = 0.1
+    st, _ = step(st, recovered_low, 1005.0)
+    assert st.low_blink_sec == 2.0
+
+    recovered_normal = moving_sample(6, blink_rate=11.0)
+    recovered_normal["detect_rate"] = 0.1
+    st, _ = step(st, recovered_normal, 1006.0)
+    assert st.low_blink_sec == 0.0
+
+
+def test_current_frame_face_loss_does_not_invalidate_rolling_blink_rate():
+    st, _ = step(FusionState(), moving_sample(0, blink_rate=5.0), 1000.0)
+    observed = moving_sample(1, blink_rate=5.0)
+    observed.update({"face_detected": False, "detect_rate": 0.1})
+
+    st, _ = step(st, observed, 1001.0)
+
+    assert st.low_blink_sec == 1.0
+
+
+def test_unavailable_blink_freezes_existing_warning_and_reason():
+    st, decision = run_elapsed(
+        lambda offset: moving_sample(offset, blink_rate=5.0),
+        DEMO_FUSION_TIMING.low_blink_caution_sec,
+    )
+    assert decision["state"] == "CAUTION"
+
+    unavailable = moving_sample(11, blink_rate=0.0)
+    unavailable["detect_rate"] = 0.0
+    st, decision = step(st, unavailable, 1011.0)
+
+    assert st.low_blink_sec == 10.0
+    assert decision["state"] == "CAUTION"
+    assert "low_blink" in decision["reasons"]
+
+
+def test_distance_missing_hysteresis_and_recovery_semantics():
+    st, _ = step(FusionState(), moving_sample(0, dist=40.0), 1000.0)
+    st, _ = step(st, moving_sample(1, dist=40.0), 1001.0)
+    assert st.close_dist_sec == 1.0
+
+    st, _ = step(st, moving_sample(2, dist=47.0), 1002.0)
+    assert st.close_dist_sec == 1.0
+
+    missing = moving_sample(3)
+    missing.pop("face_distance_cm")
+    st, _ = step(st, missing, 1003.0)
+    assert st.close_dist_sec == 1.0
+
+    st, _ = step(st, moving_sample(4, dist=40.0), 1004.0)
+    assert st.close_dist_sec == 2.0
+
+    st, _ = step(st, moving_sample(5, dist=50.0), 1005.0)
+    assert st.close_dist_sec == 0.0
+
+
+def test_combined_vision_and_chair_reasons_keep_highest_severity():
+    st, decision = run_elapsed(
+        lambda _offset: sample(
+            pressure=[850, 850, 850, 850],
+            blink_rate=5.0,
+            dist=40.0,
+        ),
+        20,
+    )
+
+    assert decision["state"] == "DANGER"
+    assert decision["reasons"] == ["low_blink", "static_hold", "close_distance"]
+    assert st.load.blink_penalty == 0.0
+    assert st.load.distance_penalty == 0.0
+
+
+def test_vision_metrics_do_not_change_soma_load_score():
+    chair_state, chair_decision = run_elapsed(
+        lambda offset: moving_sample(offset),
+        20,
+    )
+    vision_state, vision_decision = run_elapsed(
+        lambda offset: moving_sample(offset, blink_rate=0.0, dist=40.0),
+        20,
+    )
+
+    assert vision_decision["state"] == "DANGER"
+    assert chair_decision["score"] == vision_decision["score"]
+    assert vision_state.load.blink_penalty == 0.0
+    assert vision_state.load.distance_penalty == 0.0
+    assert chair_state.load == vision_state.load
 
 
 def test_웹캠_값이_없으면_metrics_에서_키를_뺀다():

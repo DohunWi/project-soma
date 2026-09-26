@@ -101,6 +101,15 @@ Vision만 Chair sample에 병합합니다. stale Vision은 병합하지 않아 C
 유지합니다. 신규 session start는 빈 cache로 시작하고 stop은 cache를 즉시 비우므로,
 OFF 중 도착한 Vision이나 이전 session 값은 다음 session에서 재사용하지 않습니다.
 
+`blink_rate`는 최대 60초 rolling metric입니다. 필드가 없거나 Vision이 stale이면
+저깜빡임 연속시간을 리셋하지 않고 freeze합니다. `detect_rate == 0`은 최근 품질창에서
+얼굴 관측이 전혀 없다는 뜻이므로, 이때 `blink_rate`가 있더라도 state 판정에는
+unavailable로 취급해 같은 방식으로 freeze합니다. 단일 frame의 `face_detected=false`만으로
+rolling metric을 무효화하지 않으며, 0보다 큰 임의의 검출률 quality threshold는 실제
+webcam E2E 이후 결정합니다. 거리 metric은 기존대로 필드 생략 시 freeze합니다.
+새 calibration의 약 3초 동안 최소 10초 관측이 필요한 blink baseline을 만들기 어려운
+문제는 아직 해결되지 않았으며, 개인 baseline 기반 판정이나 penalty에는 사용하지 않습니다.
+
 ### 4-3. 왜 깜빡임인가 — 자세 각도 대신
 
 깜빡임은 **사건(event)** 이고 지표는 **빈도(rate)** 입니다.
