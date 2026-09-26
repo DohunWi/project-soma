@@ -19,9 +19,15 @@
 | `sensor_data.schema.json` | 수집 → 서버 | `chair/bridge`, `vision/` → `server` |
 | `state.schema.json` | 분석 → 서버 → UI | `fusion` → `server` → `web`, `feedback` |
 | `feedback.schema.json` | 서버 → 액추에이터 | `server` → `chair`(진동), `feedback/ambient_led`, `web` |
+| `feedback_decision.schema.json` | 정책 → 서버 → UI·출력 어댑터 | `feedback/policy` → `server` → 인증된 `web`, Feedback Nano adapter |
 | `report.schema.json` | DB → 서버 → 프론트 | `db/report` → `server` → `web` |
 | `state_history.schema.json` | DB → 서버 → 프론트 | `state_logs` → `server` → `web` |
 | `measurement_session.schema.json` | 인증 사용자 ↔ 서버 | `web` → `server` start/stop 응답 |
+
+`feedback_decision`의 `NORMAL / NOTICE / WARNING / BREAK`는 Fusion state와 별개입니다.
+`BREAK`를 `state.schema.json`에 추가하지 않으며, 사용자 소유권은 payload의 `user_id`가
+아니라 Backend가 검증한 measurement session과 Socket.IO room으로 정합니다. 선택값이
+없으면 다른 계약과 마찬가지로 `null` 대신 키를 생략합니다.
 
 `state_history`는 Supabase Bearer access token의 `sub`에서 얻은 `user_id`와
 Backend가 관리하는 현재 ACTIVE measurement의 `session_id`를 함께 사용합니다.

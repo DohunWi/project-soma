@@ -126,7 +126,7 @@ webcam E2E 이후 결정합니다. 거리 metric은 기존대로 필드 생략 �
 
 ```
 ┌── 수집 계층 ──────────┐
-│  의자 (아두이노)       │  압력4 + 적외선  ─┐
+│  Chair UNO             │  압력4 + ToF 입력 ─┐
 │  웹캠 (외부캠)         │  거리 + 깜빡임  ─┤
 └───────────────────────┘                   │  source 별 독립 전송
                                             │  각자 t 를 찍는다
@@ -141,9 +141,9 @@ webcam E2E 이후 결정합니다. 거리 metric은 기존대로 필드 생략 �
 └───────────────────────────────────────────────────────┘
         │  state                      ▲  report
         ▼                             │
-┌── 인터페이스 계층 ─────┐   ┌── 피드백 (역방향) ──────────┐
-│  웹 대시보드           │   │  의자 진동   ← 서버         │
-│  팝업 알림             │   │  모니터 상단 LED ← 서버      │
+┌── 인터페이스 계층 ─────┐   ┌── 피드백 출력 (역방향) ──────┐
+│  웹 대시보드           │   │  Feedback Nano ← 서버       │
+│  팝업 알림             │   │  LED + 진동 모터             │
 └────────────────────────┘   └─────────────────────────────┘
 ```
 
@@ -266,29 +266,30 @@ Demo balance 값 역시 졸업작품에서 누적과 회복을 짧게 확인하�
 | **의자 진동** | 의자 (부착 위치 미정) | 햅틱은 **몸에 닿아야** 함 |
 | **화면 팝업 / 대시보드** | 노트북 | 숫자·표는 **사용자가 볼 준비가 된 때** 본다 |
 
-### 7-2. 배선 — LED 는 아두이노를 거치지 않습니다
+### 7-2. 배선 — 센서 UNO와 Feedback Nano는 분리합니다
 
-노트북이 허브입니다. 의자 아두이노와 LED 유닛은 **각자 USB 로 노트북에 붙는
-독립 장치**입니다.
+노트북이 허브입니다. Chair UNO와 Feedback Nano는 **서로 다른 COM device**입니다.
+Chair UNO는 압력 센서 4개와 ToF를 읽는 input producer이고, Feedback Nano는 LED와
+진동 모터만 구동하는 output device입니다.
 
 ```
-[의자 아두이노] --USB-- [노트북] --USB-- [모니터 상단 LED]
-  압력·ToF in            분석·백엔드        pos/width/sat
-  진동 out
+[Chair UNO] ------USB------ [노트북 Backend] ------USB------ [Feedback Nano]
+ 압력4 + ToF                 Fusion / Policy                    LED + 진동
+ sensor_data producer       session / routing                  physical pattern
 ```
 
-진동만 아두이노를 거칩니다 — 모터가 의자에 물려 있기 때문입니다.
+Fusion은 관측 상태를, SOMA Load는 누적 부하 점수를 계산합니다. Feedback Policy는
+그 결과로 사용자에게 줄 logical feedback을 결정하고, Server는 measurement session과
+사용자·장치 routing을 담당합니다. Nano는 semantic command를 실제 LED/진동 pattern으로
+표현할 뿐 Fusion state, score, BREAK 조건을 계산하지 않습니다. Front는 인증된 logical
+feedback event를 UI와 popup으로 표현합니다.
 
-이 분리로 "아두이노 과부하" 우려가 무선까지 가지 않고 해소됩니다.
-실체는 CPU 가 아니라 **전원과 배선**이었습니다 — WS2812 32개면 최대 1.9A 로
-Uno 의 레귤레이터를 넘고, 의자에서 모니터 위까지 2m 를 끌어야 했습니다.
-USB LED 는 전원을 USB 에서 받고 배선이 케이블 하나입니다.
+Nano 연결이나 출력 실패는 선택 출력 계층의 장애입니다. Fusion, state/score emit,
+DB 저장, Front 실시간 경로를 중단시키면 안 됩니다. 기존 `feedback/ambient_led/driver.py`와
+Chair UNO 진동 경로는 F2/F3 cutover 전까지 남아 있는 이전 구현이며, F0/F1에서는
+재연결하거나 삭제하지 않습니다.
 
-계약(`pos`/`width`/`sat`)은 장치와 무관하므로 **드라이버만 갈아끼우면 됩니다.**
-`feedback/ambient_led/driver.py` 에 어댑터 3종(console / blinkstick / openrgb)이
-있고 `.env` 의 `LED_BACKEND` 로 고릅니다. 부품이 늦어져도 시연할 수 있습니다.
-
-### 7-3. 모니터 상단 LED — 인형은 껍데기, LED 가 신호
+### 7-3. Feedback Nano LED — 인형은 껍데기, LED가 신호
 
 ```
     [ 인 형 ]      ← 껍데기. 정체성·시선 유도. 신호를 지지 않는다
@@ -299,17 +300,14 @@ USB LED 는 전원을 USB 에서 받고 배선이 케이블 하나입니다.
 
 > **주변시는 형태 분해능이 낮고 밝기·위치·움직임에 민감합니다.**
 
-그래서 앰비언트 층에 **실루엣·아이콘·텍스트를 넣지 않습니다.** 읽으려면 고개를 돌려야 하고,
-그 순간 앰비언트가 아니라 토스트가 됩니다.
+그래서 출력에 **실루엣·아이콘·텍스트를 넣지 않습니다.** 읽어야 하는 정보는 Front가
+담고, Nano LED는 `NORMAL / NOTICE / WARNING / BREAK` semantic level을 주변시로
+표현합니다. 구체적인 색·밝기·점멸 pattern은 F3 hardware E2E 전에는 확정하지 않습니다.
+기존 `pos / width / sat` ambient encoding과 driver는 이전 구현의 console/mock 자산으로
+보존하며, Nano cutover 때 유지할지 대체할지 결정합니다.
 
-| 신호 | 부호화 |
-|---|---|
-| 좌우 균형 | 켜진 **위치**가 좌우로 이동 |
-| 전후 (근접) | 켜진 **폭** |
-| 정적 유지 · 피로 누적 | **채도·밝기** — 오래 굳어 있을수록 빠지고, 움직이면 돌아옴 |
-
-인형을 반투명으로 하면 채도가 인형 전체에 실립니다. 인형에 별도 LED 를 넣지 않고
-**받침 바의 빛으로 밝힙니다** — 그래야 값 하나가 둘을 동시에 결정하고 어긋날 수 없습니다.
+인형을 반투명으로 사용하는 경우에도 별도 판정 로직을 넣지 않고 받침 LED의 출력만
+확산합니다. Nano는 Backend가 보낸 level을 표현할 뿐 센서값을 해석하지 않습니다.
 
 ### 7-4. 진동과 LED 의 분업
 
@@ -318,7 +316,29 @@ USB LED 는 전원을 USB 에서 받고 배선이 케이블 하나입니다.
 
 진동 패턴을 늘려 의미를 싣지 않습니다. 패턴 학습을 요구하는 설계는 습관화 전에 버려집니다.
 
-### 7-5. 개입 원칙
+### 7-5. Logical Feedback와 Break Recommendation
+
+Fusion state(`NORMAL / CAUTION / DANGER / ABSENT`)와 Feedback level
+(`NORMAL / NOTICE / WARNING / BREAK`)은 별개입니다. 기본 mapping은 NORMAL→NORMAL,
+CAUTION→NOTICE, DANGER→WARNING입니다. ABSENT의 물리적 OFF/RESTING 표현은 향후 Nano
+adapter 책임이며 logical level에 OFF를 추가하지 않습니다. BREAK는 Feedback Policy가
+low score 지속, DANGER 지속, 연속 작업시간 중 하나로 승격시키며 Fusion state에는
+추가하지 않습니다. 여러 trigger가 동시에 성립하면 `SUSTAINED_DANGER`, `LOW_SCORE`,
+`CONTINUOUS_WORK` 순서로 reason을 선택합니다.
+
+Policy는 measurement session마다 새 immutable state로 시작합니다. `session_sec` 대신
+별도 `work_period_sec`를 착석 중에만 누적하고, ABSENT 중에는 일시 정지합니다. 짧은
+자리 비움은 기존 작업시간과 BREAK latch를 유지합니다. effective break에 도달하면
+BREAK를 해제하고 작업시간·trigger timer를 리셋하며 cooldown을 시작합니다. BREAK가
+발생하지 않았더라도 앞선 작업 뒤 effective break가 확인되면 작업시간을 리셋합니다.
+동일 level 유지 중에는 `transition=false`이므로 향후 popup/진동을 반복하지 않습니다.
+
+Normal의 초기 engineering parameter는 score 60 이하 120초, DANGER 60초, 연속 작업
+3000초, effective break 180초, 권장 휴식 300초, cooldown 900초입니다. Demo는 동일한
+정책의 시간축만 각각 10초, 10초, 60초, 10초, 20초, 30초로 줄입니다. 이 값들은
+의학적·생리학적 기준이 아니며 실제 사용 및 hardware E2E 결과로 조정합니다.
+
+### 7-6. 개입 원칙
 
 1. **정보량 없는 메시지는 무시됩니다.** "자세가 안 좋아요" 는 정보량 0입니다.
    사용자가 모르는 숫자를 줍니다 — "23분째 분당 6회예요"
