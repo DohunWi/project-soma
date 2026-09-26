@@ -327,7 +327,7 @@ def test_state_emit_happens_before_persistence_enqueue():
     states = emitted_states(socketio, app, chair_payload())
 
     assert states[0]["state"] == "NORMAL"
-    assert order == ["state", "feedback", "persistence"]
+    assert order == ["state", "feedback", "feedback_device", "persistence"]
 
 
 def test_persistence_failure_does_not_prevent_state_emit():

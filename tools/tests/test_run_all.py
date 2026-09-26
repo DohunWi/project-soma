@@ -21,6 +21,18 @@ def test_vision_exit_does_not_select_core_shutdown(capsys):
     assert "나머지 시스템은 계속" in capsys.readouterr().out
 
 
+def test_nano_exit_does_not_select_core_shutdown(capsys):
+    handled = set()
+    server = FakeProcess()
+    nano = FakeProcess(1)
+
+    assert find_core_exit(
+        [("server", server), ("nano", nano)], handled
+    ) is None
+    assert handled == {"nano"}
+    assert "나머지 시스템은 계속" in capsys.readouterr().out
+
+
 def test_core_exit_preserves_shutdown_semantics():
     server = FakeProcess(2)
 

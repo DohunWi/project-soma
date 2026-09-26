@@ -71,6 +71,8 @@ STATE_SCHEMA_PATH = ROOT / "docs" / "contracts" / "state.schema.json"
 STATE_HISTORY_SCHEMA_PATH = ROOT / "docs" / "contracts" / "state_history.schema.json"
 _AUTO_PERSISTENCE = object()
 _AUTO_HISTORY_READER = object()
+FEEDBACK_DEVICE_ROOM = "feedback_devices"
+FEEDBACK_DEVICE_ROLE = "feedback_device"
 
 
 def _load_validator(path):
@@ -232,6 +234,8 @@ def create_app(
     measurement_lock = threading.RLock()
     socket_identities = {}
     socket_identity_lock = threading.Lock()
+    latest_device_feedback = {"decision": None}
+    device_feedback_lock = threading.Lock()
     if sensor_auth_token is None:
         sensor_auth_token = os.getenv("SOCKET_AUTH_TOKEN")
     db_writer = None
@@ -256,6 +260,7 @@ def create_app(
     app.extensions["auth_verifier"] = verifier
     app.extensions["measurement_sessions"] = sessions
     app.extensions["feedback_coordinator"] = feedback
+    app.extensions["latest_device_feedback"] = latest_device_feedback
     if history_reader is _AUTO_HISTORY_READER:
         history_reader = StateHistoryReader()
     app.extensions["state_history_reader"] = history_reader
@@ -284,6 +289,18 @@ def create_app(
             return function(identity.user_id, *args, **kwargs)
 
         return decorated
+
+    def emit_device_off(*, to=FEEDBACK_DEVICE_ROOM):
+        """Best-effort lifecycle control for the optional Nano bridge."""
+        try:
+            socketio.emit("feedback_device_off", {"v": 1}, to=to)
+        except Exception as error:  # noqa: BLE001
+            log.warning("feedback device OFF 전송 실패 (%s)", type(error).__name__)
+
+    def reset_device_feedback():
+        with device_feedback_lock:
+            latest_device_feedback["decision"] = None
+        emit_device_off()
 
     @app.get("/api/health")
     def health():
@@ -384,6 +401,7 @@ def create_app(
                 if created:
                     pipeline.reset()
                     feedback.start_session(measurement.session_id)
+                    reset_device_feedback()
         except MeasurementInUse:
             return jsonify({
                 "v": 1,
@@ -409,6 +427,7 @@ def create_app(
                 if not already_stopped:
                     pipeline.clear_cache()
                     feedback.stop_session(measurement.session_id)
+                    reset_device_feedback()
                 if persistence is not None:
                     persistence.end_session(user_id, measurement.session_id)
         except NoMeasurementSession:
@@ -448,14 +467,39 @@ def create_app(
     @socketio.on("connect")
     def handle_connect(auth):
         token = auth.get("token") if isinstance(auth, dict) else None
+        requested_role = auth.get("role") if isinstance(auth, dict) else None
         if (
             isinstance(token, str)
             and isinstance(sensor_auth_token, str)
             and sensor_auth_token
             and hmac.compare_digest(token, sensor_auth_token)
         ):
+            if requested_role not in (None, "sensor", FEEDBACK_DEVICE_ROLE):
+                return False
+            role = requested_role or "sensor"
             with socket_identity_lock:
-                socket_identities[request.sid] = ("sensor", None)
+                socket_identities[request.sid] = (role, None)
+            if role == FEEDBACK_DEVICE_ROLE:
+                join_room(FEEDBACK_DEVICE_ROOM)
+                with device_feedback_lock:
+                    current = latest_device_feedback["decision"]
+                try:
+                    if current is None:
+                        emit_device_off(to=request.sid)
+                    else:
+                        # Reconnect restores only LEVEL; an old ALERT must not replay.
+                        synchronized = dict(current)
+                        synchronized["transition"] = False
+                        socketio.emit(
+                            "feedback_device",
+                            synchronized,
+                            to=request.sid,
+                        )
+                except Exception as error:  # noqa: BLE001
+                    log.warning(
+                        "feedback device 동기화 실패 (%s)",
+                        type(error).__name__,
+                    )
             return True
         try:
             identity = verifier.verify(token)
@@ -494,23 +538,43 @@ def create_app(
                     decision,
                     to=f"user:{measurement.user_id}",
                 )
+                feedback_decision = None
                 try:
                     feedback_decision = feedback.process_decision(
                         measurement.session_id,
                         decision,
                         payload["t"],
                     )
-                    socketio.emit(
-                        "feedback",
-                        feedback_decision,
-                        to=f"user:{measurement.user_id}",
-                    )
                 except Exception as error:  # noqa: BLE001
-                    # Logical feedback is optional output; core state and DB continue.
                     log.warning(
-                        "feedback 처리 실패 (%s)",
+                        "feedback policy 처리 실패 (%s)",
                         type(error).__name__,
                     )
+                if feedback_decision is not None:
+                    try:
+                        socketio.emit(
+                            "feedback",
+                            feedback_decision,
+                            to=f"user:{measurement.user_id}",
+                        )
+                    except Exception as error:  # noqa: BLE001
+                        log.warning(
+                            "user feedback 전송 실패 (%s)",
+                            type(error).__name__,
+                        )
+                    with device_feedback_lock:
+                        latest_device_feedback["decision"] = feedback_decision
+                    try:
+                        socketio.emit(
+                            "feedback_device",
+                            feedback_decision,
+                            to=FEEDBACK_DEVICE_ROOM,
+                        )
+                    except Exception as error:  # noqa: BLE001
+                        log.warning(
+                            "feedback device 전송 실패 (%s)",
+                            type(error).__name__,
+                        )
                 if persistence is not None:
                     try:
                         persistence.handle(

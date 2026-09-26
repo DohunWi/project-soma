@@ -6,6 +6,7 @@ tools/demo/run_all.py
 
     python tools/demo/run_all.py            # 서버 + mock  (하드웨어 없이)
     python tools/demo/run_all.py --real     # 서버 + 의자 + 웹캠
+    python tools/demo/run_all.py --real --nano  # Feedback Nano도 실행
     python tools/demo/run_all.py --no-web   # 대시보드 서버 제외
 
 Ctrl+C 로 전부 종료합니다.
@@ -20,7 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 PY = sys.executable
 procs = []
-OPTIONAL_PROCESSES = frozenset({"vision"})
+OPTIONAL_PROCESSES = frozenset({"vision", "nano"})
 
 
 def spawn(name, args):
@@ -52,6 +53,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--real", action="store_true", help="mock 대신 실제 의자·웹캠")
     ap.add_argument("--no-web", action="store_true")
+    ap.add_argument(
+        "--nano",
+        action="store_true",
+        help="optional Feedback Nano bridge 실행",
+    )
     ap.add_argument("--web-port", type=int, default=5500)
     args = ap.parse_args()
 
@@ -67,6 +73,8 @@ def main():
 
     spawn("policy", [PY, "feedback/policy/policy.py"])
     spawn("led",    [PY, "feedback/ambient_led/driver.py"])
+    if args.nano:
+        spawn("nano", [PY, "feedback/nano/bridge.py"])
 
     if not args.no_web:
         spawn("dashboard", [PY, "-m", "http.server", str(args.web_port),

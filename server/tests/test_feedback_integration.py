@@ -221,6 +221,7 @@ def test_chair_ticks_emit_current_feedback_after_state_through_break_lifecycle()
     producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
     front = socketio.test_client(app, auth={"token": USER_A_TOKEN})
     start(app)
+    order.clear()
 
     for elapsed in range(32):
         producer.emit("sensor_data", chair_payload(1000.0 + elapsed))
@@ -237,7 +238,12 @@ def test_chair_ticks_emit_current_feedback_after_state_through_break_lifecycle()
     assert feedback_decisions[30]["level"] == "BREAK"
     assert feedback_decisions[30]["transition"] is False
     assert feedback_decisions[0]["t"] == state_decisions[0]["t"] == 1000.0
-    assert order[:3] == ["state", "feedback", "persistence"]
+    assert order[:4] == [
+        "state",
+        "feedback",
+        "feedback_device",
+        "persistence",
+    ]
 
     for elapsed in range(32, 42):
         producer.emit(

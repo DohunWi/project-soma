@@ -349,7 +349,29 @@ room feedback emit → persistence` 순서로 실행합니다. Feedback의 times
 이면서 `transition=true`일 때만 실행해야 합니다. Feedback Policy·계약 검증·feedback emit의
 실패는 이미 발행된 state나 이후 persistence를 막지 않습니다. Session START는 새 policy
 state를 만들고 duplicate START는 유지하며, STOP은 즉시 폐기합니다. Backend 재시작 뒤
-policy state 복구와 Feedback Nano serial/LED/진동 출력은 아직 연결하지 않았습니다.
+policy state 복구는 아직 하지 않습니다.
+
+F3에서 logical feedback은 user room의 `feedback`과 별도로 인증된
+`feedback_devices` room의 `feedback_device` event에도 전달됩니다. Nano bridge는 사용자
+access token이 아니라 sensor/device shared token과 `feedback_device` role로 연결하며,
+sensor producer 권한과 room을 구분합니다. Session STOP과 새 START의 출력 초기화는
+`feedback_device_off` event로 전달합니다. 전체 broadcast는 사용하지 않습니다.
+
+Bridge는 logical decision을 다음 serial protocol로 변환합니다.
+
+- `LEVEL,NORMAL|NOTICE|WARNING|BREAK|OFF`: stateful, 중복 허용, idempotent
+- `ALERT,WARNING|BREAK`: transition-only 진동 trigger, at-most-once 우선
+
+logical `NORMAL`의 reason이 `ABSENT`이면 물리 출력은 `LEVEL,OFF`입니다. Bridge는 마지막
+LEVEL만 캐시하고 Nano의 `READY` 또는 serial 재연결 뒤 LEVEL만 재동기화합니다. ALERT는
+큐에 저장하거나 재연결 후 replay하지 않습니다. Backend 재연결 때도 server가 현재 logical
+decision 또는 OFF를 device 전용 socket에 다시 보내므로 현재 LEVEL을 복원할 수 있습니다.
+
+Nano bridge는 별도 optional process이며 serial/Socket.IO 연결 실패로 종료되지 않고
+backoff 후 재시도합니다. `tools/demo/run_all.py --nano`로 명시적으로 포함할 수 있고 Nano
+process가 종료되어도 core demo는 계속됩니다. Firmware는 `millis()` 기반 LED/진동 pattern,
+15초 command timeout OFF, 유한 진동을 담당합니다. 실제 배선 pin, LED 종류·개수, 색·밝기,
+진동 길이·체감 강도는 hardware E2E 전까지 초기값/TODO입니다.
 
 ### 7-6. 개입 원칙
 
