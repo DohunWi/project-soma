@@ -18,8 +18,8 @@
 |---|---|---|
 | `sensor_data.schema.json` | 수집 → 서버 | `chair/bridge`, `vision/` → `server` |
 | `state.schema.json` | 분석 → 서버 → UI | `fusion` → `server` → `web`, `feedback` |
-| `feedback.schema.json` | 서버 → 액추에이터 | `server` → `chair`(진동), `feedback/ambient_led`, `web` |
-| `feedback_decision.schema.json` | 정책 → 서버 → UI·출력 어댑터 | `feedback/policy` → `server` → 인증된 `web`, Feedback Nano adapter |
+| `feedback.schema.json` | legacy 출력 계약 | 이전 Chair 진동·ambient LED 자산에서만 사용 |
+| `feedback_decision.schema.json` | 정책 → UI·출력 어댑터 | Backend integrated policy → 인증된 `web`, Feedback Nano adapter |
 | `report.schema.json` | DB → 서버 → 프론트 | `db/report` → `server` → `web` |
 | `state_history.schema.json` | DB → 서버 → 프론트 | `state_logs` → `server` → `web` |
 | `measurement_session.schema.json` | 인증 사용자 ↔ 서버 | `web` → `server` start/stop 응답 |

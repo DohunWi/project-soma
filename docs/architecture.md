@@ -303,8 +303,9 @@ feedback event를 UI와 popup으로 표현합니다.
 
 Nano 연결이나 출력 실패는 선택 출력 계층의 장애입니다. Fusion, state/score emit,
 DB 저장, Front 실시간 경로를 중단시키면 안 됩니다. 기존 `feedback/ambient_led/driver.py`와
-Chair UNO 진동 경로는 F2/F3 cutover 전까지 남아 있는 이전 구현이며, F0/F1에서는
-재연결하거나 삭제하지 않습니다.
+Chair UNO 진동 경로는 이전 구현으로만 보존합니다. `tools/demo/run_all.py`의
+production/default 경로에서는 실행하지 않으며, Chair bridge의 이전 진동 수신도
+`--legacy-vibration`을 명시한 경우에만 활성화합니다.
 
 ### 7-3. Feedback Nano LED — 인형은 껍데기, LED가 신호
 

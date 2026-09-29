@@ -51,3 +51,12 @@ def test_finite_socket_stream_disconnects_after_last_emit(monkeypatch):
     assert actions[1][1] == "sensor_data"
     assert actions[1][2]["source"] == "chair"
     assert client.connected is False
+
+
+def test_standalone_mock_loads_shared_token_from_project_env(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("SOCKET_AUTH_TOKEN=mock-shared-token\n", encoding="utf-8")
+    monkeypatch.delenv("SOCKET_AUTH_TOKEN", raising=False)
+
+    assert stream.load_project_env(env_file) is True
+    assert __import__("os").environ["SOCKET_AUTH_TOKEN"] == "mock-shared-token"

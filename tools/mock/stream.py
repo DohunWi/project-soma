@@ -24,9 +24,20 @@ import os
 import random
 import sys
 import time
+from pathlib import Path
 
 SCENARIOS = ("normal", "fatigue", "imbalance", "static", "absent")
 SOURCES = ("all", "chair", "vision")
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def load_project_env(path=ROOT / ".env"):
+    """Load the same shared socket token used by the Backend."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return False
+    return load_dotenv(path, override=False)
 
 
 def chair_sample(t, elapsed, scenario):
@@ -86,6 +97,7 @@ def build(source, t, elapsed, scenario, user):
 
 
 def main():
+    load_project_env()
     p = argparse.ArgumentParser()
     p.add_argument("--url", default="http://127.0.0.1:5000")
     p.add_argument("--stdout", action="store_true", help="서버 없이 jsonl 로 출력")

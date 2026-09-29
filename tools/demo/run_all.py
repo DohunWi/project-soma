@@ -5,9 +5,12 @@ tools/demo/run_all.py
 시연용 일괄 실행. start_system.bat 을 대체합니다 — Windows 전용이 아닙니다.
 
     python tools/demo/run_all.py            # 서버 + mock  (하드웨어 없이)
-    python tools/demo/run_all.py --real     # 서버 + 의자 + 웹캠
-    python tools/demo/run_all.py --real --nano  # Feedback Nano도 실행
+    python tools/demo/run_all.py --real     # 서버 + Chair + Vision
+    python tools/demo/run_all.py --real --chair-only --nano
     python tools/demo/run_all.py --no-web   # 대시보드 서버 제외
+
+Feedback Policy는 Backend에 통합되어 있습니다. 이전 standalone policy와 ambient
+LED driver는 production/default 실행 경로에 포함하지 않습니다.
 
 Ctrl+C 로 전부 종료합니다.
 """
@@ -22,6 +25,42 @@ ROOT = Path(__file__).resolve().parents[2]
 PY = sys.executable
 procs = []
 OPTIONAL_PROCESSES = frozenset({"vision", "nano"})
+
+
+def load_project_env(path=ROOT / ".env"):
+    """Load project settings once so every child inherits the same values."""
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return False
+    return load_dotenv(path, override=False)
+
+
+def process_specs(*, real, chair_only, nano, chair_raw_log=None):
+    """Return production process commands without legacy feedback processes."""
+    specs = [("server", [PY, "server/app.py"])]
+    if real:
+        chair = [PY, "chair/bridge/bridge.py"]
+        if chair_raw_log:
+            chair.extend(["--raw-log", chair_raw_log])
+        specs.append(("chair", chair))
+        if not chair_only:
+            specs.append(("vision", [PY, "vision/run.py"]))
+    else:
+        mock = [
+            PY,
+            "tools/mock/stream.py",
+            "--scenario",
+            "fatigue",
+            "--speed",
+            "20",
+        ]
+        if chair_only:
+            mock.extend(["--source", "chair"])
+        specs.append(("mock", mock))
+    if nano:
+        specs.append(("nano", [PY, "feedback/nano/bridge.py"]))
+    return specs
 
 
 def spawn(name, args):
@@ -50,31 +89,41 @@ def find_core_exit(processes, handled_optional):
 
 
 def main():
+    load_project_env()
     ap = argparse.ArgumentParser()
     ap.add_argument("--real", action="store_true", help="mock 대신 실제 의자·웹캠")
+    ap.add_argument(
+        "--chair-only",
+        action="store_true",
+        help="Vision 없이 Chair 경로만 실행",
+    )
     ap.add_argument("--no-web", action="store_true")
     ap.add_argument(
         "--nano",
         action="store_true",
         help="optional Feedback Nano bridge 실행",
     )
+    ap.add_argument(
+        "--chair-raw-log",
+        help="실제 Chair의 FL/FR/BL/BR/IR/t JSONL 저장 경로",
+    )
     ap.add_argument("--web-port", type=int, default=5500)
     args = ap.parse_args()
+    if args.chair_raw_log and not args.real:
+        ap.error("--chair-raw-log는 --real과 함께 사용해야 합니다")
 
     print("Project Soma 시연 실행")
-    spawn("server", [PY, "server/app.py"])
+    specs = process_specs(
+        real=args.real,
+        chair_only=args.chair_only,
+        nano=args.nano,
+        chair_raw_log=args.chair_raw_log,
+    )
+    server_name, server_command = specs.pop(0)
+    spawn(server_name, server_command)
     time.sleep(2.5)                      # 서버가 포트를 열 때까지
-
-    if args.real:
-        spawn("chair",  [PY, "chair/bridge/bridge.py"])
-        spawn("vision", [PY, "vision/run.py"])
-    else:
-        spawn("mock", [PY, "tools/mock/stream.py", "--scenario", "fatigue", "--speed", "20"])
-
-    spawn("policy", [PY, "feedback/policy/policy.py"])
-    spawn("led",    [PY, "feedback/ambient_led/driver.py"])
-    if args.nano:
-        spawn("nano", [PY, "feedback/nano/bridge.py"])
+    for name, command in specs:
+        spawn(name, command)
 
     if not args.no_web:
         spawn("dashboard", [PY, "-m", "http.server", str(args.web_port),

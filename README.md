@@ -47,8 +47,14 @@ pip install -r requirements.txt -r <본인폴더>/requirements.txt
 
 ```bash
 python tools/demo/run_all.py          # 서버 + mock + 대시보드 (하드웨어 없이)
-python tools/demo/run_all.py --real   # 서버 + 의자 + 웹캠 + 대시보드
+python tools/demo/run_all.py --real   # 서버 + Chair + Vision + 대시보드
+python tools/demo/run_all.py --real --chair-only --nano  # Chair + Feedback Nano E2E
 ```
+
+Feedback Policy는 Backend에 통합되어 있습니다. Production 출력은
+`Backend → feedback_devices → feedback/nano/bridge.py`이며, 이전
+`feedback/policy/policy.py`, `feedback/ambient_led/driver.py`, Chair UNO 진동 경로는
+기본 실행에 포함되지 않습니다.
 
 낱개로 띄우려면:
 
@@ -74,6 +80,32 @@ python chair/bridge/bridge.py --stdout       # 실제 의자, 서버 없이
 python vision/run.py --stdout                # 실제 웹캠, 서버 없이
 ```
 
+### 실제 Chair E2E observer와 raw log
+
+Front를 사용하지 않는 개발용 observer는 Supabase 사용자 access token을 환경변수로만
+받습니다. Token은 출력하지 않으며 Socket.IO 연결 → measurement start → `state`와
+`feedback` 출력 → measurement stop을 수행합니다.
+
+```powershell
+$env:SUPABASE_ACCESS_TOKEN = '<actual Supabase access token>'
+python tools/chair_e2e.py
+```
+
+실물 Chair 값을 Backend로 보내면서 raw 채널도 함께 남기려면 다음처럼 실행합니다.
+파일은 새 파일이어야 하며 `logs/`는 Git에서 제외됩니다.
+
+```powershell
+python tools/demo/run_all.py --real --chair-only --nano --no-web `
+  --chair-raw-log logs/chair_raw_20260930.jsonl
+
+# Chair bridge만 단독 실행할 때
+python chair/bridge/bridge.py --port COM3 `
+  --raw-log logs/chair_raw_20260930.jsonl
+```
+
+각 JSONL row는 `t`, `fl`, `fr`, `bl`, `br`, `ir`를 가집니다. Backend 없이
+contract payload를 확인하려면 기존 `--stdout`을 사용할 수 있습니다.
+
 ### 테스트
 
 ```bash
@@ -85,12 +117,12 @@ pytest fusion/     # 상태 판정. 하드웨어 없이 돌아갑니다
 ## 데이터 흐름
 
 ```
-[의자]  압력4 + 적외선 ──┐
+[Chair UNO] 압력4 + ToF ──┐
                           ├─→ [server] ──→ [fusion] ──→ 상태
 [웹캠]  거리 + 깜빡임 ──┘        │                        │
                                   ├──→ [db]  저장 · 보고서 │
                                   ├──→ [web] 대시보드 · 팝업
-                                  └──→ [feedback] LED · 진동  ← 역방향
+                                  └──→ [Feedback Nano] LED · 진동
 ```
 
 계층 간에 오가는 것은 전부 `docs/contracts/` 에 정의돼 있습니다.
