@@ -14,11 +14,31 @@
 ### 녹화
 
 ```bash
-python vision/eval/record.py --guided --subject S01 --glasses
+python vision/eval/record.py --guided --subject S01 --condition light-off
+python vision/eval/record.py --guided --subject S01 --condition light-on
 ```
 
-화면이 초록으로 바뀌면 한 번 깜빡입니다. **신호 시각이 정답**이므로
-혼자서도 정확한 ground truth 를 만들 수 있습니다.
+Guided recording은 다음 순서로 자동 진행됩니다.
+
+```text
+normal OPEN → 자연스러운 BLINK 10회 → CLOSED_HOLD → recovery OPEN
+```
+
+화면이 초록으로 바뀌면 자연스럽게 한 번 깜빡이고, `KEEP EYES CLOSED`에서는
+안내가 끝날 때까지 눈을 감습니다. 각 frame에는 guided prompt 기준 `OPEN`,
+`BLINK`, `CLOSED_HOLD` label이 기록됩니다. 이 label은 detector의 예측값이 아니라
+사용자에게 제시한 동작 구간입니다. BLINK cue 시각도 별도 row로 남습니다.
+
+결과는 다음 경로의 JSONL 파일입니다.
+
+```text
+vision/eval/data/<subject>_<condition>_<UTC timestamp>.jsonl
+```
+
+각 frame row는 epoch `t`, UTC `timestamp`, `left_ear`, `right_ear`,
+`combined_ear`, 호환용 `ear`, `label`, `face_detected`, `frontal`,
+`face_width_px`를 포함합니다. 얼굴이 검출되지 않으면 EAR 값은 `null`입니다.
+조명 OFF/ON은 반드시 `--condition`을 다르게 지정해 별도 파일로 수집하세요.
 
 EAR 시계열을 그대로 남기고 **검출은 하지 않습니다.**
 임계를 바꿔가며 오프라인으로 재평가하려면 원본이 있어야 합니다.
@@ -29,12 +49,37 @@ EAR 시계열을 그대로 남기고 **검출은 하지 않습니다.**
 ### 스윕
 
 ```bash
-python vision/eval/sweep.py vision/eval/data/S01.jsonl
-python vision/eval/sweep.py "vision/eval/data/*.jsonl" --top 15
+python vision/eval/sweep.py vision/eval/data/S01_light-off_*.jsonl
+python vision/eval/sweep.py "vision/eval/data/S01_light-*.jsonl" --top 5
 ```
 
-임계 조합별 **정밀도 / 재현율 / F1** 표가 나옵니다.
-최적값을 `ear.py` 상수에 반영하세요.
+출력에는 조건별 left/right/combined EAR 분포, 얼굴 검출·정면 프레임 비율,
+OPEN baseline 통계, 기존 absolute threshold(`0.21 / 0.25`) 성능과 relative
+threshold sweep이 포함됩니다. 두 파일을 함께 넘기면 각 조건에서 구한 baseline을
+같은 조건과 반대 조명 조건에 적용해 cross-condition 결과도 냅니다.
+
+guided frame label은 실제 눈 상태가 아니라 화면 prompt입니다. 도구는 `label == BLINK`
+frame을 곧바로 정답으로 쓰지 않고, 별도 cue timestamp와 검출 event를 1:1로
+매칭합니다. 기본 window는 사람의 반응 지연을 고려한 `cue - 0.10s`부터
+`cue + 1.20s`까지이며 CLI에서 바꿀 수 있습니다.
+
+```bash
+python vision/eval/sweep.py "vision/eval/data/S01_light-*.jsonl" \
+  --match-early-sec 0.10 --match-late-sec 1.20 \
+  --transition-margin-sec 0.25
+```
+
+OPEN baseline은 cue 반응 window와 label 전환 전후 margin을 제외한 유효·정면
+OPEN frame에서 계산합니다. CLOSED_HOLD 뒤의 OPEN prompt는 recovery 검증 구간이므로
+baseline에서 분리합니다. `median`, `p75`, 10% `trimmed_mean`을 나란히 비교하며,
+ratio grid 범위와 간격도 CLI 옵션으로 조정할 수 있습니다. CLOSED_HOLD 중 잘못 센
+event와 recording 끝까지 `CLOSED_CANDIDATE`가 풀리지 않은 경우를 별도로 표시합니다.
+`candidate_stuck_at_end`는 replay의 관측 상태이며, recovery OPEN prompt의 실제 EAR가
+낮다면 사용자가 눈을 다시 떴다는 근거가 없으므로 알고리즘 실패로 단정하지 않습니다.
+
+이 도구는 **평가 전용**입니다. 출력의 최고 한 조합을 production에 바로 복사하지
+마세요. 한 사용자·두 recording은 후보 범위를 좁히는 자료일 뿐 universal threshold의
+근거가 아닙니다. production `BlinkCounter`와 `60~500ms` duration 조건은 바꾸지 않습니다.
 
 ```bash
 python vision/eval/sweep.py --self-test    # 합성 신호로 스윕기 자체 검증
