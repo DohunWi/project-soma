@@ -7,6 +7,7 @@ vision/run.py
     python vision/run.py                    # 서버로 전송
     python vision/run.py --stdout           # 서버 없이 jsonl
     python vision/run.py --preview          # 창에 EAR·거리 표시
+    python vision/run.py --stdout --debug-blink  # blink 진단은 stderr
     python vision/run.py --recalibrate      # baseline 다시 잡기
     python vision/run.py --calib-cm 55      # 캘리브레이션 시 실제 거리(자로 잰 값)
 
@@ -38,7 +39,11 @@ except ImportError:
     sys.exit("opencv 가 없습니다.  pip install -r vision/requirements.txt")
 
 from calibrator import Calibrator                       # vision/calibrator.py
-from ear import BlinkCounter, face_ear                  # vision/blink/ear.py
+from ear import (  # vision/blink/ear.py
+    BlinkCounter,
+    emit_blink_diagnostic,
+    face_ear_values,
+)
 from geometry import face_width_px, is_frontal, yaw_asymmetry   # vision/geometry.py
 from landmarks import FaceLandmarks                     # vision/landmarks.py
 from payload import vision_payload                      # vision/payload.py
@@ -54,6 +59,11 @@ def main():
     ap.add_argument("--user", default=os.getenv("USER_NAME", "guest"))
     ap.add_argument("--stdout", action="store_true")
     ap.add_argument("--preview", action="store_true")
+    ap.add_argument(
+        "--debug-blink",
+        action="store_true",
+        help="좌우/평균 EAR와 blink 상태 전이를 stderr에 출력",
+    )
     ap.add_argument("--recalibrate", action="store_true")
     ap.add_argument("--calib-cm", type=float, default=60.0)
     args = ap.parse_args()
@@ -112,13 +122,14 @@ def main():
             pts = det.detect(frame, now)
 
             detected = pts is not None
-            ear = dist_cm = width_px = yaw = None
+            left_ear = right_ear = ear = dist_cm = width_px = yaw = None
             frontal = False
             blinked = False
+            blink_phase_before = counter.phase
 
             if detected:
                 # 깜빡임은 좌우 회전에 견딥니다 — EAR 은 눈 안에서의 비율입니다
-                ear = face_ear(pts)
+                left_ear, right_ear, ear = face_ear_values(pts)
                 blinked = counter.update(ear, now)
 
                 # 거리는 다릅니다. 고개를 돌리면 얼굴 폭이 투영상 줄어
@@ -132,10 +143,24 @@ def main():
                 if calib.is_calibrating() and frontal:
                     calib.add_sample({"face_width_px": width_px,
                                       "blink_rate": counter.rate(now)})
+            else:
+                # Face loss invalidates any partial closure. A later face must
+                # start a new candidate instead of completing the old one.
+                counter.on_face_lost()
 
             quality.update(now, detected=detected,
                            frontal=(frontal if detected else None))
             rate = counter.rate(now)
+            emit_blink_diagnostic(
+                args.debug_blink,
+                now=now,
+                left_ear=left_ear,
+                right_ear=right_ear,
+                combined_ear=ear,
+                phase_before=blink_phase_before,
+                counter=counter,
+                blinked=blinked,
+            )
 
             # payload 조립은 vision/payload.py 의 순수 함수가 합니다.
             # 값이 없으면 키를 생략합니다 — null 을 보내면 스키마 위반이라
