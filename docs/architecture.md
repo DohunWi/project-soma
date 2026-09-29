@@ -107,8 +107,25 @@ OFF 중 도착한 Vision이나 이전 session 값은 다음 session에서 재사
 unavailable로 취급해 같은 방식으로 freeze합니다. 단일 frame의 `face_detected=false`만으로
 rolling metric을 무효화하지 않으며, 0보다 큰 임의의 검출률 quality threshold는 실제
 webcam E2E 이후 결정합니다. 거리 metric은 기존대로 필드 생략 시 freeze합니다.
-새 calibration의 약 3초 동안 최소 10초 관측이 필요한 blink baseline을 만들기 어려운
-문제는 아직 해결되지 않았으며, 개인 baseline 기반 판정이나 penalty에는 사용하지 않습니다.
+
+Vision startup calibration은 기존 얼굴 폭 기반 거리 보정과 OPEN EAR baseline 측정을
+함께 수행합니다. detector 초기화 시간이 측정 창을 소비하지 않도록 첫 유효 샘플에서
+3초 창을 시작하고, 얼굴 검출·정면·유한한 좌우/평균 EAR 조건을 만족하는 프레임을
+최소 20개 요구합니다. OPEN EAR baseline은 자연스러운 순간 blink의 영향을 줄이기 위해
+유효 평균 EAR의 중앙값을 사용하며 `vision/baseline.json`의 `open_ear_baseline`에 저장합니다.
+기존 파일에 이 필드가 없거나 calibration이 실패하면 기존 절대 임계 `0.21 / 0.25`를
+사용합니다.
+
+개인화 blink 임계는 같은 상태 기계를 유지한 채 `open_ear_baseline`에 engineering ratio를
+곱해 주입합니다. v1 후보는 `closed_ratio=0.225`, `open_ratio=0.50`이며, 한 피험자의
+조명 OFF/ON guided recording 두 건에서 확인한 넓은 후보 구간 안에서 닫힘과 재개방 사이
+hysteresis를 충분히 확보하도록 택한 provisional 설정입니다. 생리학적·의학적 기준이나
+보편 임계로 해석하지 않으며 `vision/config.py`에서 조정합니다.
+
+`open_ear_baseline`은 눈을 정상적으로 뜬 모양의 기하학 기준입니다. 최소 10초 관측이
+필요한 `blink_rate_baseline`은 깜빡임 빈도 기준으로 서로 다른 개념이며, 3초 startup
+calibration으로 해결하지 않습니다. 개인 blink-rate 기반 판정이나 penalty에는 아직
+사용하지 않습니다.
 
 ### 4-3. 왜 깜빡임인가 — 자세 각도 대신
 

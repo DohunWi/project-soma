@@ -3,7 +3,8 @@
 회의 항목 1 — *"눈깜박임 수 측정 및 **정확도 분석**"* 의 후반부입니다.
 
 **측정하는 코드가 있다는 것과 그 값이 맞다는 것은 다릅니다.**
-`vision/blink/ear.py` 의 임계값(`EAR_CLOSED=0.21`, `EAR_OPEN=0.25`)과
+개인 OPEN EAR calibration이 없을 때 `vision/blink/ear.py`가 사용하는 fallback 임계값
+(`EAR_CLOSED=0.21`, `EAR_OPEN=0.25`)과
 `vision/geometry.py` 의 `YAW_MAX` 는 지금 **문헌에서 흔히 쓰는 값일 뿐**,
 이 카메라·이 피험자에 맞춘 값이 아닙니다. 여기 도구로 실측 기반으로 바꿉니다.
 
@@ -79,7 +80,10 @@ event와 recording 끝까지 `CLOSED_CANDIDATE`가 풀리지 않은 경우를 �
 
 이 도구는 **평가 전용**입니다. 출력의 최고 한 조합을 production에 바로 복사하지
 마세요. 한 사용자·두 recording은 후보 범위를 좁히는 자료일 뿐 universal threshold의
-근거가 아닙니다. production `BlinkCounter`와 `60~500ms` duration 조건은 바꾸지 않습니다.
+근거가 아닙니다. startup calibration v1은 이 제한된 결과에서
+`closed_ratio=0.225`, `open_ratio=0.50`을 provisional engineering config로 선택했으며,
+피험자 확대 평가 전까지 보편 기준으로 표현하지 않습니다. production `BlinkCounter`의
+상태 기계와 `60~500ms` duration 조건은 바꾸지 않습니다.
 
 ```bash
 python vision/eval/sweep.py --self-test    # 합성 신호로 스윕기 자체 검증

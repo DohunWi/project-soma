@@ -19,13 +19,18 @@ import sys
 from collections import deque
 from datetime import datetime, timezone
 
+try:
+    from vision.config import EAR_FALLBACK_CLOSED, EAR_FALLBACK_OPEN
+except ImportError:  # ``python vision/run.py`` imports this as a top-level module.
+    from config import EAR_FALLBACK_CLOSED, EAR_FALLBACK_OPEN
+
 # MediaPipe Face Mesh 눈 윤곽 인덱스
 # 순서: [바깥끝, 위1, 위2, 안끝, 아래2, 아래1]
 LEFT_EYE  = (362, 385, 387, 263, 373, 380)
 RIGHT_EYE = (33, 160, 158, 133, 153, 144)
 
-EAR_CLOSED = 0.21      # 이 값 아래로 내려가면 감은 것으로 봅니다
-EAR_OPEN   = 0.25      # 다시 이 값 위로 올라오면 뜬 것 (히스테리시스)
+EAR_CLOSED = EAR_FALLBACK_CLOSED  # personalized baseline이 없을 때의 fallback
+EAR_OPEN = EAR_FALLBACK_OPEN      # 다시 이 값 위로 올라오면 뜬 것 (히스테리시스)
 MIN_CLOSED_MS = 60     # 이보다 짧으면 노이즈로 봅니다
 MAX_CLOSED_MS = 500     # 이보다 길면 깜빡임이 아니라 감고 있는 것
 RECOVERY_OPEN_MS = 100  # overlong 감김 뒤 연속 OPEN 확인 시간

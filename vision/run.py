@@ -19,6 +19,7 @@ vision/run.py
 import argparse
 import json
 import logging
+import math
 import os
 import sys
 from pathlib import Path
@@ -38,7 +39,8 @@ try:
 except ImportError:
     sys.exit("opencv 가 없습니다.  pip install -r vision/requirements.txt")
 
-from calibrator import Calibrator                       # vision/calibrator.py
+from calibrator import Calibrator, calibration_sample   # vision/calibrator.py
+from config import resolve_ear_thresholds               # vision/config.py
 from ear import (  # vision/blink/ear.py
     BlinkCounter,
     emit_blink_diagnostic,
@@ -130,17 +132,40 @@ def main():
         resources["camera"] = camera
         transport.start()
 
-        counter = BlinkCounter()
+        def make_blink_counter():
+            selection = resolve_ear_thresholds(calib.open_ear_baseline())
+            if args.debug_blink:
+                baseline = (
+                    f"{selection.open_ear_baseline:.4f}"
+                    if selection.open_ear_baseline is not None
+                    else "NA"
+                )
+                print(
+                    f"[blink-debug] threshold_mode="
+                    f"{'personalized' if selection.personalized else 'fallback'} "
+                    f"open_ear_baseline={baseline} "
+                    f"closed_threshold={selection.closed_threshold:.4f} "
+                    f"open_threshold={selection.open_threshold:.4f}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            return BlinkCounter(
+                closed_threshold=selection.closed_threshold,
+                open_threshold=selection.open_threshold,
+            )
+
+        counter = make_blink_counter()
         quality = FrameQuality()
         last_send = 0.0
 
         def process_frame(frame, now):
-            nonlocal last_send
+            nonlocal counter, last_send
 
             # 카메라가 실제로 열린 뒤에 캘리브레이션을 시작합니다.
             # 열기 전에 시작하면 3초 창이 준비 대기에 소모됩니다.
             if not calib.is_done() and not calib.is_calibrating():
                 calib.start()
+            was_calibrating = calib.is_calibrating()
 
             pts = det.detect(frame, now)
 
@@ -153,7 +178,13 @@ def main():
             if detected:
                 # 깜빡임은 좌우 회전에 견딥니다 — EAR 은 눈 안에서의 비율입니다
                 left_ear, right_ear, ear = face_ear_values(pts)
-                blinked = counter.update(ear, now)
+                ear_is_finite = all(
+                    math.isfinite(value) for value in (left_ear, right_ear, ear)
+                )
+                if ear_is_finite:
+                    blinked = counter.update(ear, now)
+                else:
+                    counter.on_face_lost()
 
                 # 거리는 다릅니다. 고개를 돌리면 얼굴 폭이 투영상 줄어
                 # "멀어졌다" 고 오판합니다. 정면일 때만 씁니다 (geometry.py 참조)
@@ -163,13 +194,30 @@ def main():
                 if frontal:
                     dist_cm = calib.distance_cm(width_px)
 
-                if calib.is_calibrating() and frontal:
-                    calib.add_sample({"face_width_px": width_px,
-                                      "blink_rate": counter.rate(now)})
+                if calib.is_calibrating():
+                    sample = calibration_sample(
+                        face_detected=detected,
+                        frontal=frontal,
+                        face_width_px=width_px,
+                        left_ear=left_ear,
+                        right_ear=right_ear,
+                        combined_ear=ear,
+                        blink_rate=counter.rate(now),
+                    )
+                    if sample is not None:
+                        calib.add_sample(sample, now=now)
             else:
                 # Face loss invalidates any partial closure. A later face must
                 # start a new candidate instead of completing the old one.
                 counter.on_face_lost()
+
+            calib.tick(now=now)
+            if was_calibrating and not calib.is_calibrating():
+                # Startup samples must not leak into the measured blink window.
+                # A failed calibration resolves to the prior baseline or fallback.
+                counter = make_blink_counter()
+                blinked = False
+                blink_phase_before = counter.phase
 
             quality.update(now, detected=detected,
                            frontal=(frontal if detected else None))
