@@ -60,20 +60,18 @@ def post_measurement(base_url, endpoint, token, *, opener=urlopen):
     return payload
 
 
-def register_handlers(client, write=print):
+def register_handlers(client, write=print, counts=None):
     """Print only public event payloads; authentication data is never included."""
-    client.on(
-        "state",
-        lambda payload: write(
-            f"[state] {json.dumps(payload, ensure_ascii=False, sort_keys=True)}"
-        ),
-    )
-    client.on(
-        "feedback",
-        lambda payload: write(
-            f"[feedback] {json.dumps(payload, ensure_ascii=False, sort_keys=True)}"
-        ),
-    )
+    event_counts = counts if counts is not None else {"state": 0, "feedback": 0}
+
+    def print_event(name, payload):
+        event_counts[name] += 1
+        write(
+            f"[{name}] {json.dumps(payload, ensure_ascii=False, sort_keys=True)}"
+        )
+
+    client.on("state", lambda payload: print_event("state", payload))
+    client.on("feedback", lambda payload: print_event("feedback", payload))
 
 
 def wait_for_events(client, duration_sec, *, monotonic=time.monotonic,
@@ -94,7 +92,8 @@ def run_observer(
     write=print,
 ):
     """Run connect/start/observe/stop/disconnect with stop in the cleanup path."""
-    register_handlers(socket_client, write)
+    event_counts = {"state": 0, "feedback": 0}
+    register_handlers(socket_client, write, event_counts)
     connected = False
     started = False
     stop_error = None
@@ -109,6 +108,11 @@ def run_observer(
             + json.dumps(started_payload, ensure_ascii=False, sort_keys=True)
         )
         wait(socket_client, duration_sec)
+        if event_counts["state"] == 0:
+            write(
+                "[diagnostic] no state received; verify the Chair bridge is "
+                "connected without --stdout"
+            )
     except KeyboardInterrupt:
         write("[observer] stop requested")
     finally:
@@ -121,6 +125,10 @@ def run_observer(
                 )
             except ChairE2EError as error:
                 stop_error = error
+                write(
+                    "[diagnostic] measurement stop request failed; disconnecting "
+                    "the authenticated observer so Backend can release the session"
+                )
         if connected and socket_client.connected:
             socket_client.disconnect()
     if stop_error is not None:

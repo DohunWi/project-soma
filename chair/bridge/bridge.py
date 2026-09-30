@@ -101,6 +101,16 @@ def raw_log_row(t, pressure, ir):
     }
 
 
+def emit_sensor_data(socket_client, event, *, debug=False, diagnostic=print):
+    """Request one Socket.IO sensor emit and optionally report safe metadata."""
+    socket_client.emit("sensor_data", event)
+    if debug:
+        diagnostic(
+            "[bridge-debug] sensor_data emit requested "
+            f"t={event['t']} device_id={event.get('device_id', '<none>')}"
+        )
+
+
 def main():
     load_env()
     ap = argparse.ArgumentParser()
@@ -110,6 +120,11 @@ def main():
     ap.add_argument("--user", default=os.getenv("USER_NAME", "guest"))
     ap.add_argument("--device-id", default="smart_chair_01")
     ap.add_argument("--stdout", action="store_true", help="서버 없이 jsonl 출력")
+    ap.add_argument(
+        "--debug-events",
+        action="store_true",
+        help="Socket.IO sensor_data emit 요청을 stderr에 진단 출력",
+    )
     ap.add_argument(
         "--raw-log",
         help="FL/FR/BL/BR/IR/t를 별도 개발용 JSONL 파일에 저장",
@@ -180,8 +195,19 @@ def main():
 
         auth = os.getenv("SOCKET_AUTH_TOKEN")
         sio.connect(args.url, auth={"token": auth} if auth else None)
-        emit = lambda ev: sio.emit("sensor_data", ev)
+        emit = lambda ev: emit_sensor_data(
+            sio,
+            ev,
+            debug=args.debug_events,
+            diagnostic=lambda message: print(message, file=sys.stderr),
+        )
         print(f"[bridge] 서버 연결: {args.url}", file=sys.stderr)
+    else:
+        print(
+            "[bridge] --stdout mode: Socket.IO disabled; "
+            "sensor_data is NOT sent to Backend",
+            file=sys.stderr,
+        )
 
     try:
         while True:

@@ -76,6 +76,13 @@
 
 압력 채널 순서는 **[전좌, 전우, 후좌, 후우]** 로 고정입니다. 순서를 바꾸면 판정이 뒤집힙니다.
 
+현재 좌우 balance는 `(FL + BL) - (FR + BR)`의 raw 차이를 사용합니다. 한 사용자와
+한 Chair 설치에서 수집한 제한된 실측값은 CENTER `-1..+65`, LEFT `+415..+1562`,
+RIGHT `-618..-1045`였으며, 그 관측 공백 안의 provisional engineering calibration으로
+편중 진입 `±200`, CENTER 복귀 `±100`을 사용합니다. 이는 의학적 자세 경계나 모든
+사용자·Chair에 보편적인 값이 아니며, 더 다양한 체중·착석 위치·센서 포화 조건의 raw
+data를 모은 뒤 다시 검증해야 합니다.
+
 ### 4-2. 웹캠
 
 | 지표 | 방법 |
@@ -203,6 +210,20 @@ calibration으로 해결하지 않습니다. 개인 blink-rate 기반 판정이�
 검증 → Fusion → 인증 사용자의 Socket.IO room 전송 → 비동기 DB 저장 순서로 처리합니다.
 서버 재시작 후에는 session을 복원하지 않고 `OFF`로 시작합니다. `device_id`는 Chair
 metadata로 저장하지만 사용자 데이터 격리나 history 소유권 기준으로 사용하지 않습니다.
+
+Measurement는 인증된 사용자 Socket.IO 연결을 runtime lease로 사용합니다. 같은 사용자의
+socket이 여러 개면 하나가 남아 있는 동안 ACTIVE를 유지하고, 마지막 owner socket이
+끊기면 session cache·Feedback state·persistence checkpoint를 정리해 `OFF`로 전환합니다.
+REST stop의 access token이 만료되어 401이 되더라도 이미 handshake에서 인증된 owner
+socket의 disconnect가 abandoned session을 남기지 않습니다. Socket.IO token은 handshake
+시점에 검증되며 연결 중 JWT 만료를 주기적으로 재검증하지는 않습니다. 따라서 연결이
+살아 있는 동안 measurement도 유지되고, 다른 사용자가 이를 넘겨받지 못합니다. 브라우저
+refresh나 네트워크 단절은 안전한 방향으로 측정을 종료하므로 재연결 후 새 START가 필요합니다.
+기존 ACTIVE owner의 인증 user socket이 하나도 없는 orphan 상태라면, 다음에 START를
+요청한 다른 인증 사용자가 오기 전에 기존 session을 먼저 종료하고 새 session을 만듭니다.
+Owner socket이 하나라도 살아 있으면 기존대로 `measurement_in_use`이며 소유권을 넘기지
+않습니다. 임의의 시간 timeout은 정상 장시간 측정을 자를 근거가 없어 이번 단계에서는
+도입하지 않습니다.
 
 `GET /api/state/history`는 Supabase Bearer access token 인증이 필수입니다. Backend는
 token의 `sub`와 현재 ACTIVE measurement의 `session_id`를 결합해 `state_logs`를

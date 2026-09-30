@@ -12,6 +12,7 @@ from fusion.config import (  # noqa: E402
     NORMAL_SOMA_LOAD_CONFIG,
 )
 from fusion.state import FusionState, step  # noqa: E402
+from fusion.state import _balance  # noqa: E402
 
 SEATED = [900, 700, 1000, 910]
 EMPTY  = [1, 1, 1, 1]
@@ -142,9 +143,9 @@ def test_웹캠_없으면_신뢰도가_낮다():
 def test_좌우편중_히스테리시스():
     st, _ = run([sample(pressure=[1000, 700, 1000, 700]) for _ in range(5)])
     assert st.balance == "LEFT"
-    st, _ = step(st, sample(pressure=[900, 860, 900, 860]), 1005.0)   # 차이 80 > 30
+    st, _ = step(st, sample(pressure=[900, 840, 900, 840]), 1005.0)  # 차이 120 > 100
     assert st.balance == "LEFT"                                        # 아직 유지
-    st, _ = step(st, sample(pressure=[900, 890, 900, 890]), 1006.0)   # 차이 20 < 30
+    st, _ = step(st, sample(pressure=[900, 890, 900, 890]), 1006.0)  # 차이 20 < 100
     assert st.balance == "CENTER"
 
 
@@ -258,7 +259,7 @@ def test_balance_hysteresis_is_profile_independent(timing):
     )
     st, _ = step(
         st,
-        sample(pressure=[900, 860, 900, 860]),
+        sample(pressure=[900, 840, 900, 840]),
         1001.0,
         timing=timing,
     )
@@ -271,6 +272,44 @@ def test_balance_hysteresis_is_profile_independent(timing):
         timing=timing,
     )
     assert st.balance == "CENTER"
+
+
+@pytest.mark.parametrize("diff", [-1, 13, 35, 49, 50, 53, 43, 43, 39, 38, 65])
+def test_hardware_center_balance_differences_remain_center(diff):
+    assert _balance([1000 + diff, 1000, 1000, 1000], "CENTER") == "CENTER"
+
+
+@pytest.mark.parametrize("diff", [1562, 1499, 1491, 415])
+def test_hardware_left_balance_differences_remain_left(diff):
+    assert _balance([1000 + diff, 1000, 1000, 1000], "CENTER") == "LEFT"
+
+
+@pytest.mark.parametrize("diff", [-1045, -977, -798, -862, -618])
+def test_hardware_right_balance_differences_remain_right(diff):
+    assert _balance([1000, 1000 - diff, 1000, 1000], "CENTER") == "RIGHT"
+
+
+def test_calibrated_balance_hysteresis_is_symmetric_at_both_boundaries():
+    assert _balance([1200, 1000, 1000, 1000], "CENTER") == "CENTER"
+    assert _balance([1201, 1000, 1000, 1000], "CENTER") == "LEFT"
+    assert _balance([1101, 1000, 1000, 1000], "LEFT") == "LEFT"
+    assert _balance([1100, 1000, 1000, 1000], "LEFT") == "CENTER"
+
+    assert _balance([1000, 1200, 1000, 1000], "CENTER") == "CENTER"
+    assert _balance([1000, 1201, 1000, 1000], "CENTER") == "RIGHT"
+    assert _balance([1000, 1101, 1000, 1000], "RIGHT") == "RIGHT"
+    assert _balance([1000, 1100, 1000, 1000], "RIGHT") == "CENTER"
+
+
+def test_hardware_balance_calibration_does_not_change_static_detection():
+    centered = sample(pressure=[976, 958, 1000, 953])
+    st, _ = step(FusionState(), centered, 1000.0)
+    st, _ = step(st, centered, 1001.0)
+    assert st.balance == "CENTER"
+    assert st.static_hold_sec == 1.0
+
+    st, _ = step(st, sample(pressure=[1020, 958, 1000, 953]), 1002.0)
+    assert st.static_hold_sec == 0.0
 
 
 @pytest.mark.parametrize("timing", [DEMO_FUSION_TIMING, NORMAL_FUSION_TIMING])

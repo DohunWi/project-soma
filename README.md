@@ -80,6 +80,9 @@ python chair/bridge/bridge.py --stdout       # 실제 의자, 서버 없이
 python vision/run.py --stdout                # 실제 웹캠, 서버 없이
 ```
 
+`chair/bridge/bridge.py --stdout`는 센서 payload 확인 전용입니다. 이 모드에서는
+Socket.IO 연결과 `sensor_data` 전송이 비활성화되므로 Chair E2E에 사용하면 안 됩니다.
+
 ### 실제 Chair E2E observer와 raw log
 
 Front를 사용하지 않는 개발용 observer는 Supabase 사용자 access token을 환경변수로만
@@ -99,7 +102,7 @@ python tools/demo/run_all.py --real --chair-only --nano --no-web `
   --chair-raw-log logs/chair_raw_20260930.jsonl
 
 # Chair bridge만 단독 실행할 때
-python chair/bridge/bridge.py --port COM3 `
+python chair/bridge/bridge.py --port COM3 --debug-events `
   --raw-log logs/chair_raw_20260930.jsonl
 ```
 

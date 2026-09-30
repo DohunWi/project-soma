@@ -133,3 +133,50 @@ def test_failed_start_does_not_issue_stop():
 
     assert calls == ["/api/measurement/start"]
     assert client.disconnected is True
+
+
+def test_completed_observation_without_state_explains_stdout_transport_mode():
+    client = FakeSocket()
+    lines = []
+
+    def post(_url, endpoint, _token):
+        return {"status": "success", "endpoint": endpoint}
+
+    run_observer(
+        "http://127.0.0.1:5000",
+        "secret-token",
+        duration_sec=60,
+        socket_client=client,
+        post=post,
+        wait=lambda _client, _duration: None,
+        write=lines.append,
+    )
+
+    assert any("no state received" in line for line in lines)
+    assert any("without --stdout" in line for line in lines)
+    assert all("secret-token" not in line for line in lines)
+
+
+def test_failed_stop_disconnects_authenticated_socket_without_exposing_token():
+    client = FakeSocket()
+    lines = []
+
+    def post(_url, endpoint, _token):
+        if endpoint.endswith("/stop"):
+            raise ChairE2EError("HTTP 401 (invalid_token)")
+        return {"status": "success"}
+
+    with pytest.raises(ChairE2EError, match="invalid_token"):
+        run_observer(
+            "http://127.0.0.1:5000",
+            "secret-token",
+            duration_sec=1,
+            socket_client=client,
+            post=post,
+            wait=lambda _client, _duration: None,
+            write=lines.append,
+        )
+
+    assert client.disconnected is True
+    assert any("Backend can release the session" in line for line in lines)
+    assert all("secret-token" not in line for line in lines)

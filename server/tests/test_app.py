@@ -327,7 +327,8 @@ def test_state_emit_happens_before_persistence_enqueue():
     states = emitted_states(socketio, app, chair_payload())
 
     assert states[0]["state"] == "NORMAL"
-    assert order == ["state", "feedback", "feedback_device", "persistence"]
+    assert order[:4] == ["state", "feedback", "feedback_device", "persistence"]
+    assert order[4:] == ["feedback_device_off"]
 
 
 def test_persistence_failure_does_not_prevent_state_emit():
@@ -358,15 +359,15 @@ def test_persistence_receives_only_verified_user_and_active_session_identity():
             pass
 
     app, socketio = make_app(state_persistence=CapturingPersistence())
-    app.extensions["measurement_sessions"].start(USER_ID)
+    measurement, _created = app.extensions["measurement_sessions"].start(USER_ID)
     app.extensions["chair_pipeline"].reset()
     payload = chair_payload()
     payload["user_id"] = str(OTHER_USER_ID)
 
     emitted_states(socketio, app, payload, activate=False)
 
-    active = app.extensions["measurement_sessions"].active()
-    assert calls == [{"user_id": USER_ID, "session_id": active.session_id}]
+    assert calls == [{"user_id": USER_ID, "session_id": measurement.session_id}]
+    assert app.extensions["measurement_sessions"].active() is None
 
 
 def test_missing_db_credentials_disable_persistence(monkeypatch):
@@ -492,8 +493,9 @@ def test_start_stop_are_authenticated_and_idempotent():
 
 
 def test_start_uses_verified_subject_and_rejects_second_user():
-    app, _socketio = make_app()
+    app, socketio = make_app()
     client = app.test_client()
+    socketio.test_client(app, auth={"token": USER_TOKEN})
 
     first = client.post(
         "/api/measurement/start",
@@ -509,6 +511,28 @@ def test_start_uses_verified_subject_and_rejects_second_user():
     assert conflict.status_code == 409
 
 
+def test_different_authenticated_user_can_replace_orphaned_session():
+    app, _socketio = make_app()
+    client = app.test_client()
+    first = client.post(
+        "/api/measurement/start",
+        headers={"Authorization": f"Bearer {USER_TOKEN}"},
+    )
+
+    replacement = client.post(
+        "/api/measurement/start",
+        headers={"Authorization": f"Bearer {OTHER_TOKEN}"},
+    )
+
+    assert first.status_code == 201
+    assert replacement.status_code == 201
+    assert replacement.get_json()["created"] is True
+    assert replacement.get_json()["measurement"]["user_id"] == str(OTHER_USER_ID)
+    assert replacement.get_json()["measurement"]["session_id"] != first.get_json()[
+        "measurement"
+    ]["session_id"]
+
+
 def test_measurement_endpoints_reject_missing_token():
     app, _socketio = make_app()
 
@@ -516,6 +540,58 @@ def test_measurement_endpoints_reject_missing_token():
 
     assert response.status_code == 401
     assert response.get_json()["error"]["code"] == "invalid_token"
+
+
+def test_invalid_stop_token_cannot_stop_but_last_owner_disconnect_releases_session():
+    app, socketio = make_app()
+    producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
+    owner = socketio.test_client(app, auth={"token": USER_TOKEN})
+    other_user = socketio.test_client(app, auth={"token": OTHER_TOKEN})
+    http = app.test_client()
+    started = http.post(
+        "/api/measurement/start",
+        headers={"Authorization": f"Bearer {USER_TOKEN}"},
+    )
+
+    rejected = http.post(
+        "/api/measurement/stop",
+        headers={"Authorization": "Bearer expired-token"},
+    )
+    assert started.status_code == 201
+    assert rejected.status_code == 401
+    assert app.extensions["measurement_sessions"].active().user_id == USER_ID
+
+    owner.disconnect()
+    assert app.extensions["measurement_sessions"].active() is None
+
+    restarted = http.post(
+        "/api/measurement/start",
+        headers={"Authorization": f"Bearer {OTHER_TOKEN}"},
+    )
+    producer.emit("sensor_data", chair_payload(t=2000.0))
+    other_states = [
+        event for event in other_user.get_received() if event["name"] == "state"
+    ]
+    assert restarted.status_code == 201
+    assert restarted.get_json()["measurement"]["user_id"] == str(OTHER_USER_ID)
+    assert len(other_states) == 1
+
+
+def test_measurement_remains_active_until_last_owner_socket_disconnects():
+    app, socketio = make_app()
+    first = socketio.test_client(app, auth={"token": USER_TOKEN})
+    second = socketio.test_client(app, auth={"token": USER_TOKEN})
+    response = app.test_client().post(
+        "/api/measurement/start",
+        headers={"Authorization": f"Bearer {USER_TOKEN}"},
+    )
+    assert response.status_code == 201
+
+    first.disconnect()
+    assert app.extensions["measurement_sessions"].active() is not None
+
+    second.disconnect()
+    assert app.extensions["measurement_sessions"].active() is None
 
 
 def test_state_is_emitted_only_to_authenticated_active_user_room():
@@ -530,6 +606,43 @@ def test_state_is_emitted_only_to_authenticated_active_user_room():
 
     assert [e for e in active_user.get_received() if e["name"] == "state"]
     assert [e for e in other_user.get_received() if e["name"] == "state"] == []
+
+
+def test_real_chair_identity_fields_do_not_block_authenticated_session_routing():
+    app, socketio = make_app()
+    producer = socketio.test_client(
+        app,
+        auth={"token": SENSOR_TOKEN, "role": "sensor"},
+    )
+    observer = socketio.test_client(app, auth={"token": USER_TOKEN})
+    other_user = socketio.test_client(app, auth={"token": OTHER_TOKEN})
+    started = app.test_client().post(
+        "/api/measurement/start",
+        headers={"Authorization": f"Bearer {USER_TOKEN}"},
+    )
+
+    producer.emit(
+        "sensor_data",
+        chair_payload(
+            t=1790741123.079,
+            pressure=[973, 957, 999, 943],
+            user="guest",
+            device="smart_chair_01",
+        ),
+    )
+
+    observer_events = observer.get_received()
+    state_events = [event for event in observer_events if event["name"] == "state"]
+    feedback_events = [
+        event for event in observer_events if event["name"] == "feedback"
+    ]
+    assert started.status_code == 201
+    assert len(state_events) == 1
+    assert state_events[0]["args"][0]["user_name"] == "guest"
+    assert len(feedback_events) == 1
+    assert [
+        event for event in other_user.get_received() if event["name"] == "state"
+    ] == []
 
 
 def test_new_session_resets_accumulated_fusion_state():

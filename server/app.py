@@ -302,6 +302,21 @@ def create_app(
             latest_device_feedback["decision"] = None
         emit_device_off()
 
+    def finalize_measurement(measurement):
+        """Clear every session-scoped subsystem after an authenticated stop."""
+        pipeline.clear_cache()
+        feedback.stop_session(measurement.session_id)
+        reset_device_feedback()
+        if persistence is not None:
+            persistence.end_session(measurement.user_id, measurement.session_id)
+
+    def has_user_socket(user_id):
+        with socket_identity_lock:
+            return any(
+                role == "user" and connected_user_id == user_id
+                for role, connected_user_id in socket_identities.values()
+            )
+
     @app.get("/api/health")
     def health():
         return jsonify({"status": "ok", "realtime": True})
@@ -397,6 +412,18 @@ def create_app(
     def start_measurement(user_id):
         try:
             with measurement_lock:
+                active = sessions.active()
+                if (
+                    active is not None
+                    and active.user_id != user_id
+                    and not has_user_socket(active.user_id)
+                ):
+                    orphaned, already_stopped = sessions.stop(active.user_id)
+                    if not already_stopped:
+                        finalize_measurement(orphaned)
+                        log.info(
+                            "연결된 owner socket이 없는 measurement를 정리했습니다"
+                        )
                 measurement, created = sessions.start(user_id)
                 if created:
                     pipeline.reset()
@@ -425,10 +452,8 @@ def create_app(
             with measurement_lock:
                 measurement, already_stopped = sessions.stop(user_id)
                 if not already_stopped:
-                    pipeline.clear_cache()
-                    feedback.stop_session(measurement.session_id)
-                    reset_device_feedback()
-                if persistence is not None:
+                    finalize_measurement(measurement)
+                elif persistence is not None:
                     persistence.end_session(user_id, measurement.session_id)
         except NoMeasurementSession:
             return jsonify({
@@ -513,7 +538,36 @@ def create_app(
     @socketio.on("disconnect")
     def handle_disconnect():
         with socket_identity_lock:
-            socket_identities.pop(request.sid, None)
+            disconnected = socket_identities.pop(request.sid, None)
+            owner_still_connected = (
+                disconnected is not None
+                and disconnected[0] == "user"
+                and any(
+                    role == "user" and user_id == disconnected[1]
+                    for role, user_id in socket_identities.values()
+                )
+            )
+        if (
+            disconnected is None
+            or disconnected[0] != "user"
+            or owner_still_connected
+        ):
+            return
+
+        # A measurement lease is held by at least one authenticated owner socket.
+        # Releasing it on the last disconnect prevents an abandoned Chair stream
+        # from continuing under the previous user's session after REST token expiry.
+        user_id = disconnected[1]
+        with measurement_lock:
+            measurement = sessions.active()
+            if measurement is None or measurement.user_id != user_id:
+                return
+            stopped, already_stopped = sessions.stop(user_id)
+            if not already_stopped:
+                finalize_measurement(stopped)
+                log.info(
+                    "마지막 인증 사용자 socket 종료로 measurement를 정리했습니다"
+                )
 
     @socketio.on("sensor_data")
     def handle_sensor_data(payload):

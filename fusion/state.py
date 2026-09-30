@@ -31,8 +31,10 @@ from fusion.load import SomaLoadState, score_integer, update_chair_load
 # 전부 추정치입니다. 실측 데이터로 재조정하기 전까지 확정값으로 쓰지 마세요.
 
 OCCUPANCY_MIN     = 100    # 압력 합이 이 값 미만이면 자리 비움
-BALANCE_DIFF      = 50     # 좌우 압력차가 이 값을 넘으면 편중
-BALANCE_RELEASE   = 30     # 편중 해제 임계 (히스테리시스)
+# 한 사용자/한 Chair의 실측 CENTER(-1..+65), LEFT(+415..+1562),
+# RIGHT(-618..-1045) 표본 사이의 관측 공백에 둔 provisional engineering 값입니다.
+BALANCE_DIFF      = 200    # CENTER에서 편중으로 진입하는 좌우 압력차
+BALANCE_RELEASE   = 100    # 편중 해제 임계 (히스테리시스)
 
 BLINK_RATE_LOW    = 8.0    # 분당 깜빡임이 이 값 미만이면 저깜빡임
 BLINK_RATE_OK     = 11.0   # 회복 임계 (히스테리시스)
