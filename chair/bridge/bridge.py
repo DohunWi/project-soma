@@ -32,6 +32,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
+MONITOR_INTERVAL_SEC = 1.0
 
 
 def load_env():
@@ -111,31 +112,121 @@ def emit_sensor_data(socket_client, event, *, debug=False, diagnostic=print):
         )
 
 
-def main():
-    load_env()
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--port")
-    ap.add_argument("--baud", type=int, default=int(os.getenv("CHAIR_BAUD_RATE", 9600)))
-    ap.add_argument("--url", default=f"http://127.0.0.1:{os.getenv('SERVER_PORT', 5000)}")
-    ap.add_argument("--user", default=os.getenv("USER_NAME", "guest"))
-    ap.add_argument("--device-id", default="smart_chair_01")
-    ap.add_argument("--stdout", action="store_true", help="서버 없이 jsonl 출력")
-    ap.add_argument(
+def format_monitor_line(pressure):
+    """Return one human-readable raw FSR diagnostic line."""
+    fl, fr, bl, br = pressure
+    pressure_sum = fl + fr + bl + br
+    balance_diff = (fl + bl) - (fr + br)
+    return (
+        "[chair-monitor] "
+        f"FL={fl:5d} FR={fr:5d} BL={bl:5d} BR={br:5d} "
+        f"SUM={pressure_sum:5d} DIFF={balance_diff:+6d}"
+    )
+
+
+class ChairMonitor:
+    """Rate-limited observer for raw Chair pressure samples."""
+
+    def __init__(
+        self,
+        *,
+        interval_sec=MONITOR_INTERVAL_SEC,
+        clock=time.monotonic,
+        diagnostic=print,
+    ):
+        if interval_sec <= 0:
+            raise ValueError("interval_sec must be greater than zero")
+        self._interval_sec = interval_sec
+        self._clock = clock
+        self._diagnostic = diagnostic
+        self._last_output_at = None
+
+    def observe(self, pressure):
+        now = self._clock()
+        if (
+            self._last_output_at is not None
+            and now - self._last_output_at < self._interval_sec
+        ):
+            return False
+
+        self._diagnostic(format_monitor_line(pressure))
+        self._last_output_at = now
+        return True
+
+
+def dispatch_sample(
+    event,
+    *,
+    raw_ir,
+    raw_log=None,
+    monitor=None,
+    emit=None,
+    stdout=print,
+):
+    """Send one sample to independent logging, monitoring, and transport sinks."""
+    pressure = event["chair"]["pressure"]
+
+    if raw_log is not None:
+        raw_log.write(json.dumps(
+            raw_log_row(event["t"], pressure, raw_ir),
+            ensure_ascii=False,
+        ) + "\n")
+
+    if monitor is not None:
+        monitor.observe(pressure)
+
+    if emit is not None:
+        emit(event)
+    else:
+        stdout(json.dumps(event, ensure_ascii=False))
+
+
+def build_parser():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port")
+    parser.add_argument(
+        "--baud",
+        type=int,
+        default=int(os.getenv("CHAIR_BAUD_RATE", 9600)),
+    )
+    parser.add_argument(
+        "--url",
+        default=f"http://127.0.0.1:{os.getenv('SERVER_PORT', 5000)}",
+    )
+    parser.add_argument("--user", default=os.getenv("USER_NAME", "guest"))
+    parser.add_argument("--device-id", default="smart_chair_01")
+    parser.add_argument(
+        "--stdout",
+        action="store_true",
+        help="서버 없이 jsonl 출력 (inspection-only)",
+    )
+    parser.add_argument(
+        "--monitor",
+        action="store_true",
+        help="정상 전송과 병행해 raw FSR 값을 약 1 Hz로 stderr에 출력",
+    )
+    parser.add_argument(
         "--debug-events",
         action="store_true",
         help="Socket.IO sensor_data emit 요청을 stderr에 진단 출력",
     )
-    ap.add_argument(
+    parser.add_argument(
         "--raw-log",
         help="FL/FR/BL/BR/IR/t를 별도 개발용 JSONL 파일에 저장",
     )
-    ap.add_argument(
+    parser.add_argument(
         "--legacy-vibration",
         action="store_true",
         help="이전 feedback/Chair 진동 경로 활성화 (production 아님)",
     )
-    ap.add_argument("--list", action="store_true", help="포트 목록만 출력하고 종료")
-    args = ap.parse_args()
+    parser.add_argument("--list", action="store_true", help="포트 목록만 출력하고 종료")
+    return parser
+
+
+def main():
+    load_env()
+    parser = build_parser()
+    args = parser.parse_args()
     serial, list_ports = serial_modules()
 
     if args.list:
@@ -164,8 +255,14 @@ def main():
             raw_log = raw_log_path.open("x", encoding="utf-8", buffering=1)
         except FileExistsError:
             ser.close()
-            ap.error(f"raw log 파일이 이미 존재합니다: {raw_log_path}")
+            parser.error(f"raw log 파일이 이미 존재합니다: {raw_log_path}")
         print(f"[bridge] raw log: {raw_log_path}", file=sys.stderr)
+
+    monitor = None
+    if args.monitor:
+        monitor = ChairMonitor(
+            diagnostic=lambda message: print(message, file=sys.stderr, flush=True),
+        )
 
     emit = None
     if not args.stdout:
@@ -230,15 +327,14 @@ def main():
                 "user_name": args.user,
                 "chair": {"pressure": pressure, "ir": [ir]},
             }
-            if raw_log is not None:
-                raw_log.write(json.dumps(
-                    raw_log_row(sample_t, pressure, ir),
-                    ensure_ascii=False,
-                ) + "\n")
-            if emit:
-                emit(ev)
-            else:
-                print(json.dumps(ev, ensure_ascii=False), flush=True)
+            dispatch_sample(
+                ev,
+                raw_ir=ir,
+                raw_log=raw_log,
+                monitor=monitor,
+                emit=emit,
+                stdout=lambda line: print(line, flush=True),
+            )
 
     except (KeyboardInterrupt, BrokenPipeError):
         pass
