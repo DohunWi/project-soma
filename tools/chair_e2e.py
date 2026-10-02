@@ -18,11 +18,52 @@ from urllib.request import Request, urlopen
 
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools.access_token import (  # noqa: E402
+    AccessTokenLifetimeError,
+    require_access_token_lifetime,
+)
+
+
 DEFAULT_TOKEN_ENV = "SUPABASE_ACCESS_TOKEN"
+SOCKET_TRANSPORTS = ("polling",)
+MIN_INTERACTIVE_LIFETIME_SEC = 300.0
+SHUTDOWN_SAFETY_MARGIN_SEC = 60.0
 
 
 class ChairE2EError(RuntimeError):
     """A safe user-facing observer or measurement lifecycle failure."""
+
+
+def observer_required_lifetime(duration_sec):
+    """Return a conservative preflight window for a finite or open-ended run."""
+    duration_sec = float(duration_sec)
+    if duration_sec < 0:
+        raise ValueError("duration_sec must be non-negative")
+    return max(
+        MIN_INTERACTIVE_LIFETIME_SEC,
+        duration_sec + SHUTDOWN_SAFETY_MARGIN_SEC,
+    )
+
+
+def connect_authenticated_socket(
+    socket_client,
+    base_url,
+    token,
+    *,
+    observe_sensor_data=False,
+):
+    """Connect through the development server's reliable polling transport."""
+    auth = {"token": token}
+    if observe_sensor_data:
+        auth["observe_sensor_data"] = True
+    socket_client.connect(
+        base_url,
+        auth=auth,
+        transports=list(SOCKET_TRANSPORTS),
+    )
 
 
 def post_measurement(base_url, endpoint, token, *, opener=urlopen):
@@ -90,15 +131,21 @@ def run_observer(
     post=post_measurement,
     wait=wait_for_events,
     write=print,
+    token_now=time.time,
 ):
     """Run connect/start/observe/stop/disconnect with stop in the cleanup path."""
+    require_access_token_lifetime(
+        token,
+        observer_required_lifetime(duration_sec),
+        now=token_now,
+    )
     event_counts = {"state": 0, "feedback": 0}
     register_handlers(socket_client, write, event_counts)
     connected = False
     started = False
     stop_error = None
     try:
-        socket_client.connect(base_url, auth={"token": token})
+        connect_authenticated_socket(socket_client, base_url, token)
         connected = True
         write(f"[observer] authenticated Socket.IO connected: {base_url}")
         started_payload = post(base_url, "/api/measurement/start", token)
@@ -179,7 +226,7 @@ def main():
             duration_sec=args.duration,
             socket_client=client,
         )
-    except ChairE2EError as error:
+    except (AccessTokenLifetimeError, ChairE2EError) as error:
         sys.exit(f"[observer] {error}")
     except Exception as error:  # Socket.IO implementations expose varied errors.
         message = str(error).replace(token, "<redacted>")
