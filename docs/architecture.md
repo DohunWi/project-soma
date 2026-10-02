@@ -134,6 +134,38 @@ hysteresis를 충분히 확보하도록 택한 provisional 설정입니다. 생�
 calibration으로 해결하지 않습니다. 개인 blink-rate 기반 판정이나 penalty에는 아직
 사용하지 않습니다.
 
+#### Vision Phase B.5: 관측용 좌우 이동
+
+Vision은 개인 중립 calibration의 유효 정면 프레임에서 얼굴 경계 landmark 234/454의
+중심 X, 얼굴 폭, 바깥 눈꼬리 landmark 33/263의 image-plane roll을 수집하고 각각
+중앙값을 baseline으로 저장합니다. 얼굴 중심과 폭은 영상 폭으로 먼저 정규화하며,
+실시간 관측값은 다음과 같습니다.
+
+`face_lateral_offset = (current_center_x_ratio - neutral_center_x_ratio) / current_face_width_ratio`
+
+raw 영상 좌표에서 음수는 image-left, 양수는 image-right입니다. OpenCV preview는 현재
+flip하지 않지만, 사용자가 보는 다른 webcam 화면은 mirror될 수 있으므로 이 부호를
+사용자의 해부학적 LEFT/RIGHT로 보편적으로 해석할 수 없습니다. 현재 설치의 실제 webcam
+검증에서는 양수=사용자 LEFT, 음수=사용자 RIGHT mapping이 반복 확인되었습니다.
+
+Phase B.5의 `face_lean_direction`은 이 설치에서 검증한 provisional hysteresis를 사용합니다.
+LEFT 진입 `>= +0.20`, LEFT 해제 `<= +0.10`, RIGHT 진입 `<= -0.15`, RIGHT 해제
+`>= -0.08`입니다. 한 피험자·한 webcam 설치에서 얻은 engineering 값이며 보편적 또는
+의학적 기준이 아닙니다. 다른 mirror/camera 환경은 방향 mapping과 임계를 다시 검증해야
+합니다. 관측이 없거나 유효하지 않으면 `UNKNOWN`을 출력하고 마지막 유효 내부 상태를
+보존하며, 다시 유효해지면 그 상태에서 hysteresis를 재개합니다.
+
+`head_roll_deg`는 두 바깥 눈꼬리를 image x 순서로 놓은 선의 `atan2(dy, dx)`이며,
+image-right로 내려가는(clockwise) 선이 양수입니다. `head_roll_delta_deg`는 개인 중립
+roll과의 최단 signed angle 차이입니다. Head roll은 머리만 기울인 경우와 몸통 이동을
+구별하지 못하므로 보조 관측값일 뿐입니다.
+
+이 값들은 Chair의 `(FL + BL) - (FR + BR)` 압력 분포인 `balance`와 서로 다른 현상을
+측정합니다. Vision lateral 값과 `face_lean_direction`은 state 전이, SOMA Load,
+Chair balance, confidence, reasons, Feedback에
+사용하지 않으며 의료적 자세 평가도 아닙니다. calibration/face/frontal geometry가
+유효하지 않으면 값을 생략하고 CENTER로 대체하지 않습니다. Phase C는 계속 비활성입니다.
+
 ### 4-3. 왜 깜빡임인가 — 자세 각도 대신
 
 깜빡임은 **사건(event)** 이고 지표는 **빈도(rate)** 입니다.

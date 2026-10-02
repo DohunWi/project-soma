@@ -241,6 +241,19 @@ def _decision(st, s, now, state, confidence, reasons):
         if value is not None:
             metrics[key] = value
 
+    # Phase B.5 Vision metrics are observational only.  Names are explicitly
+    # namespaced so they cannot be confused with Chair pressure balance.
+    for source_key, metric_key in (
+        ("face_lateral_offset", "vision_face_lateral_offset"),
+        ("head_roll_deg", "vision_head_roll_deg"),
+        ("head_roll_delta_deg", "vision_head_roll_delta_deg"),
+        ("face_lateral_calibrated", "vision_face_lateral_calibrated"),
+        ("face_lean_direction", "vision_face_lean_direction"),
+    ):
+        value = s.get(source_key)
+        if value is not None:
+            metrics[metric_key] = value
+
     return {
         "v": 1,
         "t": round(now, 3),

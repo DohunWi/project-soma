@@ -7,7 +7,7 @@ vision/calibrator.py
 시작 시 자동 로드)는 그대로 두고, 지표만 새 범위에 맞췄습니다.
 
   이전: head_lateral_tilt / neck_compression / head_pitch / face_width / shoulder_tilt
-  지금: face_width_px / open_ear_baseline / blink_rate  ← 자세 지표는 범위 밖
+  지금: face_width_px / open_ear_baseline / blink_rate와 관측용 얼굴 위치/roll
 
 거리는 핀홀 근사로 구합니다.  face_width_px × distance = 상수
 캘리브레이션 시점의 거리를 알면 이후 거리를 계산할 수 있습니다.
@@ -27,6 +27,11 @@ CALIB_DURATION = 3.0
 MIN_VALID_SAMPLES = 20
 DEFAULT_CALIB_CM = 60.0
 _AVERAGE_METRIC_KEYS = ("face_width_px", "blink_rate")
+_LATERAL_MEDIAN_KEYS = (
+    "neutral_face_center_x_ratio",
+    "neutral_face_width_ratio",
+    "neutral_head_roll_deg",
+)
 _BASELINE_FILE = Path(__file__).parent / "baseline.json"
 
 
@@ -44,6 +49,9 @@ def calibration_sample(
     right_ear: object,
     combined_ear: object,
     blink_rate: object = None,
+    face_center_x_ratio: object = None,
+    face_width_ratio: object = None,
+    head_roll_deg: object = None,
 ) -> Optional[dict]:
     """Build one valid frontal OPEN-baseline sample, or reject the frame."""
     if not face_detected or not frontal:
@@ -60,11 +68,34 @@ def calibration_sample(
         return None
     if width <= 1e-6 or min(left, right, combined) <= 0:
         return None
-    return {
+    sample = {
         "face_width_px": width,
         "blink_rate": blink_rate,
         "open_ear": combined,
     }
+    optional = {
+        "neutral_face_center_x_ratio": face_center_x_ratio,
+        "neutral_face_width_ratio": face_width_ratio,
+        "neutral_head_roll_deg": head_roll_deg,
+    }
+    parsed = {}
+    for key, value in optional.items():
+        if value is None:
+            continue
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(value):
+            return None
+        parsed[key] = value
+    if (
+        "neutral_face_width_ratio" in parsed
+        and parsed["neutral_face_width_ratio"] <= 1e-6
+    ):
+        return None
+    sample.update(parsed)
+    return sample
 
 
 class Calibrator:
@@ -144,6 +175,23 @@ class Calibrator:
             return None
         return value if math.isfinite(value) and value > 0 else None
 
+    def lateral_baseline(self):
+        """Return personalized neutral image geometry, or None for legacy files."""
+        with self._lock:
+            values = {
+                key: self._baseline.get(key)
+                for key in _LATERAL_MEDIAN_KEYS
+            }
+        try:
+            parsed = {key: float(value) for key, value in values.items()}
+        except (TypeError, ValueError):
+            return None
+        if not all(math.isfinite(value) for value in parsed.values()):
+            return None
+        if parsed["neutral_face_width_ratio"] <= 1e-6:
+            return None
+        return parsed
+
     # ── 시작 ─────────────────────────────────────────────────────────
     def start(self) -> None:
         with self._lock:
@@ -196,7 +244,7 @@ class Calibrator:
     @staticmethod
     def _valid_sample(metrics: dict) -> Optional[dict]:
         sample = {}
-        for key in (*_AVERAGE_METRIC_KEYS, "open_ear"):
+        for key in (*_AVERAGE_METRIC_KEYS, "open_ear", *_LATERAL_MEDIAN_KEYS):
             value = metrics.get(key)
             if value is None:
                 continue
@@ -229,6 +277,10 @@ class Calibrator:
         ear_values = [s["open_ear"] for s in self._samples]
         b["open_ear_baseline"] = statistics.median(ear_values)
         b["open_ear_sample_count"] = sample_count
+        for key in _LATERAL_MEDIAN_KEYS:
+            values = [sample[key] for sample in self._samples if key in sample]
+            if len(values) == sample_count:
+                b[key] = statistics.median(values)
         b["calib_distance_cm"] = self._calib_cm
         self._baseline = b
         self._calibrating = False

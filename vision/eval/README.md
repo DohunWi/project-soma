@@ -136,6 +136,107 @@ python vision/eval/distance_check.py --calib-cm 60 --points 40 50 60 70 80
 
 ---
 
+## 3. 관측용 좌우 이동 기록
+
+Phase B.5의 연속 Vision metric은 다음 guided JSONL로 확인합니다.
+
+```bash
+python vision/eval/lean_record.py --subject S01 --condition light-off --recalibrate
+python vision/eval/lean_record.py --subject S01 --condition light-on
+```
+
+첫 명령은 정면에서 개인 중립 baseline을 다시 잡습니다. 두 번째 명령은 같은 baseline을
+재사용하므로 조명 변화에서 offset이 얼마나 이동하는지 비교할 수 있습니다. 저장 위치는
+`vision/eval/data/S01_lean_<condition>_<UTC timestamp>.jsonl`입니다.
+
+화면 안내 순서는 다음과 같습니다.
+
+```text
+NEUTRAL_CENTER → USER_LEFT_LEAN → NEUTRAL_CENTER → USER_RIGHT_LEAN
+→ NEUTRAL_CENTER → HEAD_TILT_ONLY → TORSO_LEAN_HEAD_UPRIGHT
+```
+
+각 stage는 시간만으로 자동 시작하지 않습니다. `[PREPARE]` 화면에서 안내된 자세로
+이동한 뒤 자세가 안정되면 `SPACE`를 누릅니다. 그때부터 `[RECORDING]` 상태로 기본
+3초간 기록하고, 끝나면 다음 stage의 `[PREPARE]`로 이동합니다. `ENTER`도 확인 키로
+사용할 수 있으며 `ESC` 또는 `Q`는 파일과 카메라를 정리하고 조기 종료합니다.
+PREPARE 중의 이동 frame은 JSONL pose sample로 기록하지 않습니다.
+
+기록된 각 frame은 UTC timestamp, `workflow_state=RECORDING`, guided label,
+face detected/frontal/valid 여부,
+calibration availability, 정규화 center/width, `face_lateral_offset`, raw/delta roll을
+기록합니다. 인증 token이나 영상은 기록하지 않습니다.
+
+중요: offset 음수는 raw **image-left**, 양수는 raw **image-right**입니다. 먼저 자신의
+왼쪽으로 움직였을 때 부호를 기록하고, 오른쪽으로 움직였을 때 반대 부호가 나오는지
+확인하십시오. 이 검증 전에는 payload 부호를 해부학적 LEFT/RIGHT로 이름 붙이지 않습니다.
+이 도구의 guided label은 사용자의 동작 지시이지 production 분류 결과가 아닙니다.
+
+### Lean intensity protocol
+
+CENTER/LEFT/RIGHT 임계를 나중에 실측으로 정하기 위한 mild/medium/large 기록은 전용
+protocol을 선택합니다. 기본 7-stage protocol은 바뀌지 않습니다.
+
+```bash
+python vision/eval/lean_record.py --subject S01 --condition intensity-light-on \
+  --protocol lean-intensity --record-sec 3
+```
+
+시퀀스는 다음 9단계입니다.
+
+```text
+NEUTRAL_CENTER
+→ USER_LEFT_MILD → USER_LEFT_MEDIUM → USER_LEFT_LARGE
+→ NEUTRAL_CENTER
+→ USER_RIGHT_MILD → USER_RIGHT_MEDIUM → USER_RIGHT_LARGE
+→ NEUTRAL_CENTER
+```
+
+MILD는 컴퓨터 사용 중 자연스럽게 조금 기대는 정도, MEDIUM은 편안하게 유지할 수
+있으면서 좌우 이동이 명확한 정도, LARGE는 기존 방향 검증처럼 두드러진 이동입니다.
+센티미터 목표를 두지 않습니다. 모든 단계에서 상체를 옆으로 이동하되 얼굴은 webcam을
+향하고 의도적으로 머리를 기울이지 않은 안정 자세를 만든 후 `SPACE`를 누릅니다.
+이 label은 평가용 human-guided category이며 production classification threshold가 아닙니다.
+
+### Lean threshold / hysteresis protocol
+
+한 피험자와 한 webcam 설치에서 얻은 다음 provisional engineering 값을 평가합니다.
+연속 이동 실험에서 네 전환과 chatter 없음이 확인되어 production의 관측용 classifier도
+동일한 `FaceLeanClassifier`를 재사용하지만, 보편적·의학적 기준은 아닙니다.
+
+```text
+LEFT entry    offset >= +0.20
+LEFT release  offset <= +0.10
+RIGHT entry   offset <= -0.15
+RIGHT release offset >= -0.08
+```
+
+```bash
+python vision/eval/lean_record.py --subject S01 --condition threshold-light-on \
+  --protocol lean-threshold --record-sec 3 --movement-sec 5
+```
+
+시퀀스는 다음과 같습니다.
+
+```text
+NEUTRAL_CENTER
+→ LEFT_BOUNDARY_OUT → LEFT_BOUNDARY_RETURN
+→ NEUTRAL_CENTER
+→ RIGHT_BOUNDARY_OUT → RIGHT_BOUNDARY_RETURN
+→ NEUTRAL_CENTER
+```
+
+모든 stage는 PREPARE에서 `SPACE`/`ENTER`를 기다립니다. NEUTRAL은 안정 자세를 기본
+3초 기록하고, boundary stage는 확인 후 기본 5초 동안 천천히 이동하는 transition frame을
+전부 기록합니다. JSONL에는 후보 state, 네 임계값, transition 여부와 transition 전후
+state가 추가됩니다. 측정 불가 frame은 `UNKNOWN`이며 CENTER로 바꾸지 않습니다.
+
+이 protocol과 candidate JSONL 필드는 평가 도구 안에서만 동작합니다. Production은 방향
+관측값만 payload로 전달하며, 의료적·자세 품질 기준으로 해석할 수 없습니다. Fusion state,
+SOMA Load, confidence, reasons 및 Feedback에 대한 Vision lean 영향은 계속 비활성입니다.
+
+---
+
 ## 보고할 것
 
 | 항목 | 왜 |

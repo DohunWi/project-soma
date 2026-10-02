@@ -23,6 +23,11 @@ VISION_MERGE_FIELDS = (
     "detect_rate",
     "blink_rate_baseline",
     "face_distance_baseline_cm",
+    "face_lateral_offset",
+    "head_roll_deg",
+    "head_roll_delta_deg",
+    "face_lateral_calibrated",
+    "face_lean_direction",
 )
 
 

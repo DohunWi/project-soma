@@ -35,6 +35,16 @@
         "blink_rate":       { "type": "number" },
         "low_blink_sec":    { "type": "number", "description": "깜빡임이 임계 이하로 유지된 연속 초" },
         "face_distance_cm": { "type": "number" },
+        "vision_face_lateral_offset": { "type": "number",
+                                       "description": "Vision 개인 중립 대비 얼굴 수평 이동. 음수=image-left, 양수=image-right. Chair balance와 별개인 관측값" },
+        "vision_head_roll_deg": { "type": "number",
+                                  "description": "Vision raw image-plane head roll 관측값" },
+        "vision_head_roll_delta_deg": { "type": "number",
+                                        "description": "Vision 개인 중립 대비 head roll 변화량" },
+        "vision_face_lateral_calibrated": { "type": "boolean",
+                                            "description": "Vision lateral 개인 calibration 사용 가능 여부. false는 CENTER가 아님" },
+        "vision_face_lean_direction": { "enum": ["LEFT", "CENTER", "RIGHT", "UNKNOWN"],
+                                        "description": "Chair balance와 별개인 관측용 Vision 얼굴 이동 방향. state/score/feedback에는 사용하지 않음" },
         "static_hold_sec":  { "type": "number", "description": "거의 안 움직인 연속 초" },
         "session_sec":      { "type": "number" }
       }

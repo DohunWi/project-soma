@@ -51,6 +51,40 @@ class EarThresholdSelection:
 
 DEFAULT_EAR_THRESHOLD_POLICY = EarThresholdPolicy()
 
+# Phase B.5 observational lean classifier. These provisional engineering
+# thresholds come from one subject and one webcam installation. In that setup,
+# positive offset mapped to the user's anatomical LEFT and negative to RIGHT;
+# mirrored/different camera setups must verify that mapping independently.
+LEAN_LEFT_ENTRY = 0.20
+LEAN_LEFT_RELEASE = 0.10
+LEAN_RIGHT_ENTRY = -0.15
+LEAN_RIGHT_RELEASE = -0.08
+
+
+@dataclass(frozen=True)
+class LeanThresholdPolicy:
+    """Hysteresis thresholds for observational face lateral direction."""
+
+    left_entry: float = LEAN_LEFT_ENTRY
+    left_release: float = LEAN_LEFT_RELEASE
+    right_entry: float = LEAN_RIGHT_ENTRY
+    right_release: float = LEAN_RIGHT_RELEASE
+
+    def __post_init__(self) -> None:
+        values = (
+            self.left_entry,
+            self.left_release,
+            self.right_entry,
+            self.right_release,
+        )
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("lean thresholds must be finite")
+        if not self.right_entry < self.right_release < self.left_release < self.left_entry:
+            raise ValueError("lean thresholds must define ordered entry/release bands")
+
+
+DEFAULT_LEAN_THRESHOLD_POLICY = LeanThresholdPolicy()
+
 
 def resolve_ear_thresholds(
     open_ear_baseline: object,

@@ -47,6 +47,12 @@ from ear import (  # vision/blink/ear.py
     face_ear_values,
 )
 from geometry import face_width_px, is_frontal, yaw_asymmetry   # vision/geometry.py
+from lateral import (
+    FaceLeanClassifier,
+    angle_delta_deg,
+    face_lateral_geometry,
+    lateral_offset,
+)
 from landmarks import FaceLandmarks                     # vision/landmarks.py
 from payload import vision_payload                      # vision/payload.py
 from quality import FrameQuality                        # vision/quality.py
@@ -155,6 +161,7 @@ def main():
             )
 
         counter = make_blink_counter()
+        lean_classifier = FaceLeanClassifier()
         quality = FrameQuality()
         last_send = 0.0
 
@@ -171,6 +178,8 @@ def main():
 
             detected = pts is not None
             left_ear = right_ear = ear = dist_cm = width_px = yaw = None
+            lateral_geometry = None
+            face_lateral_offset = head_roll_deg = head_roll_delta_deg = None
             frontal = False
             blinked = False
             blink_phase_before = counter.phase
@@ -193,6 +202,7 @@ def main():
                 width_px = face_width_px(pts)
                 if frontal:
                     dist_cm = calib.distance_cm(width_px)
+                    lateral_geometry = face_lateral_geometry(pts, frame.shape[1])
 
                 if calib.is_calibrating():
                     sample = calibration_sample(
@@ -203,6 +213,18 @@ def main():
                         right_ear=right_ear,
                         combined_ear=ear,
                         blink_rate=counter.rate(now),
+                        face_center_x_ratio=(
+                            lateral_geometry.center_x_ratio
+                            if lateral_geometry is not None else None
+                        ),
+                        face_width_ratio=(
+                            lateral_geometry.width_ratio
+                            if lateral_geometry is not None else None
+                        ),
+                        head_roll_deg=(
+                            lateral_geometry.head_roll_deg
+                            if lateral_geometry is not None else None
+                        ),
                     )
                     if sample is not None:
                         calib.add_sample(sample, now=now)
@@ -216,8 +238,31 @@ def main():
                 # Startup samples must not leak into the measured blink window.
                 # A failed calibration resolves to the prior baseline or fallback.
                 counter = make_blink_counter()
+                lean_classifier.reset()
                 blinked = False
                 blink_phase_before = counter.phase
+
+            lateral_baseline = calib.lateral_baseline()
+            if lateral_geometry is not None:
+                head_roll_deg = round(lateral_geometry.head_roll_deg, 3)
+                if lateral_baseline is not None:
+                    face_lateral_offset = lateral_offset(
+                        lateral_geometry,
+                        neutral_center_x_ratio=lateral_baseline[
+                            "neutral_face_center_x_ratio"
+                        ],
+                    )
+                    head_roll_delta_deg = angle_delta_deg(
+                        lateral_geometry.head_roll_deg,
+                        lateral_baseline["neutral_head_roll_deg"],
+                    )
+                    if face_lateral_offset is not None:
+                        face_lateral_offset = round(face_lateral_offset, 4)
+                    if head_roll_delta_deg is not None:
+                        head_roll_delta_deg = round(head_roll_delta_deg, 3)
+            face_lean_direction = lean_classifier.update(
+                face_lateral_offset
+            ).direction
 
             quality.update(now, detected=detected,
                            frontal=(frontal if detected else None))
@@ -249,7 +294,12 @@ def main():
                     blink_rate_baseline=calib.baseline_blink_rate(),
                     detect_rate=quality.detect_rate(now),
                     yaw_dropped_rate=quality.yaw_dropped_rate(now),
-                    calibrating=calib.is_calibrating())
+                    calibrating=calib.is_calibrating(),
+                    face_lateral_offset=face_lateral_offset,
+                    head_roll_deg=head_roll_deg,
+                    head_roll_delta_deg=head_roll_delta_deg,
+                    face_lateral_calibrated=lateral_baseline is not None,
+                    face_lean_direction=face_lean_direction)
 
             payloads = []
             # 깜빡임 사건은 즉시 보냅니다 — 초 단위 사건이라 주기 전송에 묻히면 안 됩니다

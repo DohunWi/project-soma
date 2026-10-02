@@ -8,12 +8,14 @@ import pytest
 from vision.calibrator import Calibrator, calibration_sample
 
 
-def sample(open_ear=0.80, face_width_px=200.0, blink_rate=None):
-    return {
+def sample(open_ear=0.80, face_width_px=200.0, blink_rate=None, **extra):
+    value = {
         "face_width_px": face_width_px,
         "blink_rate": blink_rate,
         "open_ear": open_ear,
     }
+    value.update(extra)
+    return value
 
 
 def complete_calibration(calibrator, values, *, start=100.0, duration=3.0):
@@ -205,3 +207,57 @@ def test_distance_calibration_regression(tmp_path):
 
     assert calibrator.baseline_distance_cm() == 60.0
     assert calibrator.distance_cm(240.0) == pytest.approx(50.0)
+
+
+def test_lateral_neutral_uses_robust_medians_with_off_center_camera(tmp_path):
+    calibrator = Calibrator(
+        tmp_path / "baseline.json",
+        min_valid_samples=5,
+        duration_sec=1.0,
+    )
+    calibrator.start()
+    centers = (0.58, 0.59, 0.60, 0.61, 0.95)
+    for index, center in enumerate(centers):
+        calibrator.add_sample(
+            sample(
+                neutral_face_center_x_ratio=center,
+                neutral_face_width_ratio=0.25,
+                neutral_head_roll_deg=2.0,
+            ),
+            now=10.0 + index * 0.25,
+        )
+
+    baseline = calibrator.lateral_baseline()
+
+    assert baseline["neutral_face_center_x_ratio"] == pytest.approx(0.60)
+    assert baseline["neutral_face_width_ratio"] == pytest.approx(0.25)
+    assert baseline["neutral_head_roll_deg"] == pytest.approx(2.0)
+
+
+def test_legacy_baseline_has_no_lateral_reference(tmp_path):
+    path = tmp_path / "baseline.json"
+    path.write_text(json.dumps({
+        "face_width_px": 200.0,
+        "blink_rate": 0.0,
+        "open_ear_baseline": 0.8,
+        "calib_distance_cm": 60.0,
+    }), encoding="utf-8")
+
+    calibrator = Calibrator(path)
+
+    assert calibrator.is_done() is True
+    assert calibrator.lateral_baseline() is None
+
+
+def test_calibration_sample_rejects_invalid_optional_lateral_geometry():
+    assert calibration_sample(
+        face_detected=True,
+        frontal=True,
+        face_width_px=200,
+        left_ear=0.8,
+        right_ear=0.8,
+        combined_ear=0.8,
+        face_center_x_ratio=math.nan,
+        face_width_ratio=0.25,
+        head_roll_deg=0,
+    ) is None

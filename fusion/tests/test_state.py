@@ -458,6 +458,33 @@ def test_vision_metrics_do_not_change_soma_load_score():
     assert chair_state.load == vision_state.load
 
 
+def test_observational_lateral_metrics_only_extend_output_metrics():
+    base = moving_sample(0)
+    observed = dict(base)
+    observed.update({
+        "face_lateral_offset": 0.2,
+        "head_roll_deg": 3.0,
+        "head_roll_delta_deg": 1.0,
+        "face_lateral_calibrated": True,
+        "face_lean_direction": "LEFT",
+    })
+
+    chair_state, chair_decision = run([base])
+    vision_state, vision_decision = run([observed])
+
+    assert vision_decision["state"] == chair_decision["state"]
+    assert vision_decision["score"] == chair_decision["score"]
+    assert vision_decision["reasons"] == chair_decision["reasons"]
+    assert vision_decision["confidence"] == chair_decision["confidence"]
+    assert vision_state.balance == chair_state.balance
+    assert vision_decision["metrics"]["balance"] == chair_decision["metrics"]["balance"]
+    assert vision_decision["metrics"]["vision_face_lateral_offset"] == 0.2
+    assert vision_decision["metrics"]["vision_head_roll_deg"] == 3.0
+    assert vision_decision["metrics"]["vision_head_roll_delta_deg"] == 1.0
+    assert vision_decision["metrics"]["vision_face_lateral_calibrated"] is True
+    assert vision_decision["metrics"]["vision_face_lean_direction"] == "LEFT"
+
+
 def test_웹캠_값이_없으면_metrics_에서_키를_뺀다():
     """null 은 state 계약 위반입니다. 대시보드는 없는 키를 '—' 로 표시합니다."""
     _, d = run([{"pressure": SEATED, "user_name": "t"}])

@@ -80,6 +80,11 @@ def vision_payload(t=1000.0):
             "detect_rate": 1.0,
             "blink_rate": 0.0,
             "face_distance_cm": 10.0,
+            "face_lateral_offset": 0.2,
+            "head_roll_deg": 3.0,
+            "head_roll_delta_deg": 1.0,
+            "face_lateral_calibrated": True,
+            "face_lean_direction": "LEFT",
         },
     }
 
@@ -335,10 +340,14 @@ def test_fresh_vision_changes_metrics_but_phase_c_score_penalty_remains_zero():
     assert events(front, "feedback") == []
     producer.emit("sensor_data", chair_payload(1000.0))
 
-    decision = events(front, "state")[0]
+    received = front.get_received()
+    decision = named_events(received, "state")[0]
     assert decision["metrics"]["blink_rate"] == 0.0
     assert decision["metrics"]["face_distance_cm"] == 10.0
+    assert decision["metrics"]["vision_face_lateral_offset"] == 0.2
+    assert decision["metrics"]["vision_face_lean_direction"] == "LEFT"
     assert decision["score"] == 100
+    assert named_events(received, "feedback")[0]["level"] == "NORMAL"
 
 
 def test_policy_exception_isolated_and_next_tick_and_persistence_continue():

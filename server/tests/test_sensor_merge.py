@@ -235,6 +235,41 @@ def test_only_present_supported_metrics_are_merged():
     assert "blink" not in sample
 
 
+def test_fresh_observational_lateral_metrics_merge_without_chair_overload():
+    cache = SessionSensorCache()
+    cache.update_vision(
+        vision_payload(
+            face_lateral_offset=0.2,
+            head_roll_deg=3.0,
+            head_roll_delta_deg=1.5,
+            face_lateral_calibrated=True,
+            face_lean_direction="LEFT",
+        ),
+        received_at=0.0,
+    )
+
+    sample = cache.merged_chair_sample(chair_payload(), received_at=0.0)
+
+    assert sample["face_lateral_offset"] == 0.2
+    assert sample["head_roll_deg"] == 3.0
+    assert sample["head_roll_delta_deg"] == 1.5
+    assert sample["face_lateral_calibrated"] is True
+    assert sample["face_lean_direction"] == "LEFT"
+    assert "balance" not in sample
+
+
+def test_stale_vision_does_not_fabricate_face_lean_direction():
+    cache = SessionSensorCache()
+    cache.update_vision(
+        vision_payload(face_lean_direction="RIGHT"),
+        received_at=10.0,
+    )
+
+    sample = cache.merged_chair_sample(chair_payload(t=1003.0), received_at=13.0)
+
+    assert "face_lean_direction" not in sample
+
+
 def test_vision_event_only_updates_cache_without_fusion_emit_or_persistence(monkeypatch):
     clock = FakeClock()
     persistence = RecordingPersistence()
