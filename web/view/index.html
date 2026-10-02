@@ -374,7 +374,8 @@
                     <nav class="flex justify-between items-center py-2 bg-transparent mb-4">
                         <h2 class="text-2xl font-bold text-gray-800" data-i18n="title_monitoring">실시간 모니터링</h2>
                         <div class="flex gap-2">
-                            <button onclick="location.href = './login.html'"
+                            <!-- 로그인 상태에 따라 로그인/로그아웃으로 바뀝니다 (아래 Supabase 스크립트) -->
+                            <button id="authButton"
                                 class="px-4 py-2 text-sm text-white bg-blue-500 rounded-md hover:bg-blue-600 shadow-sm transition-colors"
                                 data-i18n="btn_login">로그인</button>
                         </div>
@@ -552,7 +553,7 @@
         const translations = {
             ko: {
                 menu_monitoring: "실시간 모니터링", menu_dashboard: "대시보드", menu_settings: "설정", menu_info: "정보",
-                title_monitoring: "실시간 모니터링", btn_login: "로그인",
+                title_monitoring: "실시간 모니터링", btn_login: "로그인", btn_logout: "로그아웃",
                 status_waiting: "대기 중", cam_wait: "데이터 수신 대기 중", cam_wait_sub: "서버로부터 데이터를 기다립니다...",
                 live_detecting: "🔴 웹캠 모니터링 (서버 전송용 아님)", conn_title: "🪑 실시간 데이터 연동 현황", server_wait: "서버 연결 대기 중...",
                 current_posture: "현재 종합 상태", data_wait: "분석 대기 중", analyzing: "데이터를 수집하고 있습니다.",
@@ -568,7 +569,7 @@
             },
             en: {
                 menu_monitoring: "Live Monitoring", menu_dashboard: "Dashboard", menu_settings: "Settings", menu_info: "Info",
-                title_monitoring: "Live Monitoring", btn_login: "Login",
+                title_monitoring: "Live Monitoring", btn_login: "Login", btn_logout: "Logout",
                 status_waiting: "Waiting", cam_wait: "Waiting for Data", cam_wait_sub: "Waiting for server data...",
                 live_detecting: "🔴 Webcam View", conn_title: "🪑 Server Connection Status", server_wait: "Waiting for server...",
                 current_posture: "Overall Status", data_wait: "Waiting...", analyzing: "Collecting data.",
@@ -1054,6 +1055,60 @@
                 return;
             }
             if (data.session) connectWithSession(data.session);
+        });
+
+        // ── 로그인/로그아웃 버튼 ──
+        const authButton = document.getElementById('authButton');
+        let isLoggedIn = false;
+
+        function renderAuthButton(loggedIn) {
+            isLoggedIn = loggedIn;
+            const key = loggedIn ? 'btn_logout' : 'btn_login';
+            // changeLanguage() 가 data-i18n 을 보고 다시 그리므로 키도 같이 바꿉니다
+            authButton.setAttribute('data-i18n', key);
+            authButton.innerText = translations[currentLang][key];
+            authButton.classList.toggle('bg-blue-500', !loggedIn);
+            authButton.classList.toggle('hover:bg-blue-600', !loggedIn);
+            authButton.classList.toggle('bg-gray-500', loggedIn);
+            authButton.classList.toggle('hover:bg-gray-600', loggedIn);
+        }
+
+        // 처음 로드, 로그인, 로그아웃(다른 탭 포함) 때마다 호출됩니다
+        supabase.auth.onAuthStateChange((event, session) => {
+            renderAuthButton(!!session);
+        });
+
+        authButton.addEventListener('click', async () => {
+            if (!isLoggedIn) {
+                location.href = './login.html';
+                return;
+            }
+
+            authButton.disabled = true;
+            const { error } = await supabase.auth.signOut();
+            authButton.disabled = false;
+            if (error) {
+                console.error("로그아웃 실패:", error);
+                Swal.fire({ icon: 'error', title: '로그아웃 실패', text: '잠시 후 다시 시도해주세요.' });
+                return;
+            }
+
+            // 토큰을 지우고 인증 없이 다시 연결합니다
+            localStorage.removeItem('access_token');
+            if (typeof socket !== 'undefined') {
+                socket.disconnect();
+                socket.auth = {};
+                socket.connect();
+            }
+            renderAuthButton(false);
+
+            Swal.fire({
+                icon: 'info',
+                title: '로그아웃',
+                text: '로그아웃되었습니다.',
+                timer: 1500,
+                showConfirmButton: false
+            });
         });
 
         // [일간 통계 리포트 데이터 로드]
