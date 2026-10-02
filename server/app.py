@@ -73,6 +73,40 @@ _AUTO_PERSISTENCE = object()
 _AUTO_HISTORY_READER = object()
 FEEDBACK_DEVICE_ROOM = "feedback_devices"
 FEEDBACK_DEVICE_ROLE = "feedback_device"
+CROSS_VALIDATION_EVENT = "cross_validation_observation"
+CROSS_VALIDATION_ROOM_PREFIX = "cross_validation:"
+
+
+def _cross_validation_room(user_id):
+    return f"{CROSS_VALIDATION_ROOM_PREFIX}{user_id}"
+
+
+def _cross_validation_observation(sensor_cache, chair_payload, decision):
+    """Build opt-in eval instrumentation without changing production contracts."""
+    latest_chair = sensor_cache.latest_chair
+    latest_vision = sensor_cache.latest_vision
+    receipt_age = sender_delta = None
+    if latest_chair is not None and latest_vision is not None:
+        receipt_age = max(
+            latest_chair.received_at - latest_vision.received_at,
+            0.0,
+        )
+        sender_delta = abs(
+            latest_chair.sender_t - latest_vision.sender_t
+        )
+    return {
+        "v": 1,
+        "chair": chair_payload,
+        "vision": None if latest_vision is None else latest_vision.payload,
+        "vision_availability": sensor_cache.vision_availability.value,
+        "vision_receipt_age_sec": (
+            None if receipt_age is None else round(receipt_age, 6)
+        ),
+        "chair_vision_sender_delta_sec": (
+            None if sender_delta is None else round(sender_delta, 6)
+        ),
+        "state": decision,
+    }
 
 
 def _load_validator(path):
@@ -233,6 +267,7 @@ def create_app(
     )
     measurement_lock = threading.RLock()
     socket_identities = {}
+    cross_validation_observers = {}
     socket_identity_lock = threading.Lock()
     latest_device_feedback = {"decision": None}
     device_feedback_lock = threading.Lock()
@@ -316,6 +351,10 @@ def create_app(
                 role == "user" and connected_user_id == user_id
                 for role, connected_user_id in socket_identities.values()
             )
+
+    def has_cross_validation_observer(user_id):
+        with socket_identity_lock:
+            return user_id in cross_validation_observers.values()
 
     @app.get("/api/health")
     def health():
@@ -493,6 +532,10 @@ def create_app(
     def handle_connect(auth):
         token = auth.get("token") if isinstance(auth, dict) else None
         requested_role = auth.get("role") if isinstance(auth, dict) else None
+        observer_opt_in = (
+            isinstance(auth, dict)
+            and auth.get("observe_sensor_data") is True
+        )
         if (
             isinstance(token, str)
             and isinstance(sensor_auth_token, str)
@@ -500,6 +543,14 @@ def create_app(
             and hmac.compare_digest(token, sensor_auth_token)
         ):
             if requested_role not in (None, "sensor", FEEDBACK_DEVICE_ROLE):
+                log.warning(
+                    "socket connect rejected socket_sid=%s "
+                    "category=invalid_device_role requested_role=%s "
+                    "observer_opt_in=%s",
+                    request.sid,
+                    requested_role,
+                    observer_opt_in,
+                )
                 return False
             role = requested_role or "sensor"
             with socket_identity_lock:
@@ -525,20 +576,65 @@ def create_app(
                         "feedback device 동기화 실패 (%s)",
                         type(error).__name__,
                     )
+            log.info(
+                "socket connect accepted socket_sid=%s role=%s "
+                "observer_opt_in=%s",
+                request.sid,
+                role,
+                observer_opt_in,
+            )
             return True
         try:
             identity = verifier.verify(token)
-        except (AuthenticationError, AuthenticationUnavailable):
+        except AuthenticationError:
+            log.warning(
+                "socket connect rejected socket_sid=%s "
+                "category=invalid_user_token observer_opt_in=%s",
+                request.sid,
+                observer_opt_in,
+            )
             return False
-        with socket_identity_lock:
-            socket_identities[request.sid] = ("user", identity.user_id)
-        join_room(f"user:{identity.user_id}")
+        except AuthenticationUnavailable:
+            log.warning(
+                "socket connect rejected socket_sid=%s "
+                "category=auth_unavailable observer_opt_in=%s",
+                request.sid,
+                observer_opt_in,
+            )
+            return False
+        try:
+            with socket_identity_lock:
+                socket_identities[request.sid] = ("user", identity.user_id)
+                if observer_opt_in:
+                    cross_validation_observers[request.sid] = identity.user_id
+            join_room(f"user:{identity.user_id}")
+            if observer_opt_in:
+                join_room(_cross_validation_room(identity.user_id))
+        except Exception as error:  # noqa: BLE001
+            with socket_identity_lock:
+                socket_identities.pop(request.sid, None)
+                cross_validation_observers.pop(request.sid, None)
+            log.warning(
+                "socket connect rejected socket_sid=%s "
+                "category=room_setup_error observer_opt_in=%s error_type=%s",
+                request.sid,
+                observer_opt_in,
+                type(error).__name__,
+            )
+            return False
+        log.info(
+            "socket connect accepted socket_sid=%s role=user "
+            "observer_opt_in=%s",
+            request.sid,
+            observer_opt_in,
+        )
         return True
 
     @socketio.on("disconnect")
     def handle_disconnect():
         with socket_identity_lock:
             disconnected = socket_identities.pop(request.sid, None)
+            cross_validation_observers.pop(request.sid, None)
             owner_still_connected = (
                 disconnected is not None
                 and disconnected[0] == "user"
@@ -592,6 +688,22 @@ def create_app(
                     decision,
                     to=f"user:{measurement.user_id}",
                 )
+                if has_cross_validation_observer(measurement.user_id):
+                    try:
+                        socketio.emit(
+                            CROSS_VALIDATION_EVENT,
+                            _cross_validation_observation(
+                                pipeline.sensor_cache,
+                                payload,
+                                decision,
+                            ),
+                            to=_cross_validation_room(measurement.user_id),
+                        )
+                    except Exception as error:  # noqa: BLE001
+                        log.warning(
+                            "cross-validation observation 전송 실패 (%s)",
+                            type(error).__name__,
+                        )
                 feedback_decision = None
                 try:
                     feedback_decision = feedback.process_decision(

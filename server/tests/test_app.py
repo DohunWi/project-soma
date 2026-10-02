@@ -16,7 +16,11 @@ from server.app import (  # noqa: E402
     PayloadError,
     create_app,
 )
-from server.auth import AuthIdentity, AuthenticationError  # noqa: E402
+from server.auth import (  # noqa: E402
+    AuthIdentity,
+    AuthenticationError,
+    AuthenticationUnavailable,
+)
 from server.config import DEMO_PROFILE, NORMAL_PROFILE  # noqa: E402
 from server.state_history import HistoryUnavailable  # noqa: E402
 from tools.mock.stream import build, chair_sample  # noqa: E402
@@ -542,6 +546,56 @@ def test_measurement_endpoints_reject_missing_token():
     assert response.get_json()["error"]["code"] == "invalid_token"
 
 
+@pytest.mark.parametrize(
+    ("error", "category"),
+    [
+        (AuthenticationError("invalid"), "invalid_user_token"),
+        (AuthenticationUnavailable("offline"), "auth_unavailable"),
+    ],
+)
+def test_socket_user_rejection_logs_safe_reason_category(
+    error,
+    category,
+    caplog,
+):
+    class RejectingVerifier:
+        def verify(self, _token):
+            raise error
+
+    app, socketio = create_app(
+        testing=True,
+        auth_verifier=RejectingVerifier(),
+        sensor_auth_token=SENSOR_TOKEN,
+    )
+
+    with caplog.at_level("WARNING", logger="soma.server"):
+        rejected = socketio.test_client(
+            app,
+            auth={"token": "credential-must-not-be-logged", "observe_sensor_data": True},
+        )
+
+    assert rejected.is_connected() is False
+    assert category in caplog.text
+    assert "observer_opt_in=True" in caplog.text
+    assert "credential-must-not-be-logged" not in caplog.text
+
+
+def test_socket_acceptance_logs_role_and_observer_without_token(caplog):
+    app, socketio = make_app()
+
+    with caplog.at_level("INFO", logger="soma.server"):
+        observer = socketio.test_client(
+            app,
+            auth={"token": USER_TOKEN, "observe_sensor_data": True},
+        )
+
+    assert observer.is_connected() is True
+    assert "role=user" in caplog.text
+    assert "observer_opt_in=True" in caplog.text
+    assert USER_TOKEN not in caplog.text
+    observer.disconnect()
+
+
 def test_invalid_stop_token_cannot_stop_but_last_owner_disconnect_releases_session():
     app, socketio = make_app()
     producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
@@ -606,6 +660,65 @@ def test_state_is_emitted_only_to_authenticated_active_user_room():
 
     assert [e for e in active_user.get_received() if e["name"] == "state"]
     assert [e for e in other_user.get_received() if e["name"] == "state"] == []
+
+
+def test_cross_validation_observation_is_opt_in_and_owner_scoped():
+    receipt_times = iter((10.0, 10.5, 10.5))
+    app, socketio = make_app(sensor_monotonic=lambda: next(receipt_times))
+    app.extensions["measurement_sessions"].start(USER_ID)
+    app.extensions["chair_pipeline"].reset()
+    producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
+    ordinary_user = socketio.test_client(app, auth={"token": USER_TOKEN})
+    observer = socketio.test_client(
+        app,
+        auth={"token": USER_TOKEN, "observe_sensor_data": True},
+    )
+    other_observer = socketio.test_client(
+        app,
+        auth={"token": OTHER_TOKEN, "observe_sensor_data": True},
+    )
+
+    producer.emit(
+        "sensor_data",
+        {
+            "v": 1,
+            "t": 999.9,
+            "source": "vision",
+            "user_name": "test",
+            "vision": {
+                "face_detected": True,
+                "detect_rate": 1.0,
+                "yaw_dropped_rate": 0.0,
+                "face_lateral_offset": 0.25,
+                "head_roll_delta_deg": 1.0,
+                "face_lean_direction": "LEFT",
+            },
+        },
+    )
+    producer.emit("sensor_data", chair_payload(t=1000.0))
+
+    ordinary_events = ordinary_user.get_received()
+    observed = [
+        event["args"][0]
+        for event in observer.get_received()
+        if event["name"] == "cross_validation_observation"
+    ]
+    other_events = other_observer.get_received()
+    assert [
+        event for event in ordinary_events
+        if event["name"] == "cross_validation_observation"
+    ] == []
+    assert [
+        event for event in other_events
+        if event["name"] == "cross_validation_observation"
+    ] == []
+    assert len(observed) == 1
+    assert observed[0]["chair"]["chair"]["pressure"] == [900, 700, 1000, 910]
+    assert observed[0]["vision"]["vision"]["face_lean_direction"] == "LEFT"
+    assert observed[0]["vision_availability"] == "FRESH"
+    assert observed[0]["vision_receipt_age_sec"] == pytest.approx(0.5)
+    assert observed[0]["chair_vision_sender_delta_sec"] == pytest.approx(0.1)
+    assert observed[0]["state"]["metrics"]["balance"] == "LEFT"
 
 
 def test_real_chair_identity_fields_do_not_block_authenticated_session_routing():
