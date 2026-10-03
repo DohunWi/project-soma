@@ -1,0 +1,80 @@
+"""Runtime profile selection for the Soma backend."""
+import os
+from dataclasses import dataclass
+
+from fusion.config import (
+    DEMO_FUSION_TIMING,
+    DEMO_SOMA_LOAD_CONFIG,
+    NORMAL_FUSION_TIMING,
+    NORMAL_SOMA_LOAD_CONFIG,
+    FusionTiming,
+    SomaLoadConfig,
+)
+
+
+class ProfileConfigError(ValueError):
+    """SOMA_MODE contains a value the backend cannot run."""
+
+
+@dataclass(frozen=True)
+class StoragePolicy:
+    """Periodic state_logs snapshot cadence for one runtime profile."""
+
+    db_snapshot_interval_sec: float
+
+
+@dataclass(frozen=True)
+class SensorMergePolicy:
+    """Source freshness rules shared by every runtime profile."""
+
+    vision_freshness_sec: float
+    vision_max_skew_sec: float
+
+
+@dataclass(frozen=True)
+class RuntimeProfile:
+    """Independent Fusion and storage settings selected for one server run."""
+
+    name: str
+    fusion: FusionTiming
+    load: SomaLoadConfig
+    storage: StoragePolicy
+
+
+DEFAULT_SENSOR_MERGE_POLICY = SensorMergePolicy(
+    vision_freshness_sec=3.0,
+    vision_max_skew_sec=3.0,
+)
+
+
+DEMO_PROFILE = RuntimeProfile(
+    name="demo",
+    fusion=DEMO_FUSION_TIMING,
+    load=DEMO_SOMA_LOAD_CONFIG,
+    storage=StoragePolicy(db_snapshot_interval_sec=5.0),
+)
+
+NORMAL_PROFILE = RuntimeProfile(
+    name="normal",
+    fusion=NORMAL_FUSION_TIMING,
+    load=NORMAL_SOMA_LOAD_CONFIG,
+    storage=StoragePolicy(db_snapshot_interval_sec=30.0),
+)
+
+PROFILES = {
+    DEMO_PROFILE.name: DEMO_PROFILE,
+    NORMAL_PROFILE.name: NORMAL_PROFILE,
+}
+
+
+def load_runtime_profile(mode=None):
+    """Resolve SOMA_MODE, defaulting only a missing variable to Demo."""
+    selected = os.getenv("SOMA_MODE") if mode is None else mode
+    if selected is None:
+        return DEMO_PROFILE
+    if selected not in PROFILES:
+        allowed = ", ".join(PROFILES)
+        raise ProfileConfigError(
+            f"Invalid SOMA_MODE={selected!r}. Expected one of: {allowed}."
+        )
+    return PROFILES[selected]

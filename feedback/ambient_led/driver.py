@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-feedback/ambient_led/driver.py
+feedback/ambient_led/driver.py — LEGACY ambient output
 ──────────────────────────────
-모니터 상단 LED 유닛 드라이버.
+이전 pos/width/sat 기반 모니터 상단 LED 드라이버입니다. Production 출력은
+feedback/nano/bridge.py를 사용하며 run_all 기본 경로는 이 파일을 실행하지 않습니다.
 
 **아두이노를 거치지 않습니다.** 노트북이 허브이고, LED 유닛은 별개의 USB 장치입니다.
 의자 아두이노는 압력·ToF·진동만 담당합니다.

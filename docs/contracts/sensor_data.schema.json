@@ -55,7 +55,17 @@
         "yaw_dropped_rate": { "type": "number", "minimum": 0, "maximum": 1,
                               "description": "고개 돌림으로 거리값을 버린 프레임 비율. 높으면 거리 지표가 드문드문합니다" },
         "calibrating":      { "type": "boolean",
-                              "description": "캘리브레이션 진행 중. 거리값이 없는 이유가 장애가 아님을 알립니다" }
+                              "description": "캘리브레이션 진행 중. 거리값이 없는 이유가 장애가 아님을 알립니다" },
+        "face_lateral_offset": { "type": "number",
+                              "description": "개인 중립 얼굴 중심 대비 수평 이동을 현재 얼굴 폭으로 정규화한 관측값. 음수=image-left, 양수=image-right이며 해부학적 좌우를 뜻하지 않습니다" },
+        "head_roll_deg":    { "type": "number",
+                              "description": "raw image의 바깥 눈꼬리 선 각도. image-right로 내려가면 양수입니다" },
+        "head_roll_delta_deg": { "type": "number",
+                              "description": "개인 중립 calibration 대비 head_roll_deg 변화량" },
+        "face_lateral_calibrated": { "type": "boolean",
+                              "description": "개인 중립 얼굴 위치/폭/roll calibration 사용 가능 여부. false를 CENTER로 해석하면 안 됩니다" },
+        "face_lean_direction": { "enum": ["LEFT", "CENTER", "RIGHT", "UNKNOWN"],
+                              "description": "개인 중립 대비 얼굴 좌우 이동의 관측용 hysteresis 분류. 현재 설치에서 양수=사용자 LEFT, 음수=사용자 RIGHT이며 다른 webcam은 mapping 검증이 필요합니다. state/score/feedback에는 사용하지 않습니다" }
       }
     }
   },
