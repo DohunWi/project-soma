@@ -441,8 +441,11 @@ decision 또는 OFF를 device 전용 socket에 다시 보내므로 현재 LEVEL�
 Nano bridge는 별도 optional process이며 serial/Socket.IO 연결 실패로 종료되지 않고
 backoff 후 재시도합니다. `tools/demo/run_all.py --nano`로 명시적으로 포함할 수 있고 Nano
 process가 종료되어도 core demo는 계속됩니다. Firmware는 `millis()` 기반 LED/진동 pattern,
-15초 command timeout OFF, 유한 진동을 담당합니다. 실제 배선 pin, LED 종류·개수, 색·밝기,
-진동 길이·체감 강도는 hardware E2E 전까지 초기값/TODO입니다.
+15초 command timeout OFF, 유한 진동을 담당합니다. 2026-10-03 physical validation 기준
+Nano 배선은 NeoPixel data D13, LED 6개, vibration input D9입니다. 색·밝기, 점멸 주기와
+진동 길이·체감 강도는 별도의 hardware UX 검증 대상으로 유지합니다. 같은 날 production
+firmware/bridge와 Backend·Front·mock Chair를 연결한 E2E에서 logical feedback에 따른 Nano
+출력 전환 및 measurement STOP 시 물리 출력 OFF를 확인했습니다.
 
 ### 7-6. 개입 원칙
 

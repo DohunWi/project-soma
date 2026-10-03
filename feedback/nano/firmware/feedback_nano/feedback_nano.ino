@@ -13,15 +13,16 @@
   Serial output after boot:
     READY
 
-  The pin/count values below are initial build constants because the repository
-  does not record the completed Nano wiring. Verify them before uploading.
+  Physical build wiring validated on 2026-10-03:
+    NeoPixel data: D13 (6 pixels)
+    Vibration input: D9
 */
 #include <Adafruit_NeoPixel.h>
 
-// TODO(hardware E2E): replace these with the pins/count used by the wired Nano.
-const uint8_t PIN_LED_DATA = 6;
+// Keep these constants aligned with the validated Feedback Nano wiring.
+const uint8_t PIN_LED_DATA = 13;
 const uint8_t PIN_VIBRATION = 9;
-const uint16_t LED_COUNT = 32;
+const uint16_t LED_COUNT = 6;
 
 const unsigned long SERIAL_BAUD_RATE = 9600;
 const unsigned long LED_FRAME_MS = 40;
