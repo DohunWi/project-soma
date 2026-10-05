@@ -46,6 +46,7 @@ def make_app(**kwargs):
         testing=True,
         auth_verifier=FakeAuthVerifier(),
         sensor_auth_token=SENSOR_TOKEN,
+        _skip_calibration_for_testing=True,
         **kwargs,
     )
 
@@ -69,6 +70,9 @@ def emitted_states(socketio, app, payload, *, activate=True):
         measurement, _created = app.extensions["measurement_sessions"].start(USER_ID)
         app.extensions["chair_pipeline"].reset()
         app.extensions["feedback_coordinator"].start_session(
+            measurement.session_id
+        )
+        app.extensions["measurement_calibration"].force_measuring_for_test(
             measurement.session_id
         )
     producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
@@ -112,6 +116,9 @@ def history_snapshot(measured_at="2026-09-23T02:59:59Z"):
 def activate_history_session(app, user_id=USER_ID):
     session, created = app.extensions["measurement_sessions"].start(user_id)
     assert created is True
+    app.extensions["measurement_calibration"].force_measuring_for_test(
+        session.session_id
+    )
     return session
 
 
@@ -331,8 +338,11 @@ def test_state_emit_happens_before_persistence_enqueue():
     states = emitted_states(socketio, app, chair_payload())
 
     assert states[0]["state"] == "NORMAL"
-    assert order[:4] == ["state", "feedback", "feedback_device", "persistence"]
-    assert order[4:] == ["feedback_device_off"]
+    realtime_order = [item for item in order if item != "measurement_phase"]
+    assert realtime_order[:4] == [
+        "state", "feedback", "feedback_device", "persistence"
+    ]
+    assert realtime_order[4:] == ["feedback_device_off"]
 
 
 def test_persistence_failure_does_not_prevent_state_emit():
@@ -365,6 +375,9 @@ def test_persistence_receives_only_verified_user_and_active_session_identity():
     app, socketio = make_app(state_persistence=CapturingPersistence())
     measurement, _created = app.extensions["measurement_sessions"].start(USER_ID)
     app.extensions["chair_pipeline"].reset()
+    app.extensions["measurement_calibration"].force_measuring_for_test(
+        measurement.session_id
+    )
     payload = chair_payload()
     payload["user_id"] = str(OTHER_USER_ID)
 
@@ -436,7 +449,10 @@ def test_absent_mock_remains_absent_after_sixty_seconds():
 def test_accumulated_chair_state_can_be_emitted(pressure, seconds, expected):
     app, socketio = make_app(runtime_profile=NORMAL_PROFILE)
     pipeline = app.extensions["chair_pipeline"]
-    app.extensions["measurement_sessions"].start(USER_ID)
+    measurement, _created = app.extensions["measurement_sessions"].start(USER_ID)
+    app.extensions["measurement_calibration"].force_measuring_for_test(
+        measurement.session_id
+    )
     pipeline.reset()
     payload = chair_payload(t=1000.0, pressure=pressure, user=expected)
 
@@ -650,7 +666,10 @@ def test_measurement_remains_active_until_last_owner_socket_disconnects():
 
 def test_state_is_emitted_only_to_authenticated_active_user_room():
     app, socketio = make_app()
-    app.extensions["measurement_sessions"].start(USER_ID)
+    measurement, _created = app.extensions["measurement_sessions"].start(USER_ID)
+    app.extensions["measurement_calibration"].force_measuring_for_test(
+        measurement.session_id
+    )
     app.extensions["chair_pipeline"].reset()
     producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
     active_user = socketio.test_client(app, auth={"token": USER_TOKEN})
@@ -665,7 +684,10 @@ def test_state_is_emitted_only_to_authenticated_active_user_room():
 def test_cross_validation_observation_is_opt_in_and_owner_scoped():
     receipt_times = iter((10.0, 10.5, 10.5))
     app, socketio = make_app(sensor_monotonic=lambda: next(receipt_times))
-    app.extensions["measurement_sessions"].start(USER_ID)
+    measurement, _created = app.extensions["measurement_sessions"].start(USER_ID)
+    app.extensions["measurement_calibration"].force_measuring_for_test(
+        measurement.session_id
+    )
     app.extensions["chair_pipeline"].reset()
     producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
     ordinary_user = socketio.test_client(app, auth={"token": USER_TOKEN})

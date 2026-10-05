@@ -1,5 +1,6 @@
 """Immutable State timing and SOMA Load Model profiles."""
 from dataclasses import dataclass
+from math import isfinite
 
 
 PenaltyCurve = tuple[tuple[float, float], ...]
@@ -16,6 +17,43 @@ class FusionTiming:
     low_blink_danger_sec: float
     close_distance_caution_sec: float
     max_gap_sec: float
+
+
+@dataclass(frozen=True)
+class DistanceEvidenceTiming:
+    """Provisional observation timings; not score or medical thresholds."""
+
+    body_forward_enter_sec: float
+    face_only_enter_sec: float
+    recovery_sec: float
+    max_gap_sec: float = 5.0
+
+    def __post_init__(self):
+        for value in (
+            self.body_forward_enter_sec,
+            self.face_only_enter_sec,
+            self.recovery_sec,
+            self.max_gap_sec,
+        ):
+            if not isfinite(value) or value <= 0:
+                raise ValueError("distance evidence timings must be positive and finite")
+        if self.face_only_enter_sec < self.body_forward_enter_sec:
+            raise ValueError("weaker face-only evidence must not enter faster than body evidence")
+
+
+# Engineering candidates only: BODY uses the existing absolute-close time scale;
+# weaker FACE_ONLY needs twice as long. Recovery is deliberately shorter than entry.
+# Demo compresses the observation for a short demonstration, not physiological time.
+DEMO_DISTANCE_EVIDENCE_TIMING = DistanceEvidenceTiming(
+    body_forward_enter_sec=10.0,
+    face_only_enter_sec=20.0,
+    recovery_sec=5.0,
+)
+NORMAL_DISTANCE_EVIDENCE_TIMING = DistanceEvidenceTiming(
+    body_forward_enter_sec=300.0,
+    face_only_enter_sec=600.0,
+    recovery_sec=30.0,
+)
 
 
 @dataclass(frozen=True)

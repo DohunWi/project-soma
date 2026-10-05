@@ -79,6 +79,7 @@ def make_app(clock, persistence=None):
         sensor_auth_token=SENSOR_TOKEN,
         sensor_monotonic=clock.monotonic,
         state_persistence=persistence,
+        _skip_calibration_for_testing=True,
     )
 
 

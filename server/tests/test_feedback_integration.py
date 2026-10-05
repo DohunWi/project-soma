@@ -51,6 +51,7 @@ def make_app(**kwargs):
         testing=True,
         auth_verifier=FakeAuthVerifier(),
         sensor_auth_token=SENSOR_TOKEN,
+        _skip_calibration_for_testing=True,
         **kwargs,
     )
 

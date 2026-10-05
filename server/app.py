@@ -1,9 +1,10 @@
 """Project Soma 실시간 백엔드.
 
 수집 계층의 ``sensor_data`` 를 항상 계약으로 검증합니다. 인증 사용자의 measurement가
-ACTIVE일 때 Vision은 session cache를 갱신하고, Chair tick은 fresh Vision과 병합한 값을
-새 ``FusionState`` 에 반영합니다. state를 사용자 room에 먼저 발행하고 session-scoped
-Feedback Policy의 logical feedback을 발행한 뒤 비동기 persistence를 시도합니다.
+CALIBRATING일 때 Chair-authoritative merged samples로 session working baseline을 만들고,
+MEASURING일 때만 fresh Vision과 병합한 값을 새 ``FusionState`` 에 반영합니다. state를
+사용자 room에 먼저 발행하고 session-scoped Feedback Policy의 logical feedback을 발행한
+뒤 비동기 persistence를 시도합니다.
 
 실시간 경로는 Supabase와 독립적입니다. snapshot 저장은 비동기 DBWriter로 넘기고
 History DB 조회는 해당 HTTP 요청에서만 수행하므로, DB 설정이나 인터넷 연결이 없어도
@@ -14,6 +15,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from functools import wraps
 from pathlib import Path
 
@@ -26,7 +28,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from fusion.state import FusionState, step  # noqa: E402
+from fusion.state import OCCUPANCY_MIN, FusionState, step  # noqa: E402
 from feedback.config import feedback_config_for_mode  # noqa: E402
 from server.auth import (  # noqa: E402
     AuthenticationError,
@@ -46,6 +48,10 @@ from server.measurement_sessions import (  # noqa: E402
     MeasurementInUse,
     MeasurementSessionRegistry,
     NoMeasurementSession,
+)
+from server.measurement_calibration import (  # noqa: E402
+    MeasurementCalibration,
+    MeasurementPhase,
 )
 from server.state_history import (  # noqa: E402
     HistoryRequestError,
@@ -69,6 +75,9 @@ log = logging.getLogger("soma.server")
 SENSOR_SCHEMA_PATH = ROOT / "docs" / "contracts" / "sensor_data.schema.json"
 STATE_SCHEMA_PATH = ROOT / "docs" / "contracts" / "state.schema.json"
 STATE_HISTORY_SCHEMA_PATH = ROOT / "docs" / "contracts" / "state_history.schema.json"
+MEASUREMENT_PHASE_SCHEMA_PATH = (
+    ROOT / "docs" / "contracts" / "measurement_phase.schema.json"
+)
 _AUTO_PERSISTENCE = object()
 _AUTO_HISTORY_READER = object()
 FEEDBACK_DEVICE_ROOM = "feedback_devices"
@@ -81,7 +90,13 @@ def _cross_validation_room(user_id):
     return f"{CROSS_VALIDATION_ROOM_PREFIX}{user_id}"
 
 
-def _cross_validation_observation(sensor_cache, chair_payload, decision):
+def _cross_validation_observation(
+    sensor_cache,
+    chair_payload,
+    decision,
+    distance_evidence=None,
+    distance_temporal=None,
+):
     """Build opt-in eval instrumentation without changing production contracts."""
     latest_chair = sensor_cache.latest_chair
     latest_vision = sensor_cache.latest_vision
@@ -94,7 +109,7 @@ def _cross_validation_observation(sensor_cache, chair_payload, decision):
         sender_delta = abs(
             latest_chair.sender_t - latest_vision.sender_t
         )
-    return {
+    observation = {
         "v": 1,
         "chair": chair_payload,
         "vision": None if latest_vision is None else latest_vision.payload,
@@ -107,6 +122,11 @@ def _cross_validation_observation(sensor_cache, chair_payload, decision):
         ),
         "state": decision,
     }
+    if distance_evidence is not None:
+        observation["distance_evidence"] = distance_evidence.as_dict()
+    if distance_temporal is not None:
+        observation["distance_temporal"] = distance_temporal.as_dict()
+    return observation
 
 
 def _load_validator(path):
@@ -121,6 +141,7 @@ def _load_validator(path):
 SENSOR_VALIDATOR = _load_validator(SENSOR_SCHEMA_PATH)
 STATE_VALIDATOR = _load_validator(STATE_SCHEMA_PATH)
 STATE_HISTORY_VALIDATOR = _load_validator(STATE_HISTORY_SCHEMA_PATH)
+MEASUREMENT_PHASE_VALIDATOR = _load_validator(MEASUREMENT_PHASE_SCHEMA_PATH)
 
 
 class PayloadError(ValueError):
@@ -147,7 +168,7 @@ class ChairPipeline:
         monotonic=None,
     ):
         self._state = FusionState()
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._timing = timing
         self._load_config = load_config
         cache_kwargs = {} if monotonic is None else {"monotonic": monotonic}
@@ -171,13 +192,27 @@ class ChairPipeline:
     def process_validated(self, payload):
         """Advance Fusion for one payload already checked against the contract."""
         with self._lock:
+            sample = self.prepare_validated(payload)
+            if sample is None:
+                return None
+            return self.process_prepared(payload, sample)
+
+    def prepare_validated(self, payload):
+        """Cache Vision or build one Chair-authoritative merged sample."""
+        with self._lock:
             if payload["source"] == "vision":
                 self._sensor_cache.update_vision(payload)
                 return None
+            return self._sensor_cache.merged_chair_sample(payload)
 
-            sample = self._sensor_cache.merged_chair_sample(payload)
-            if sample is None:
-                return None
+    def mark_prepared(self, payload):
+        """Commit a Chair ordering checkpoint without running Fusion."""
+        with self._lock:
+            self._sensor_cache.mark_chair_processed(payload)
+
+    def process_prepared(self, payload, sample):
+        """Run Fusion for a previously prepared Chair sample."""
+        with self._lock:
             current, decision = step(
                 self._state,
                 sample,
@@ -242,6 +277,10 @@ def create_app(
     sensor_merge_policy=DEFAULT_SENSOR_MERGE_POLICY,
     sensor_monotonic=None,
     feedback_coordinator=None,
+    calibration_monotonic=None,
+    calibration_wall_clock=None,
+    calibration_timer_factory=None,
+    _skip_calibration_for_testing=False,
 ):
     profile = runtime_profile or load_runtime_profile()
     app = Flask(__name__)
@@ -265,12 +304,23 @@ def create_app(
     feedback = feedback_coordinator or FeedbackCoordinator(
         feedback_config_for_mode(profile.name)
     )
+    calibration = MeasurementCalibration(
+        profile.calibration,
+        occupancy_min=OCCUPANCY_MIN,
+        distance_evidence_timing=profile.distance_evidence_timing,
+    )
+    calibration_monotonic = calibration_monotonic or time.monotonic
+    calibration_wall_clock = calibration_wall_clock or time.time
+    calibration_timer_factory = calibration_timer_factory or threading.Timer
+    if _skip_calibration_for_testing and not testing:
+        raise ValueError("calibration may only be skipped in tests")
     measurement_lock = threading.RLock()
     socket_identities = {}
     cross_validation_observers = {}
     socket_identity_lock = threading.Lock()
     latest_device_feedback = {"decision": None}
     device_feedback_lock = threading.Lock()
+    calibration_timer = {"timer": None, "generation": None}
     if sensor_auth_token is None:
         sensor_auth_token = os.getenv("SOCKET_AUTH_TOKEN")
     db_writer = None
@@ -295,6 +345,7 @@ def create_app(
     app.extensions["auth_verifier"] = verifier
     app.extensions["measurement_sessions"] = sessions
     app.extensions["feedback_coordinator"] = feedback
+    app.extensions["measurement_calibration"] = calibration
     app.extensions["latest_device_feedback"] = latest_device_feedback
     if history_reader is _AUTO_HISTORY_READER:
         history_reader = StateHistoryReader()
@@ -337,13 +388,88 @@ def create_app(
             latest_device_feedback["decision"] = None
         emit_device_off()
 
+    def cancel_calibration_timer():
+        timer = calibration_timer["timer"]
+        calibration_timer["timer"] = None
+        calibration_timer["generation"] = None
+        if timer is not None:
+            timer.cancel()
+
+    def phase_payload():
+        return calibration.snapshot_for(
+            calibration_monotonic(),
+            calibration_wall_clock(),
+        )
+
+    def emit_phase(*, to):
+        payload = phase_payload()
+        message = _validation_message(MEASUREMENT_PHASE_VALIDATOR, payload)
+        if message:
+            raise PayloadError(f"measurement_phase 계약 위반: {message}")
+        socketio.emit("measurement_phase", payload, to=to)
+        return payload
+
+    def reset_measurement_engines(measurement):
+        """Ensure calibration observations cannot leak into measurement state."""
+        pipeline.reset()
+        feedback.stop_session(measurement.session_id)
+        feedback.start_session(measurement.session_id)
+        reset_device_feedback()
+        if persistence is not None:
+            persistence.end_session(measurement.user_id, measurement.session_id)
+
+    def apply_calibration_evaluation(measurement, evaluation):
+        """Apply sensor and timer evaluations through one exactly-once path."""
+        if evaluation.became_ready:
+            emit_phase(to=f"user:{measurement.user_id}")  # READY exactly once
+            cancel_calibration_timer()
+            reset_measurement_engines(measurement)
+            if calibration.accept_ready():
+                emit_phase(to=f"user:{measurement.user_id}")  # MEASURING once
+            return
+        if evaluation.became_failed:
+            cancel_calibration_timer()
+            reset_device_feedback()
+            emit_phase(to=f"user:{measurement.user_id}")
+
+    def calibration_timeout_callback(session_id, generation):
+        with measurement_lock:
+            measurement = sessions.active()
+            if (
+                measurement is None
+                or str(measurement.session_id) != str(session_id)
+                or calibration.session_id != str(session_id)
+                or calibration.generation != generation
+            ):
+                return
+            evaluation = calibration.evaluate(calibration_monotonic())
+            apply_calibration_evaluation(measurement, evaluation)
+
+    def schedule_calibration_timeout(measurement, generation):
+        cancel_calibration_timer()
+        timer = calibration_timer_factory(
+            profile.calibration.timeout_sec,
+            lambda: calibration_timeout_callback(
+                measurement.session_id,
+                generation,
+            ),
+        )
+        if hasattr(timer, "daemon"):
+            timer.daemon = True
+        calibration_timer["timer"] = timer
+        calibration_timer["generation"] = generation
+        timer.start()
+
     def finalize_measurement(measurement):
         """Clear every session-scoped subsystem after an authenticated stop."""
-        pipeline.clear_cache()
+        cancel_calibration_timer()
+        calibration.stop()
+        pipeline.reset()
         feedback.stop_session(measurement.session_id)
         reset_device_feedback()
         if persistence is not None:
             persistence.end_session(measurement.user_id, measurement.session_id)
+        emit_phase(to=f"user:{measurement.user_id}")
 
     def has_user_socket(user_id):
         with socket_identity_lock:
@@ -468,6 +594,18 @@ def create_app(
                     pipeline.reset()
                     feedback.start_session(measurement.session_id)
                     reset_device_feedback()
+                    if _skip_calibration_for_testing:
+                        calibration.force_measuring_for_test(measurement.session_id)
+                        emit_phase(to=f"user:{measurement.user_id}")
+                    else:
+                        generation = calibration.start(
+                            measurement.session_id,
+                            calibration_monotonic(),
+                        )
+                        emit_phase(to=f"user:{measurement.user_id}")
+                        schedule_calibration_timeout(measurement, generation)
+                else:
+                    emit_phase(to=f"user:{measurement.user_id}")
         except MeasurementInUse:
             return jsonify({
                 "v": 1,
@@ -610,6 +748,10 @@ def create_app(
             join_room(f"user:{identity.user_id}")
             if observer_opt_in:
                 join_room(_cross_validation_room(identity.user_id))
+            with measurement_lock:
+                active = sessions.active()
+                if active is not None and active.user_id == identity.user_id:
+                    emit_phase(to=request.sid)
         except Exception as error:  # noqa: BLE001
             with socket_identity_lock:
                 socket_identities.pop(request.sid, None)
@@ -678,7 +820,32 @@ def create_app(
                 measurement = sessions.active()
                 if measurement is None:
                     return
-                decision = pipeline.process_validated(payload)
+
+                if calibration.phase is MeasurementPhase.CALIBRATING:
+                    if calibration.failed:
+                        return
+                    sample = pipeline.prepare_validated(payload)
+                    if sample is None:
+                        return
+                    evaluation = calibration.observe(
+                        sample,
+                        calibration_monotonic(),
+                    )
+                    pipeline.mark_prepared(payload)
+                    if evaluation.became_ready or evaluation.became_failed:
+                        apply_calibration_evaluation(measurement, evaluation)
+                    else:
+                        emit_phase(to=f"user:{measurement.user_id}")
+                    return
+
+                if calibration.phase is not MeasurementPhase.MEASURING:
+                    return
+
+                sample = pipeline.prepare_validated(payload)
+                if sample is None:
+                    return
+                sample.update(calibration.relative_evidence(sample, now=payload["t"]))
+                decision = pipeline.process_prepared(payload, sample)
                 if decision is None:
                     return
 
@@ -696,6 +863,8 @@ def create_app(
                                 pipeline.sensor_cache,
                                 payload,
                                 decision,
+                                calibration.latest_distance_evidence,
+                                calibration.latest_distance_temporal,
                             ),
                             to=_cross_validation_room(measurement.user_id),
                         )

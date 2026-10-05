@@ -54,3 +54,18 @@ def test_runtime_profiles_select_independent_load_time_scales():
     assert DEMO_PROFILE.load.balance_recovery_sec == 6.0
     assert NORMAL_PROFILE.load.static_recovery_sec == 600.0
     assert NORMAL_PROFILE.load.balance_recovery_sec == 180.0
+
+
+@pytest.mark.parametrize("mode,expected", [
+    ("demo", (10.0, 20.0, 5.0)),
+    ("normal", (300.0, 600.0, 30.0)),
+])
+def test_runtime_profile_injects_distance_evidence_timing(monkeypatch, mode, expected):
+    monkeypatch.setenv("SOMA_MODE", mode)
+    app, _socketio = create_app(testing=True)
+    timing = app.extensions["measurement_calibration"].distance_evidence_timing
+    assert timing is app.extensions["runtime_profile"].distance_evidence_timing
+    assert (
+        timing.body_forward_enter_sec, timing.face_only_enter_sec, timing.recovery_sec,
+    ) == expected
+    assert timing.max_gap_sec == app.extensions["runtime_profile"].fusion.max_gap_sec

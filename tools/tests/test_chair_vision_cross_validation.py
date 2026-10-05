@@ -275,6 +275,27 @@ def test_row_contains_raw_chair_vision_freshness_and_sender_timestamps():
     assert row["vision"]["chair_sender_delta_sec"] == 0.1
 
 
+def test_row_preserves_optional_observational_distance_evidence():
+    payload = observation(direction="CENTER")
+    payload["distance_evidence"] = {
+        "classification": "BODY_FORWARD_CLOSE",
+        "face_approach_active": True,
+        "backrest_departure_active": True,
+        "vision_available": True,
+        "chair_ir_available": True,
+        "seated": True,
+        "reasons": ["face_approach", "backrest_departure"],
+        "face_distance_cm": 43.9,
+        "face_approach_delta_cm": 18.0,
+        "backrest_departure_delta_mm": 128.5,
+    }
+
+    row = row_for(payload)
+
+    assert row["distance_evidence"] == payload["distance_evidence"]
+    assert "distance_evidence" not in row_for(observation())
+
+
 def test_absent_and_all_direction_categories_are_preserved():
     absent = row_for(observation(seated=False, balance="CENTER"), SCENARIOS[13])
     assert absent["chair"]["occupancy"] == "ABSENT"
@@ -283,6 +304,23 @@ def test_absent_and_all_direction_categories_are_preserved():
     for direction in ("CENTER", "LEFT", "RIGHT", "UNKNOWN"):
         row = row_for(observation(direction=direction))
         assert row["vision"]["face_lean_direction"] == direction
+
+
+def test_row_preserves_optional_distance_temporal_without_modifying_fusion():
+    payload = observation(direction="CENTER")
+    payload["distance_temporal"] = {
+        "instantaneous_classification": "BODY_FORWARD_CLOSE",
+        "sustained_classification": "BODY_FORWARD_CLOSE",
+        "candidate_classification": "BODY_FORWARD_CLOSE",
+        "accumulated_sec": 10.0,
+        "recovery_sec": 0.0,
+        "active": True,
+        "reasons": ["sustained"],
+    }
+    row = row_for(payload)
+    assert row["distance_temporal"] == payload["distance_temporal"]
+    assert row["fusion"] == row_for(observation(direction="CENTER"))["fusion"]
+    assert "distance_temporal" not in row_for(observation())
 
 
 def test_stale_or_unseen_vision_is_unknown_not_center():

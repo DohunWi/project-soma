@@ -164,7 +164,8 @@ roll과의 최단 signed angle 차이입니다. Head roll은 머리만 기울인
 측정합니다. Vision lateral 값과 `face_lean_direction`은 state 전이, SOMA Load,
 Chair balance, confidence, reasons, Feedback에
 사용하지 않으며 의료적 자세 평가도 아닙니다. calibration/face/frontal geometry가
-유효하지 않으면 값을 생략하고 CENTER로 대체하지 않습니다. Phase C는 계속 비활성입니다.
+유효하지 않으면 값을 생략하고 CENTER로 대체하지 않습니다. Phase C의 session working
+baseline lifecycle은 아래처럼 준비됐지만, Vision/Chair relative penalty는 계속 비활성입니다.
 
 ### 4-3. 왜 깜빡임인가 — 자세 각도 대신
 
@@ -213,6 +214,7 @@ Chair balance, confidence, reasons, Feedback에
 | `state.schema.json` | fusion → 서버 → UI·피드백 |
 | `feedback.schema.json` | **서버 → 액추에이터 (역방향)** |
 | `report.schema.json` | DB → 서버 → 프론트 |
+| `measurement_phase.schema.json` | 서버 → 인증 사용자 room (측정 실행 단계) |
 
 ### 왜 `t` 와 `source` 가 필수인가
 
@@ -256,6 +258,96 @@ refresh나 네트워크 단절은 안전한 방향으로 측정을 종료하므�
 Owner socket이 하나라도 살아 있으면 기존대로 `measurement_in_use`이며 소유권을 넘기지
 않습니다. 임의의 시간 timeout은 정상 장시간 측정을 자를 근거가 없어 이번 단계에서는
 도입하지 않습니다.
+
+#### Phase C 측정 calibration lifecycle
+
+인증된 measurement session의 `ACTIVE / STOPPED`와 별도로 Backend는
+`OFF → CALIBRATING → READY → MEASURING → OFF` 실행 단계를 관리합니다. 이 단계는
+Fusion의 `NORMAL / CAUTION / DANGER / ABSENT` 상태와 다른 축입니다. READY는 baseline이
+수락됐음을 알리는 일회성 Socket.IO 이벤트이며, 동일한 전이 처리 안에서 즉시
+MEASURING으로 진행합니다.
+
+START 후 CALIBRATING에서는 계약 검증과 기존 freshness 규칙에 따른 Chair-authoritative
+Vision 병합만 수행합니다. Fusion/SOMA Load, `state` emit, persistence, Feedback/Nano는
+진행하지 않습니다. Demo는 최소 5초와 유효 Vision/Chair IR 각 5개(30초 timeout),
+Normal은 최소 8초와 각 8개(45초 timeout)를 요구합니다. 착석 상태의 `IR >= 0`만 Chair
+표본으로, fresh Vision의 `face_detected=true`이면서 양의 유한 거리만 Vision 표본으로
+사용합니다. baseline은 중앙값이고 품질 평가는 unscaled MAD를 사용해 얼굴 거리 4cm,
+Chair IR 40mm 이하를 요구합니다. 이 MAD 값은 자세·피로 임계가 아니라 calibration
+안정성용 provisional engineering limit입니다.
+
+두 session working baseline은 `face_working_baseline_cm`과 `chair_ir_baseline_mm`이며,
+Vision의 기존 기하 거리 calibration/reference와 의미가 다릅니다. MEASURING에서는 이후
+Phase C를 위해 `face_approach_delta_cm = face working baseline - current face distance`,
+`backrest_departure_delta_mm = current Chair IR - Chair IR baseline`을 Backend 내부에서만
+준비합니다. 이 두 값을 입력으로 하는 순수 관측 분류는 `NORMAL`, `FACE_ONLY_CLOSE`,
+`BODY_FORWARD_CLOSE`, `BACKREST_AWAY`, `UNKNOWN`을 구분합니다. fresh Vision, 유효 Chair IR,
+착석이 모두 확인되지 않으면 `UNKNOWN`이며 이를 비정상으로 해석하지 않습니다.
+
+초기 engineering 후보는 얼굴 접근 `>= 10cm`, 등받이 이탈 `>= 40mm`입니다. 통제 실측에서
+비접근 얼굴 변화 `+4.9cm`와 접근 `+18cm`, FACE_ONLY IR `-21mm`와 BACKREST_AWAY
+`+56mm`/BODY_FORWARD `+128.5mm` 사이에 두었고, 반복 baseline spread 약 `0.9cm/8mm`보다
+충분히 큽니다. 한 설치·제한된 세션의 분리 확인값이므로 보편적·의학적 자세 임계가
+아니며 추가 hardware validation 전에는 penalty 기준으로 사용하지 않습니다. 현재 분류는
+순간 관측에는 hysteresis나 지속시간을 넣지 않습니다. 별도 temporal evidence 정책을
+추가했지만 아직 penalty는 활성화하지 않습니다. sustained-evidence 정책의 실측 검증 후
+Face와 Chair를 합친 **하나의** distance/forward penalty로 연결해야 하며 두 센서를
+각각 감점해 이중 penalty를 만들지 않습니다.
+
+현재 순간/temporal 결과는 opt-in `cross_validation_observation` 진단 경로에서만 관찰합니다.
+state/SOMA Load/Feedback/persistence에는 연결하지 않고 기존 절대 거리 판정도 그대로
+유지합니다.
+
+#### Phase C temporal evidence (관측 전용)
+
+`fusion/distance_temporal.py`의 순수 `step(state, evidence, now, *, timing)`은 immutable
+`DistanceTemporalState`와 진단 결과를 반환합니다. 순간 classifier와 분리하며 센서/Socket/DB에
+의존하지 않습니다. `fusion/config.py`의 `DistanceEvidenceTiming`을 RuntimeProfile에서 선택해
+Backend의 session calibration coordinator에 주입합니다. 기존 `fusion.step()`은 변경하지 않습니다.
+
+| 설정 | Demo | Normal |
+|---|---:|---:|
+| BODY_FORWARD_CLOSE 진입 | 10초 | 300초 |
+| FACE_ONLY_CLOSE 진입 | 20초 | 600초 |
+| 알려진 비접근 관측에서 복귀 | 5초 | 30초 |
+| 누적 가능한 최대 sample gap | 5초 | 5초 |
+
+모두 **provisional engineering 후보**입니다. BODY 진입은 기존 절대 근접 판정의 시간축과
+맞추고, 얼굴만 접근한 더 약한 증거는 두 배의 관측 시간을 요구합니다. Normal의 5/10분은
+순간 움직임과 장시간 컴퓨터 사용 중 지속 관측을 구분하기 위한 후보이며 검증된 권고 시간이
+아닙니다. 복귀는 진입보다 짧게 하되 한 sample의 흔들림으로 해제되지 않도록 Demo 5초,
+Normal 30초로 두었습니다. Demo는 수 분 안에 진입/복귀를 시연하기 위한 시간축 축소입니다.
+
+- 첫 분류 sample은 0초에서 시작합니다. 같은 forward 분류로 양 끝이 확인된 구간만 누적하며
+  설정 시간 `>=`에서 sustained가 됩니다. BODY/FACE_ONLY 전환 시 새 유형의 후보 시간은
+  0초부터 시작하고 서로 합산하지 않습니다. 기존 sustained 유형은 새 유형이 자체 진입 시간을
+  채우거나 복귀가 완료될 때까지 유지됩니다. 따라서 active가 현재 강한 증거를 뜻하지는 않습니다.
+- NORMAL에서는 미활성 후보 시간을 즉시 초기화합니다. 이미 sustained인 경우 알려진 비접근
+  관측이 복귀 시간을 채우면 해제합니다. 복귀 중 다시 접근하면 복귀 시간은 0이 됩니다.
+- BACKREST_AWAY는 등받이 이탈의 관찰일 뿐 독립적으로 sustained forward 증거를 만들지 않습니다.
+  얼굴 비접근이 확인된 값이므로 NORMAL과 같은 복귀 그룹으로 처리합니다. 이 두 분류 사이의
+  전환은 복귀를 끊지 않습니다. 등받이 이탈 자체를 나쁜 자세로 규정하지 않습니다.
+- UNKNOWN은 후보/활성/복귀 값을 모두 동결합니다. UNKNOWN 진입 구간과 첫 복귀 sample까지의
+  구간은 누적하지 않습니다. 장기 unavailable도 현재는 같은 동결 정책이며 별도 만료 정책은
+  보류합니다. 향후 penalty는 `active`만 보고 missing 구간을 감점하면 안 됩니다.
+- 5초 초과 gap은 누적/복귀하지 않습니다. 중복·역행 timestamp는 상태를 바꾸지 않고 무시하며,
+  non-finite timestamp는 거부합니다. 시간은 기존 Fusion과 동일하게 Chair payload의 `t`를 씁니다.
+- ABSENT(동일 occupancy 기준)는 UNKNOWN 동결보다 우선하여 모든 temporal 증거를 즉시 reset합니다.
+  OFF/CALIBRATING/READY에서는 누적하지 않습니다. READY→MEASURING, STOP, 새 session에서 새
+  temporal state로 시작하며, Vision 입력만으로는 진전하지 않고 MEASURING의 Chair tick만 사용합니다.
+
+진단 `distance_temporal`에는 `instantaneous_classification`, 선택적 `candidate_classification`과
+`sustained_classification`, `accumulated_sec`(현재 후보 유형의 관측 시간), `recovery_sec`,
+`active`, `reasons`를 담습니다. 없는 분류는 생략합니다. `distance_evidence` 순간 결과와 함께
+opt-in recorder JSONL에 보존하지만 public `state`/persistence에는 추가하지 않습니다.
+실제 장시간 dropout, 분류 경계 chatter, 유형 전환, clock skew 검증과 만료/감점/회복 정의가
+완료되기 전까지 단일 distance penalty 활성화는 보류합니다.
+
+READY 수락 직전에 Fusion/cache/Feedback/persistence checkpoint를 다시 초기화하여
+calibration 시간이 실제 측정 누적에 섞이지 않게 합니다. timeout이면 CALIBRATING에서
+`FAILED / calibration_timeout`을 알리고 자동으로 MEASURING에 진입하지 않습니다.
+STOP 또는 마지막 owner socket disconnect는 accumulator/baseline을 폐기하고 Nano를 OFF로
+만듭니다. 세부 event 형식은 `docs/contracts/measurement_phase.schema.json`을 따릅니다.
 
 `GET /api/state/history`는 Supabase Bearer access token 인증이 필수입니다. Backend는
 token의 `sub`와 현재 ACTIVE measurement의 `session_id`를 결합해 `state_logs`를

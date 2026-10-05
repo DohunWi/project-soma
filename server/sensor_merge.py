@@ -125,6 +125,9 @@ class SessionSensorCache:
             for key in VISION_MERGE_FIELDS:
                 if key in vision:
                     sample[key] = vision[key]
+            # Backend-internal identity used only to avoid counting one cached
+            # Vision frame more than once during calibration.
+            sample["_vision_sender_t"] = self._latest_vision.sender_t
         return sample
 
     def mark_chair_processed(

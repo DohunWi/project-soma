@@ -2,8 +2,8 @@
 """Guided Chair/Vision observational cross-validation recorder.
 
 This development tool subscribes to the Backend's opt-in
-``cross_validation_observation`` event.  It does not classify a combined
-posture and never feeds observations back into Fusion, SOMA Load, or Feedback.
+``cross_validation_observation`` event.  It records the Backend's observational
+distance evidence but never feeds it back into Fusion, SOMA Load, or Feedback.
 """
 
 from __future__ import annotations
@@ -216,7 +216,7 @@ def build_row(observation, *, scenario, stage_index, experiment_started_at,
         _finite_or_none(vision_payload.get("t"))
         if observation.get("vision") is not None else None
     )
-    return {
+    row = {
         "v": 1,
         "timestamp": utc_timestamp(chair_t),
         "recorded_at": utc_timestamp(received_at),
@@ -265,6 +265,13 @@ def build_row(observation, *, scenario, stage_index, experiment_started_at,
             "confidence": decision.get("confidence"),
         },
     }
+    distance_evidence = observation.get("distance_evidence")
+    if isinstance(distance_evidence, dict):
+        row["distance_evidence"] = dict(distance_evidence)
+    distance_temporal = observation.get("distance_temporal")
+    if isinstance(distance_temporal, dict):
+        row["distance_temporal"] = dict(distance_temporal)
+    return row
 
 
 class ObservationRecorder:

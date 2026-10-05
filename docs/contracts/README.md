@@ -23,6 +23,7 @@
 | `report.schema.json` | DB → 서버 → 프론트 | `db/report` → `server` → `web` |
 | `state_history.schema.json` | DB → 서버 → 프론트 | `state_logs` → `server` → `web` |
 | `measurement_session.schema.json` | 인증 사용자 ↔ 서버 | `web` → `server` start/stop 응답 |
+| `measurement_phase.schema.json` | 서버 → 인증 사용자 room | Backend measurement calibration lifecycle → `web` |
 
 `feedback_decision`의 `NORMAL / NOTICE / WARNING / BREAK`는 Fusion state와 별개입니다.
 `BREAK`를 `state.schema.json`에 추가하지 않으며, 사용자 소유권은 payload의 `user_id`가
@@ -35,6 +36,10 @@ Backend가 관리하는 현재 ACTIVE measurement의 `session_id`를 함께 사�
 조회하지 않고 인증된 Backend의 `GET /api/state/history`만 사용합니다. 현재-session
 조회에서는 클라이언트가 `session_id`를 전달하지 않으며, 과거 session 조회는 향후
 별도 API에서 동일한 `user_id + session_id` 소유권 검사를 거쳐 확장합니다.
+
+`measurement_phase`의 `OFF / CALIBRATING / READY / MEASURING`은 Backend가 관리하는
+측정 실행 단계입니다. Fusion의 `NORMAL / CAUTION / DANGER / ABSENT`와 다른 축이며,
+READY는 baseline 수락을 알린 직후 MEASURING으로 진행하는 일회성 전이 이벤트입니다.
 
 ## 왜 `t` 와 `source` 가 필수인가
 

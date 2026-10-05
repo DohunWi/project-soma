@@ -3,13 +3,17 @@ import os
 from dataclasses import dataclass
 
 from fusion.config import (
+    DEMO_DISTANCE_EVIDENCE_TIMING,
     DEMO_FUSION_TIMING,
     DEMO_SOMA_LOAD_CONFIG,
+    NORMAL_DISTANCE_EVIDENCE_TIMING,
     NORMAL_FUSION_TIMING,
     NORMAL_SOMA_LOAD_CONFIG,
+    DistanceEvidenceTiming,
     FusionTiming,
     SomaLoadConfig,
 )
+from fusion.calibration import CalibrationConfig
 
 
 class ProfileConfigError(ValueError):
@@ -39,6 +43,8 @@ class RuntimeProfile:
     fusion: FusionTiming
     load: SomaLoadConfig
     storage: StoragePolicy
+    calibration: CalibrationConfig
+    distance_evidence_timing: DistanceEvidenceTiming
 
 
 DEFAULT_SENSOR_MERGE_POLICY = SensorMergePolicy(
@@ -51,14 +57,28 @@ DEMO_PROFILE = RuntimeProfile(
     name="demo",
     fusion=DEMO_FUSION_TIMING,
     load=DEMO_SOMA_LOAD_CONFIG,
+    distance_evidence_timing=DEMO_DISTANCE_EVIDENCE_TIMING,
     storage=StoragePolicy(db_snapshot_interval_sec=5.0),
+    calibration=CalibrationConfig(
+        minimum_duration_sec=5.0,
+        minimum_vision_samples=5,
+        minimum_chair_ir_samples=5,
+        timeout_sec=30.0,
+    ),
 )
 
 NORMAL_PROFILE = RuntimeProfile(
     name="normal",
     fusion=NORMAL_FUSION_TIMING,
     load=NORMAL_SOMA_LOAD_CONFIG,
+    distance_evidence_timing=NORMAL_DISTANCE_EVIDENCE_TIMING,
     storage=StoragePolicy(db_snapshot_interval_sec=30.0),
+    calibration=CalibrationConfig(
+        minimum_duration_sec=8.0,
+        minimum_vision_samples=8,
+        minimum_chair_ir_samples=8,
+        timeout_sec=45.0,
+    ),
 )
 
 PROFILES = {
