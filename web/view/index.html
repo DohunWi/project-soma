@@ -385,7 +385,7 @@
                         <div
                             class="col-span-2 flex items-center gap-8 bg-white p-6 rounded-xl shadow-sm border border-gray-100">
                             <div id="scoreRing" class="score-circle">
-                                <span id="currentScore" class="text-4xl font-bold text-gray-800">-</span>
+                                <span id="currentScore" class="text-4xl font-bold text-gray-800">—</span>
                                 <span class="text-[10px] text-gray-500 font-semibold tracking-wide mt-1">SCORE</span>
                             </div>
                             <div>
@@ -406,7 +406,7 @@
                             class="col-span-1 bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex flex-col justify-center items-center gap-5 aspect-video">
                             <h3 class="font-bold text-gray-700 text-lg">실시간 측정 제어</h3>
                             <div class="flex gap-3 w-full">
-                                <button id="btn-start" onclick="startMeasurement()"
+                                <button id="btn-start" onclick="startMeasurement()" disabled
                                     class="flex-1 py-3 bg-blue-500 hover:bg-blue-600 text-white font-bold rounded-lg transition-colors shadow-sm">측정
                                     시작</button>
                                 <button id="btn-stop" onclick="stopMeasurement()"
@@ -417,6 +417,10 @@
                                     class="flex-1 py-3 bg-purple-500 hover:bg-purple-600 text-white font-bold rounded-lg transition-colors shadow-sm">팝업
                                     테스트</button>
                             </div>
+                            <button id="btn-retry" onclick="retryMeasurement()" hidden
+                                class="py-2 px-4 bg-blue-500 text-white rounded-lg">다시 준비</button>
+                            <p id="measurement-note" role="status" aria-live="polite"
+                                class="text-sm text-gray-500 text-center"></p>
                             <div class="flex items-center gap-2">
                                 <span id="measure-status-dot" class="w-3 h-3 rounded-full bg-gray-400"></span>
                                 <p id="measure-status-text" class="text-sm text-gray-500 font-medium">현재 상태: 대기 중</p>
@@ -604,7 +608,8 @@
             if (lastServerStatus) connText.innerText = translations[lang].server_connected;
             else connText.innerText = translations[lang].server_disconnected;
 
-            if (lastPostureData && isMeasuring) updateDashboardUI(lastPostureData);
+            renderMeasurementUI();
+            if (lastPostureData && isMeasuring) updateDashboardUI(lastPostureData, false);
 
             // 일간 리포트 피드백 카드도 현재 언어로 다시 그리기
             if (window.updateFeedbackUI) {
@@ -712,8 +717,8 @@
         const realtimeChart = new Chart(ctxRealtime, {
             type: 'line',
             data: {
-                labels: Array(MAX_POINTS).fill(''),
-                datasets: [{ label: 'Score', data: Array(MAX_POINTS).fill(100), borderColor: '#2ecc71', backgroundColor: 'rgba(46, 204, 113, 0.1)', borderWidth: 2, fill: true, tension: 0.4, pointRadius: 0 }]
+                labels: [],
+                datasets: [{ label: 'Score', data: [], borderColor: '#2ecc71', backgroundColor: 'rgba(46, 204, 113, 0.1)', borderWidth: 2, fill: true, tension: 0.4, pointRadius: 0 }]
             },
             options: { responsive: true, maintainAspectRatio: false, scales: { y: { min: 0, max: 100 }, x: { display: false } }, animation: { duration: 0 } }
         });
@@ -721,7 +726,11 @@
         function updateRealtimeChart(val) {
             const data = realtimeChart.data.datasets[0].data;
             data.push(val);
-            if (data.length > MAX_POINTS) data.shift();
+            realtimeChart.data.labels.push('');
+            if (data.length > MAX_POINTS) {
+                data.shift();
+                realtimeChart.data.labels.shift();
+            }
             realtimeChart.update();
         }
 
@@ -844,62 +853,10 @@
         /* =========================================
            3. Socket.IO 연동 
            ========================================= */
-        const socket = io("http://127.0.0.1:5000");
+        // Socket/REST effects are installed by the module after Auth restoration.
+        let presentationRevision = -1;
 
-        const connDot = document.getElementById('conn-dot');
-        const connText = document.getElementById('conn-text');
-
-        socket.on("connect", () => {
-            lastServerStatus = true;
-            connDot.style.background = 'var(--good-color)';
-            connText.innerText = translations[currentLang].server_connected;
-            connText.style.color = 'var(--good-color)';
-        });
-
-        socket.on("disconnect", () => {
-            lastServerStatus = false;
-            connDot.style.background = 'var(--danger-color)';
-            connText.innerText = translations[currentLang].server_disconnected;
-            connText.style.color = 'var(--danger-color)';
-        });
-
-        socket.on("state", (data) => {
-            try {
-                lastPostureData = data;
-                updateDashboardUI(data);
-            } catch (e) {
-                console.error("데이터 파싱 에러:", e);
-            }
-        });
-
-        socket.on("feedback", (data) => {
-            // 🚨 신규: 측정 중일 때만 팝업 알림 작동
-            if (!isMeasuring) return;
-
-            if (data.target === "web_popup" && data.action) {
-                const action = data.action;
-                let iconType = "info";
-
-                // 위험 수준에 따라 아이콘 변경
-                if (action.level === "caution") iconType = "warning";
-                if (action.level === "risk") iconType = "error";
-
-                Swal.fire({
-                    toast: true,                  // 모달 대신 토스트 팝업 활성화
-                    position: 'bottom-end',       // 오른쪽 아래에 배치
-                    icon: iconType,
-                    title: action.title,
-                    text: action.body,
-                    showConfirmButton: false,     // 화면을 가리는 확인 버튼 제거
-                    showCloseButton: true,        // 대신 우측 상단에 작게 닫기(X) 버튼 추가
-                    // 위험(risk) 등급은 자동으로 안 닫힘, 그 외는 5초 뒤 사라짐
-                    timer: action.level === "risk" ? undefined : 5000,
-                    timerProgressBar: action.level !== "risk"
-                });
-            }
-        });
-
-        function updateDashboardUI(data) {
+        function updateDashboardUI(data, appendChart = true) {
             if (!isMeasuring) return;
 
             const stateKey = data.state || "UNKNOWN";
@@ -935,7 +892,7 @@
             }
             document.getElementById('val-balance').innerText = balText;
 
-            if (stateKey !== "ABSENT") {
+            if (appendChart && stateKey !== "ABSENT" && data.score !== undefined) {
                 updateRealtimeChart(currentScore);
             }
         }
@@ -944,55 +901,94 @@
            4. 실시간 측정 제어 로직 (시작/중지)
            ========================================= */
         function startMeasurement() {
-            isMeasuring = true;
-
-            document.getElementById('btn-start').disabled = true;
-            document.getElementById('btn-start').classList.add('opacity-50', 'cursor-not-allowed');
-            document.getElementById('btn-stop').disabled = false;
-            document.getElementById('btn-stop').classList.remove('opacity-50', 'cursor-not-allowed');
-
-            const statusText = document.getElementById('measure-status-text');
-            statusText.innerText = "현재 상태: 측정 중";
-            statusText.classList.remove('text-gray-500', 'text-red-500');
-            statusText.classList.add('text-green-600');
-            document.getElementById('measure-status-dot').style.backgroundColor = "#2ecc71";
-
-            Swal.fire({
-                icon: 'success',
-                title: '측정 시작',
-                text: '실시간 데이터 분석을 시작합니다.',
-                timer: 1500,
-                showConfirmButton: false
-            });
+            return window.measurementRuntime?.start();
         }
 
         function stopMeasurement() {
-            isMeasuring = false;
+            return window.measurementRuntime?.stop();
+        }
 
-            document.getElementById('btn-stop').disabled = true;
-            document.getElementById('btn-stop').classList.add('opacity-50', 'cursor-not-allowed');
-            document.getElementById('btn-start').disabled = false;
-            document.getElementById('btn-start').classList.remove('opacity-50', 'cursor-not-allowed');
+        function retryMeasurement() {
+            return window.measurementRuntime?.retry();
+        }
 
-            const statusText = document.getElementById('measure-status-text');
-            statusText.innerText = "현재 상태: 중지됨";
-            statusText.classList.remove('text-green-600', 'text-gray-500');
-            statusText.classList.add('text-red-500');
-            document.getElementById('measure-status-dot').style.backgroundColor = "#e74c3c";
-
-            resetDashboardUI();
-
-            Swal.fire({
-                icon: 'info',
-                title: '측정 중지',
-                text: '데이터 수집 및 표시를 중단했습니다.',
-                timer: 1500,
-                showConfirmButton: false
-            });
+        function renderMeasurementUI() {
+            const runtime = window.measurementRuntime;
+            if (!runtime) return;
+            const model = runtime.model;
+            isMeasuring = runtime.canRender();
+            lastServerStatus = model.connected;
+            const color = model.connected ? 'var(--good-color)' : 'var(--neutral-color)';
+            document.getElementById('conn-dot').style.background = color;
+            document.getElementById('conn-text').innerText = model.connected ?
+                translations[currentLang].server_connected : translations[currentLang].server_disconnected;
+            if (model.presentationRevision !== presentationRevision || !isMeasuring) {
+                presentationRevision = model.presentationRevision;
+                lastPostureData = null;
+                resetDashboardUI();
+                realtimeChart.data.labels = [];
+                realtimeChart.data.datasets[0].data = [];
+                realtimeChart.update('none');
+                Swal.close();
+            }
+            const pending = model.pendingAction;
+            const failed = model.phase === 'CALIBRATING' && model.calibration?.status === 'FAILED';
+            let title = '측정 대기 중';
+            let detail = '시작 버튼을 눌러 측정을 준비하세요.';
+            if (pending === 'start' || pending === 'sync') {
+                title = '측정 준비 요청 중';
+                detail = 'Backend의 준비 상태를 기다리고 있습니다.';
+            } else if (model.phase === 'CALIBRATING') {
+                title = failed ? '측정 준비를 완료하지 못했습니다.' : '측정 준비 중';
+                detail = failed ? '카메라와 의자 센서 연결을 확인한 뒤 다시 시도해 주세요.' :
+                    '평소 작업하시는 자세로 정면을 바라봐 주세요. 개인 기준을 확인하고 있습니다.';
+            } else if (model.phase === 'READY') {
+                title = '측정 준비 완료';
+                detail = '자동으로 측정을 시작합니다.';
+            } else if (model.phase === 'MEASURING') {
+                title = lastPostureData ? '측정 중' : '측정 중 · 데이터 수신 대기';
+                detail = lastPostureData ? '현재 측정 데이터를 표시하고 있습니다.' :
+                    '새 측정 데이터를 기다리고 있습니다.';
+            }
+            if (model.stopRequested) {
+                title = '측정 중지 요청 중';
+                detail = 'Backend 종료를 확인하고 있습니다.';
+            }
+            if (model.error) {
+                const labels = { auth: '인증 확인 필요', network: '네트워크 연결 오류',
+                    connection: '서버 연결 확인 필요', conflict: '측정 사용 중', backend: 'Backend 요청 오류' };
+                title = labels[model.error.kind] || '연결 확인 필요';
+                detail = model.error.message;
+            }
+            if (!isMeasuring || !lastPostureData) {
+                document.getElementById('topStatusLabel').innerText = model.phase;
+                document.getElementById('topStatusMessage').innerText = title;
+                document.getElementById('topDetailFeedback').innerText = detail;
+                document.getElementById('posture-msg').innerText = title;
+                document.getElementById('posture-sub').innerText = detail;
+            }
+            document.getElementById('measure-status-text').innerText = title;
+            document.getElementById('measure-status-dot').style.backgroundColor = color;
+            document.getElementById('measurement-note').innerText = detail;
+            const enabled = runtime.hasSession();
+            const canStart = enabled && model.connected && !pending && !model.sessionId &&
+                !model.stopRequested;
+            const canStop = enabled && pending !== 'stop' &&
+                (!!model.sessionId || pending === 'start' || pending === 'sync' ||
+                    model.stopRequested || model.bufferedPhases.length > 0);
+            for (const [id, allowed] of [['btn-start', canStart], ['btn-stop', canStop]]) {
+                const button = document.getElementById(id);
+                button.disabled = !allowed;
+                button.classList.toggle('opacity-50', !allowed);
+                button.classList.toggle('cursor-not-allowed', !allowed);
+            }
+            document.getElementById('btn-retry').hidden = !failed;
+            document.getElementById('btn-retry').disabled = !!pending || !model.connected;
+            if (lastPostureData && isMeasuring) updateDashboardUI(lastPostureData, false);
         }
 
         function resetDashboardUI() {
-            document.getElementById('currentScore').innerText = "-";
+            document.getElementById('currentScore').innerText = "—";
             document.getElementById('val-blink').innerText = "-";
             document.getElementById('val-dist').innerText = "-";
             document.getElementById('val-static').innerText = "-";
@@ -1015,6 +1011,7 @@
        [추가] 팝업 UI 테스트 버튼 로직 나중에 삭제 가능성
        ========================================= */
         function testPopup() {
+            if (!isMeasuring) return;
             Swal.fire({
                 toast: true,
                 position: 'bottom-end',
@@ -1033,29 +1030,11 @@
      ========================================= -->
     <script type="module">
         // 로그인은 login.html, 회원가입은 signup.html 에서 합니다. 클라이언트는 auth.js 와 공유합니다.
-        import { supabase } from './auth.js';
+        import { supabase, authenticatedFetch } from './auth.js';
+        import { createMeasurementRuntime } from './measurement_runtime.mjs';
 
         // 예전 로그인 모달 주소(index.html#login)로 들어오면 로그인 페이지로 보냅니다
         if (location.hash === '#login') location.replace('./login.html');
-
-        // 토큰을 보관하고 소켓에 실어 다시 연결합니다
-        function connectWithSession(session) {
-            localStorage.setItem('access_token', session.access_token);
-            if (typeof socket !== 'undefined') {
-                socket.disconnect();
-                socket.auth = { token: session.access_token };
-                socket.connect();
-            }
-        }
-
-        // login.html·signup.html 에서 넘어왔거나 이전 세션이 남아 있으면 바로 연동합니다
-        supabase.auth.getSession().then(({ data, error }) => {
-            if (error) {
-                console.error("세션 확인 실패:", error);
-                return;
-            }
-            if (data.session) connectWithSession(data.session);
-        });
 
         // ── 로그인/로그아웃 버튼 ──
         const authButton = document.getElementById('authButton');
@@ -1073,10 +1052,37 @@
             authButton.classList.toggle('hover:bg-gray-600', loggedIn);
         }
 
-        // 처음 로드, 로그인, 로그아웃(다른 탭 포함) 때마다 호출됩니다
-        supabase.auth.onAuthStateChange((event, session) => {
-            renderAuthButton(!!session);
+        const runtime = createMeasurementRuntime({
+            auth: supabase.auth,
+            authenticatedFetch,
+            backendUrl: window.SOMA_BACKEND_URL || `http://${location.hostname}:5000`,
+            socketFactory: (url, options) => io(url, options),
+            onChange: () => renderMeasurementUI(),
+            onSession: session => {
+                // Supabase owns restoration; keep the existing login-page storage compatibility.
+                if (session) localStorage.setItem('access_token', session.access_token);
+                else localStorage.removeItem('access_token');
+                renderAuthButton(!!session);
+                renderMeasurementUI();
+            },
+            onState: data => {
+                lastPostureData = data;
+                renderMeasurementUI();
+                updateDashboardUI(data);
+            },
+            onFeedback: message => Swal.fire({
+                toast: true, position: 'bottom-end', icon: message.icon,
+                title: message.title, text: message.text,
+                showConfirmButton: false, showCloseButton: true,
+                timer: message.persistent ? undefined : 5000,
+                timerProgressBar: !message.persistent,
+            }),
         });
+        window.measurementRuntime = runtime;
+        renderMeasurementUI();
+        // Synchronous callback: do not call async Supabase methods under its Auth lock.
+        supabase.auth.onAuthStateChange((event, session) => runtime.authChanged(event, session));
+        runtime.restore(); // Restore/connect only. Never automatically start measurement.
 
         authButton.addEventListener('click', async () => {
             if (!isLoggedIn) {
@@ -1088,19 +1094,11 @@
             const { error } = await supabase.auth.signOut();
             authButton.disabled = false;
             if (error) {
-                console.error("로그아웃 실패:", error);
                 Swal.fire({ icon: 'error', title: '로그아웃 실패', text: '잠시 후 다시 시도해주세요.' });
                 return;
             }
 
-            // 토큰을 지우고 인증 없이 다시 연결합니다
-            localStorage.removeItem('access_token');
-            if (typeof socket !== 'undefined') {
-                socket.disconnect();
-                socket.auth = {};
-                socket.connect();
-            }
-            renderAuthButton(false);
+            runtime.destroy(); // Invalidate old callbacks; no anonymous reconnect.
 
             Swal.fire({
                 icon: 'info',
