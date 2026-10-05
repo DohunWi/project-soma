@@ -166,11 +166,13 @@ class ChairPipeline:
         load_config=DEMO_PROFILE.load,
         merge_policy=DEFAULT_SENSOR_MERGE_POLICY,
         monotonic=None,
+        distance_timing=DEMO_PROFILE.distance_evidence_timing,
     ):
         self._state = FusionState()
         self._lock = threading.RLock()
         self._timing = timing
         self._load_config = load_config
+        self._distance_timing = distance_timing
         cache_kwargs = {} if monotonic is None else {"monotonic": monotonic}
         self._sensor_cache = SessionSensorCache(merge_policy, **cache_kwargs)
 
@@ -210,7 +212,7 @@ class ChairPipeline:
         with self._lock:
             self._sensor_cache.mark_chair_processed(payload)
 
-    def process_prepared(self, payload, sample):
+    def process_prepared(self, payload, sample, *, distance_evidence=None):
         """Run Fusion for a previously prepared Chair sample."""
         with self._lock:
             current, decision = step(
@@ -219,6 +221,8 @@ class ChairPipeline:
                 payload["t"],
                 timing=self._timing,
                 load_config=self._load_config,
+                distance_evidence=distance_evidence,
+                distance_timing=self._distance_timing,
             )
             message = _validation_message(STATE_VALIDATOR, decision)
             if message:
@@ -298,6 +302,7 @@ def create_app(
         profile.load,
         merge_policy=sensor_merge_policy,
         monotonic=sensor_monotonic,
+        distance_timing=profile.distance_evidence_timing,
     )
     verifier = auth_verifier or SupabaseAuthVerifier()
     sessions = session_registry or MeasurementSessionRegistry()
@@ -845,7 +850,11 @@ def create_app(
                 if sample is None:
                     return
                 sample.update(calibration.relative_evidence(sample, now=payload["t"]))
-                decision = pipeline.process_prepared(payload, sample)
+                decision = pipeline.process_prepared(
+                    payload,
+                    sample,
+                    distance_evidence=calibration.latest_distance_temporal,
+                )
                 if decision is None:
                     return
 

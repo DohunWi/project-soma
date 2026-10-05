@@ -1,4 +1,5 @@
 import uuid
+from dataclasses import replace
 
 from server.app import MEASUREMENT_PHASE_VALIDATOR, STATE_VALIDATOR, ChairPipeline, create_app
 from server.auth import AuthIdentity, AuthenticationError
@@ -9,6 +10,7 @@ from server.feedback_coordinator import FeedbackCoordinator
 from feedback.config import feedback_config_for_mode
 from fusion.distance_evidence import DistanceEvidenceClass
 from fusion.state import OCCUPANCY_MIN
+from fusion.load import score_integer
 
 
 USER_ID = uuid.UUID("11111111-1111-4111-8111-111111111111")
@@ -98,7 +100,7 @@ def chair_payload(t, ir=250, pressure=None):
     }
 
 
-def make_runtime():
+def make_runtime(profile=DEMO_PROFILE):
     clock = FakeClock()
     timers = []
 
@@ -110,6 +112,7 @@ def make_runtime():
     persistence = RecordingPersistence()
     app, socketio = create_app(
         testing=True,
+        runtime_profile=profile,
         auth_verifier=FakeAuthVerifier(),
         sensor_auth_token=SENSOR_TOKEN,
         sensor_monotonic=clock.monotonic,
@@ -445,7 +448,7 @@ def test_distance_temporal_never_accumulates_in_off_calibrating_or_ready():
     assert calibration.latest_distance_temporal.active is False
 
 
-def test_temporal_measuring_path_is_diagnostic_only_and_resets_between_sessions():
+def test_temporal_measuring_path_changes_only_score_and_resets_between_sessions():
     app, socketio, clock, _timers, persistence = make_runtime()
     observer = socketio.test_client(
         app, auth={"token": USER_TOKEN, "observe_sensor_data": True},
@@ -461,7 +464,7 @@ def test_temporal_measuring_path_is_diagnostic_only_and_resets_between_sessions(
     ordinary_owner.get_received()
     assert persistence.calls == []
 
-    # Reference production Fusion path, without the calibration/temporal layer.
+    # Legacy path remains the reference for static/balance, state, reasons and metrics.
     reference = ChairPipeline(monotonic=clock.monotonic)
     reference_feedback = FeedbackCoordinator(feedback_config_for_mode("demo"))
     reference_feedback.start_session(session_id)
@@ -482,6 +485,10 @@ def test_temporal_measuring_path_is_diagnostic_only_and_resets_between_sessions(
         producer.emit("sensor_data", chair)
         reference.process(vision)
         expected = reference.process(chair)
+        distance_penalty = app.extensions["chair_pipeline"]._state.load.distance_penalty
+        expected["score"] = score_integer(replace(
+            reference._state.load, distance_penalty=distance_penalty,
+        ))
         events = observer.get_received()
         states = [event["args"][0] for event in events if event["name"] == "state"]
         assert states == [expected]
@@ -538,6 +545,7 @@ def test_temporal_measuring_path_is_diagnostic_only_and_resets_between_sessions(
     producer.emit("sensor_data", chair_payload(66, ir=380))
     assert calibration.latest_distance_temporal.accumulated_sec == 0
     assert calibration.latest_distance_temporal.active is False
+    assert app.extensions["chair_pipeline"]._state.load.distance_penalty == 0
 
 
 def test_ir_dropout_and_stale_vision_freeze_temporal_candidate_in_real_merge_path():
@@ -564,3 +572,146 @@ def test_ir_dropout_and_stale_vision_freeze_temporal_candidate_in_real_merge_pat
         producer.emit("sensor_data", vision_payload(t, distance=42))
         producer.emit("sensor_data", chair_payload(t, ir=380))
     assert calibration.latest_distance_temporal.accumulated_sec == 5
+
+
+def test_active_distance_score_is_emitted_before_persistence_and_session_reset_is_clean():
+    app, socketio, clock, _timers, persistence = make_runtime()
+    owner = socketio.test_client(app, auth={"token": USER_TOKEN})
+    producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
+    start(app)
+    for t in range(6):
+        clock.set(t)
+        producer.emit("sensor_data", vision_payload(t, distance=80))
+        producer.emit("sensor_data", chair_payload(t))
+    owner.get_received()
+    pipeline = app.extensions["chair_pipeline"]
+    assert pipeline._state.load.distance_penalty == 0
+    assert persistence.calls == []
+
+    original_handle = persistence.handle
+    observed_states = []
+
+    def assert_emit_before_store(payload, decision, **identity):
+        states = named(owner, "state")
+        assert states == [decision]
+        assert STATE_VALIDATOR.is_valid(decision)
+        assert "distance_penalty" not in decision["metrics"]
+        observed_states.append(decision)
+        original_handle(payload, decision, **identity)
+
+    persistence.handle = assert_emit_before_store
+    for t in range(6, 21):
+        clock.set(t)
+        producer.emit("sensor_data", vision_payload(t, distance=60))
+        producer.emit("sensor_data", chair_payload(
+            t, ir=380, pressure=[300 + (t % 2) * 20] * 4,
+        ))
+    assert pipeline._state.load.distance_penalty == 2
+    assert observed_states[-1]["score"] == 98
+    assert observed_states[-1]["state"] == "NORMAL"
+    assert observed_states[-1]["reasons"] == []
+
+    # Existing 3-second freshness cutoff and invalid IR both freeze the scored residual.
+    clock.set(23)
+    producer.emit("sensor_data", chair_payload(23, ir=380, pressure=[320] * 4))
+    assert pipeline._state.load.distance_penalty == 2
+    clock.set(24)
+    producer.emit("sensor_data", vision_payload(24, distance=60))
+    producer.emit("sensor_data", chair_payload(24, ir=-1, pressure=[300] * 4))
+    assert pipeline._state.load.distance_penalty == 2
+
+    response = app.test_client().post(
+        "/api/measurement/stop", headers={"Authorization": f"Bearer {USER_TOKEN}"},
+    )
+    assert response.status_code == 200
+    owner.get_received()
+    count = len(persistence.calls)
+    producer.emit("sensor_data", chair_payload(25, ir=380))
+    assert owner.get_received() == []
+    assert len(persistence.calls) == count
+    assert pipeline._state.load.distance_penalty == 0
+
+    clock.set(26)
+    start(app)
+    for t in range(26, 32):
+        clock.set(t)
+        producer.emit("sensor_data", vision_payload(t, distance=80))
+        producer.emit("sensor_data", chair_payload(t))
+    owner.get_received()
+    assert pipeline._state.load.distance_penalty == 0
+    clock.set(32)
+    producer.emit("sensor_data", vision_payload(32, distance=60))
+    producer.emit("sensor_data", chair_payload(32, ir=380))
+    assert observed_states[-1]["score"] == 100
+    assert pipeline._state.load.distance_penalty == 0
+
+
+def test_normal_runtime_injects_normal_entry_and_penalty_rate():
+    app, socketio, clock, _timers, _persistence = make_runtime(NORMAL_PROFILE)
+    producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
+    start(app)
+    for t in range(9):
+        clock.set(t)
+        producer.emit("sensor_data", vision_payload(t, distance=80))
+        producer.emit("sensor_data", chair_payload(t))
+    pipeline = app.extensions["chair_pipeline"]
+    for t in range(9, 311):
+        clock.set(t)
+        producer.emit("sensor_data", vision_payload(t, distance=60))
+        producer.emit("sensor_data", chair_payload(
+            t, ir=380, pressure=[300 + (t % 2) * 20] * 4,
+        ))
+        if t <= 309:
+            assert pipeline._state.load.distance_penalty == 0
+    assert abs(pipeline._state.load.distance_penalty - 0.01) < 1e-12
+
+
+def test_producer_cannot_inject_distance_penalty_from_untrusted_payload_fields():
+    app, socketio, clock, _timers, _persistence = make_runtime()
+    producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
+    start(app)
+    calibrate(app, producer, clock)
+    for t in range(6, 36):
+        clock.set(t)
+        producer.emit("sensor_data", vision_payload(t))
+        payload = chair_payload(t)
+        payload["distance_penalty"] = 25
+        payload["distance_evidence"] = {"active": True, "classification": "BODY_FORWARD_CLOSE"}
+        producer.emit("sensor_data", payload)
+    assert app.extensions["chair_pipeline"]._state.load.distance_penalty == 0
+
+
+def test_new_score_feeds_existing_feedback_low_score_threshold_without_policy_changes():
+    app, socketio, clock, _timers, _persistence = make_runtime()
+    owner = socketio.test_client(app, auth={"token": USER_TOKEN})
+    producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
+    session_id = start(app).get_json()["measurement"]["session_id"]
+    for t in range(6):
+        clock.set(t)
+        producer.emit("sensor_data", vision_payload(t, distance=80))
+        producer.emit("sensor_data", chair_payload(t))
+    owner.get_received()
+    reference = ChairPipeline(monotonic=clock.monotonic)
+    legacy_feedback = FeedbackCoordinator(feedback_config_for_mode("demo"))
+    legacy_feedback.start_session(session_id)
+    for t in range(6, 61):
+        clock.set(t)
+        offset = (t % 2) * 20
+        vision = vision_payload(t, distance=60)
+        chair = chair_payload(t, ir=380, pressure=[700 + offset, 300 + offset] * 2)
+        producer.emit("sensor_data", vision)
+        producer.emit("sensor_data", chair)
+        reference.process(vision)
+        legacy_decision = reference.process(chair)
+        legacy = legacy_feedback.process_decision(session_id, legacy_decision, chair["t"])
+        events = owner.get_received()
+        current = [event["args"][0] for event in events if event["name"] == "state"][0]
+        current_feedback = [
+            event["args"][0] for event in events if event["name"] == "feedback"
+        ][0]
+    assert current["state"] == legacy_decision["state"] == "CAUTION"
+    assert legacy_decision["score"] == 75
+    assert current["score"] == 60
+    assert legacy["level"] != "BREAK"
+    assert current_feedback["level"] == "BREAK"
+    assert current_feedback["reason"] == "LOW_SCORE"

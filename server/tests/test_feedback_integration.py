@@ -331,7 +331,7 @@ def test_cooldown_blocks_break_until_expiry_in_server_path(monkeypatch):
     assert allowed["transition"] is True
 
 
-def test_fresh_vision_changes_metrics_but_phase_c_score_penalty_remains_zero():
+def test_fresh_vision_without_working_baselines_cannot_create_phase_c_score_penalty():
     app, socketio = make_app()
     producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
     front = socketio.test_client(app, auth={"token": USER_A_TOKEN})

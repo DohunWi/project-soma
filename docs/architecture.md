@@ -164,8 +164,8 @@ roll과의 최단 signed angle 차이입니다. Head roll은 머리만 기울인
 측정합니다. Vision lateral 값과 `face_lean_direction`은 state 전이, SOMA Load,
 Chair balance, confidence, reasons, Feedback에
 사용하지 않으며 의료적 자세 평가도 아닙니다. calibration/face/frontal geometry가
-유효하지 않으면 값을 생략하고 CENTER로 대체하지 않습니다. Phase C의 session working
-baseline lifecycle은 아래처럼 준비됐지만, Vision/Chair relative penalty는 계속 비활성입니다.
+유효하지 않으면 값을 생략하고 CENTER로 대체하지 않습니다. Phase C는 아래 session working
+baseline과 sustained relative-distance evidence를 통해 단일 SOMA Load distance 슬롯에 연결합니다.
 
 ### 4-3. 왜 깜빡임인가 — 자세 각도 대신
 
@@ -288,22 +288,23 @@ Phase C를 위해 `face_approach_delta_cm = face working baseline - current face
 비접근 얼굴 변화 `+4.9cm`와 접근 `+18cm`, FACE_ONLY IR `-21mm`와 BACKREST_AWAY
 `+56mm`/BODY_FORWARD `+128.5mm` 사이에 두었고, 반복 baseline spread 약 `0.9cm/8mm`보다
 충분히 큽니다. 한 설치·제한된 세션의 분리 확인값이므로 보편적·의학적 자세 임계가
-아니며 추가 hardware validation 전에는 penalty 기준으로 사용하지 않습니다. 현재 분류는
-순간 관측에는 hysteresis나 지속시간을 넣지 않습니다. 별도 temporal evidence 정책을
-추가했지만 아직 penalty는 활성화하지 않습니다. sustained-evidence 정책의 실측 검증 후
-Face와 Chair를 합친 **하나의** distance/forward penalty로 연결해야 하며 두 센서를
-각각 감점해 이중 penalty를 만들지 않습니다.
+아니며 반복 실측으로 재검증해야 하는 engineering 후보입니다. 순간 관측에는 hysteresis나
+지속시간을 넣지 않습니다. 별도 temporal evidence 정책을 거쳐 현재 유효한 sustained
+Face/Chair 관측을 **하나의** distance/forward penalty에 연결합니다. 두 센서를 각각 감점해
+이중 penalty를 만들지 않습니다. hardware 검증 완료나 의학적 유효성을 의미하지 않습니다.
 
-현재 순간/temporal 결과는 opt-in `cross_validation_observation` 진단 경로에서만 관찰합니다.
-state/SOMA Load/Feedback/persistence에는 연결하지 않고 기존 절대 거리 판정도 그대로
-유지합니다.
+순간/temporal 상세 결과는 opt-in `cross_validation_observation`에서 관찰합니다. Backend가
+소유한 temporal 결과를 Fusion에 별도 keyword 인자로 전달해 score에만 연결하며, 원본
+sensor payload의 임의 distance evidence/penalty 필드는 신뢰하지 않습니다. 진단 상세는
+public state나 persistence에 추가하지 않고 기존 절대 거리 state/reasons를 유지합니다.
 
 #### Phase C temporal evidence (관측 전용)
 
 `fusion/distance_temporal.py`의 순수 `step(state, evidence, now, *, timing)`은 immutable
 `DistanceTemporalState`와 진단 결과를 반환합니다. 순간 classifier와 분리하며 센서/Socket/DB에
 의존하지 않습니다. `fusion/config.py`의 `DistanceEvidenceTiming`을 RuntimeProfile에서 선택해
-Backend의 session calibration coordinator에 주입합니다. 기존 `fusion.step()`은 변경하지 않습니다.
+Backend의 session calibration coordinator와 Fusion에 주입합니다. `fusion.step()`은 선택적
+`distance_evidence`/`distance_timing` keyword를 추가하며 기존 positional 호출은 그대로 동작합니다.
 
 | 설정 | Demo | Normal |
 |---|---:|---:|
@@ -329,7 +330,7 @@ Normal 30초로 두었습니다. Demo는 수 분 안에 진입/복귀를 시연�
   전환은 복귀를 끊지 않습니다. 등받이 이탈 자체를 나쁜 자세로 규정하지 않습니다.
 - UNKNOWN은 후보/활성/복귀 값을 모두 동결합니다. UNKNOWN 진입 구간과 첫 복귀 sample까지의
   구간은 누적하지 않습니다. 장기 unavailable도 현재는 같은 동결 정책이며 별도 만료 정책은
-  보류합니다. 향후 penalty는 `active`만 보고 missing 구간을 감점하면 안 됩니다.
+  보류합니다. penalty는 `active`만 보고 missing 구간을 감점하지 않습니다.
 - 5초 초과 gap은 누적/복귀하지 않습니다. 중복·역행 timestamp는 상태를 바꾸지 않고 무시하며,
   non-finite timestamp는 거부합니다. 시간은 기존 Fusion과 동일하게 Chair payload의 `t`를 씁니다.
 - ABSENT(동일 occupancy 기준)는 UNKNOWN 동결보다 우선하여 모든 temporal 증거를 즉시 reset합니다.
@@ -340,8 +341,8 @@ Normal 30초로 두었습니다. Demo는 수 분 안에 진입/복귀를 시연�
 `sustained_classification`, `accumulated_sec`(현재 후보 유형의 관측 시간), `recovery_sec`,
 `active`, `reasons`를 담습니다. 없는 분류는 생략합니다. `distance_evidence` 순간 결과와 함께
 opt-in recorder JSONL에 보존하지만 public `state`/persistence에는 추가하지 않습니다.
-실제 장시간 dropout, 분류 경계 chatter, 유형 전환, clock skew 검증과 만료/감점/회복 정의가
-완료되기 전까지 단일 distance penalty 활성화는 보류합니다.
+현재 distance 슬롯은 아래 보수적 engineering 정책으로 활성화합니다. 실제 장시간 dropout,
+분류 경계 chatter, 유형 전환, clock skew와 장기 unavailable 만료 정책은 추가 실측이 필요합니다.
 
 READY 수락 직전에 Fusion/cache/Feedback/persistence checkpoint를 다시 초기화하여
 calibration 시간이 실제 측정 누적에 섞이지 않게 합니다. timeout이면 CALIBRATING에서
@@ -390,12 +391,13 @@ DB periodic snapshot 주기는 Demo 5초, Normal 30초입니다. state 변경은
 
 `score`는 `100 - (static + balance + blink + distance penalty)`를 0~100으로
 제한하고 half-up 방식으로 정수화한 **관측 부하 인지용 점수**입니다. 상태 전이와
-독립적이며 의료·질병 위험·자세 정답 점수가 아닙니다. 현재 Chair 단계에서는 static과
-balance만 계산하고, Vision 입력 생명주기가 정의되기 전까지 blink와 distance penalty는
-0으로 둡니다. missing sensor를 정상으로 추정하는 것이 아니라 측정할 수 없는 항목을
-임의 감점하지 않는 정책입니다. penalty 내부값은 state 계약에 추가하지 않습니다.
+독립적이며 의료·질병 위험·자세 정답 점수가 아닙니다. static과 balance에 더해 session
+calibration이 완료된 relative distance evidence만 단일 distance 슬롯을 갱신합니다. blink는
+계속 0으로 예약합니다. calibration/temporal evidence가 없는 기존 Chair-only 호출은 distance를
+새로 만들지 않습니다. missing sensor를 정상으로 추정하거나 임의 감점하지 않습니다.
+penalty 내부값은 state 계약에 추가하지 않습니다. model version은 기존 `soma_load_v1`을 유지합니다.
 
-각 penalty는 현재 연속시간 곡선의 양의 변화량만 잔여값에 더합니다. 움직임 또는 CENTER
+static/balance는 현재 연속시간 곡선의 양의 변화량만 잔여값에 더합니다. 움직임 또는 CENTER
 복귀 시 선형 회복하고, 반복 episode의 잔여 부하는 의도적으로 누적합니다. profile은
 알고리즘을 나누지 않고 곡선 시간축과 회복시간만 선택합니다.
 
@@ -415,6 +417,53 @@ Demo balance 값 역시 졸업작품에서 누적과 회복을 짧게 확인하�
 리셋하지만, SOMA Load의 잔여 penalty는 보존하며 회복시킵니다. 자리 비움 60초 미만은
 1배, 60초 이상 180초 미만은 1.5배, 180초 이상은 2배 회복속도를 적용하고 경계를
 가로지른 시간은 구간별로 정확히 나눕니다.
+
+### Phase C 단일 distance penalty
+
+`session baseline → relative Face + Chair IR → instantaneous classification → temporal sustained
+evidence → distance_penalty → SOMA Load` 흐름을 사용합니다. 순수 `update_distance_load()`는
+기존 Chair load 갱신 직전에 실행하여 동일한 직전 ABSENT 시간을 이용합니다.
+`SomaLoadConfig.distance`의 immutable 설정은 아래 provisional engineering 값입니다.
+
+| 설정 | Demo | Normal |
+|---|---:|---:|
+| BODY_FORWARD_CLOSE 누적률 | 0.5점/초 | 0.01점/초 |
+| BODY 누적 상한 / 전체 distance 슬롯 상한 | 15점 | 15점 |
+| FACE_ONLY_CLOSE 누적률 | 0.2점/초 | 0.004점/초 |
+| FACE_ONLY 누적 상한 | 8점 | 8점 |
+| 15점에서 0점까지 선형 회복 시간 | 20초 | 300초 |
+| 선형 회복률 | 0.75점/초 | 0.05점/초 |
+
+BODY cap은 기존 static/balance 각각 25점보다 작습니다. Demo는 진입 10초 이후 30초의
+유효 관측으로 BODY 15점에 도달하고, FACE_ONLY는 진입 20초 이후 40초로 8점에 도달합니다.
+Normal BODY는 진입 300초 이후 1500초(전체 30분), FACE_ONLY는 진입 600초 이후 2000초
+(전체 43분 20초)입니다. Normal BODY 누적률은 초기 static의 5점/300초보다 낮고,
+Demo도 두 기존 penalty를 즉시 압도하지 않습니다. 의료·생리학적 기준으로 해석하지 않습니다.
+
+- 현재 순간 유형과 sustained 유형이 일치하고 양 끝이 같은 유효 forward 관측인 구간만
+  누적합니다. 후보 시간 중 entry 이후의 증가량만 사용하므로 정확히 entry에 도달한 sample은
+  0점이고 다음 유효 구간부터 증가합니다. 예를 들어 Demo BODY 9→11초는 10→11초의 0.5점만
+  더합니다. sample 개수가 아니라 elapsed time을 사용합니다.
+- BODY/FACE_ONLY 시간과 rate를 합산하지 않습니다. 유형 전환 중 기억된 BODY active만으로
+  BODY rate를 계속 적용하지 않으며 현재 유형이 자기 진입 시간을 채워야 합니다.
+  이전 BODY residual이 FACE_ONLY cap 8점보다 크면 그대로 보존하되 추가 누적하지 않습니다.
+  약한 관측이 기존 부하를 갑자기 지우거나 그 부하를 더 크게 만들지 않습니다.
+- NORMAL/BACKREST_AWAY에서는 temporal active가 해제된 뒤, 양 끝이 알려진 비접근 관측이고
+  inactive인 구간부터 선형 회복합니다. 해제 경계 sample은 회복하지 않습니다. BACKREST_AWAY는
+  독립적으로 누적하지 않으며 등받이 이탈을 나쁜 자세로 단정하지 않습니다.
+- UNKNOWN은 distance residual을 동결합니다. 누적도 회복도 하지 않으며 첫 복귀 sample까지의
+  구간도 사용하지 않습니다. remembered active와 현재 유효한 관측을 구분합니다. 5초 초과 gap,
+  역행/중복 또는 evidence 미제공 역시 새 distance 증가/회복의 근거로 사용하지 않습니다.
+- ABSENT는 temporal을 reset하되 기존 numeric residual은 유지하면서 위 선형 회복률에 기존
+  60/180초의 1/1.5/2배 ABSENT 가중치를 적용합니다. absence 시간은 Chair load에서 한 번만
+  증가합니다. READY→MEASURING과 새 session은 FusionState 전체를 초기화하여 distance도 0입니다.
+- 기존 절대 얼굴 거리 45/50cm hysteresis와 close-distance state/reasons는 변경하지 않습니다.
+  이 로직은 numeric distance 슬롯에 기여하지 않으므로 relative penalty와 수치 이중 감점이
+  없습니다. Phase C가 state/reasons/confidence에 새 판정 규칙을 추가하지 않습니다.
+- public contract, DB schema/persistence mapping, Feedback 설정을 변경하지 않습니다. 기존
+  score 필드에 합성 결과를 emit/store하므로 score <= 60을 사용하는 Feedback의 LOW_SCORE
+  조건은 더 빨리 충족될 수 있습니다(Demo hold 10초, Normal hold 120초). 이는 변경된 score의
+  의도된 downstream 효과입니다. 상세 distance evidence는 public state에 추가하지 않습니다.
 
 ---
 

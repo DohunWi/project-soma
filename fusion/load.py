@@ -1,13 +1,15 @@
-"""Pure SOMA Load Model v1 calculations for Chair-derived load signals.
+"""Pure SOMA Load Model v1 calculations for Chair and relative distance evidence.
 
 The score is an observed load-awareness indicator, not a medical, disease-risk,
-or posture-correctness score. Vision penalties remain zero until Vision input
-has a defined lifecycle; missing sensors never create an arbitrary penalty.
+or posture-correctness score. Blink remains reserved; calibrated sustained
+distance evidence feeds one slot. Missing sensors freeze that slot.
 """
 from dataclasses import dataclass, replace
 from decimal import Decimal, ROUND_HALF_UP
 
-from fusion.config import PenaltyCurve, SomaLoadConfig
+from fusion.config import DistanceEvidenceTiming, PenaltyCurve, SomaLoadConfig
+from fusion.distance_evidence import DistanceEvidenceClass
+from fusion.distance_temporal import DistanceTemporalResult, FORWARD_CLASSES, RECOVERY_CLASSES
 
 
 @dataclass(frozen=True)
@@ -63,6 +65,75 @@ def round_half_up(value: float) -> int:
 
 def score_integer(load: SomaLoadState) -> int:
     return round_half_up(score_float(load))
+
+
+def update_distance_load(
+    load: SomaLoadState,
+    *,
+    previous_evidence: DistanceTemporalResult | None,
+    evidence: DistanceTemporalResult | None,
+    seated: bool,
+    dt: float,
+    config: SomaLoadConfig,
+    timing: DistanceEvidenceTiming,
+) -> SomaLoadState:
+    """Update ONE residual distance penalty from currently justified intervals.
+
+Call before update_chair_load so both use the same previous absent_sec. Absolute
+face distance never enters this numeric slot. A remembered active classification
+alone cannot justify accumulation or recovery during sensor unavailability.
+"""
+    policy = config.distance
+    elapsed = max(float(dt), 0.0)
+    if not seated:
+        penalty = _recover(
+            load.distance_penalty,
+            _absent_weighted_seconds(load.absent_sec, elapsed, config),
+            policy.recovery_sec,
+            policy.body_cap,
+        )
+        return replace(load, distance_penalty=penalty)
+    if evidence is None or previous_evidence is None or elapsed == 0:
+        return load
+    if any(reason in evidence.reasons for reason in ("timestamp_ignored", "gap_not_accumulated")):
+        return load
+    if "timestamp_ignored" in previous_evidence.reasons:
+        return load
+    current = evidence.instantaneous_classification
+    previous = previous_evidence.instantaneous_classification
+    if current is DistanceEvidenceClass.UNKNOWN or previous is DistanceEvidenceClass.UNKNOWN:
+        return load
+
+    penalty = load.distance_penalty
+    if (
+        current in FORWARD_CLASSES
+        and previous is current
+        and evidence.sustained_classification is current
+        and evidence.candidate_classification is current
+        and previous_evidence.candidate_classification is current
+    ):
+        body = current is DistanceEvidenceClass.BODY_FORWARD_CLOSE
+        enter = timing.body_forward_enter_sec if body else timing.face_only_enter_sec
+        # Integrate only the part AFTER entry; a boundary sample adds zero.
+        # Temporal deltas exclude UNKNOWN edges and gaps rather than charging wall time.
+        eligible = min(elapsed, max(
+            max(evidence.accumulated_sec - enter, 0.0)
+            - max(previous_evidence.accumulated_sec - enter, 0.0),
+            0.0,
+        ))
+        rate = policy.body_rate_per_sec if body else policy.face_only_rate_per_sec
+        cap = policy.body_cap if body else policy.face_only_cap
+        # Weaker evidence must not erase an earlier BODY residual above its cap.
+        penalty = max(penalty, min(penalty + rate * eligible, cap))
+    elif (
+        current in RECOVERY_CLASSES
+        and previous in RECOVERY_CLASSES
+        and not evidence.active
+        and not previous_evidence.active
+    ):
+        # Both ends must be known and recovered; never infer NORMAL from dropout.
+        penalty = _recover(penalty, elapsed, policy.recovery_sec, policy.body_cap)
+    return replace(load, distance_penalty=clamp_penalty(penalty, policy.body_cap))
 
 
 def update_chair_load(

@@ -57,8 +57,50 @@ NORMAL_DISTANCE_EVIDENCE_TIMING = DistanceEvidenceTiming(
 
 
 @dataclass(frozen=True)
+class DistancePenaltyConfig:
+    """Provisional single-slot distance load parameters, not medical limits."""
+
+    body_rate_per_sec: float
+    face_only_rate_per_sec: float
+    body_cap: float
+    face_only_cap: float
+    recovery_sec: float
+
+    def __post_init__(self):
+        values = (
+            self.body_rate_per_sec, self.face_only_rate_per_sec,
+            self.body_cap, self.face_only_cap, self.recovery_sec,
+        )
+        if any(not isfinite(value) or value <= 0 for value in values):
+            raise ValueError("distance penalty parameters must be positive and finite")
+        if not self.face_only_cap < self.body_cap <= 25.0:
+            raise ValueError("distance caps must satisfy face-only < body <= 25")
+        if self.face_only_rate_per_sec >= self.body_rate_per_sec:
+            raise ValueError("face-only accumulation must be slower than body accumulation")
+
+
+# BODY is below the existing 25-point static/balance caps; FACE_ONLY is weaker.
+# Demo reaches BODY cap after 30 eligible seconds, Normal after 1500 seconds.
+# These rates/caps are engineering candidates pending broader hardware evidence.
+DEMO_DISTANCE_PENALTY_CONFIG = DistancePenaltyConfig(
+    body_rate_per_sec=0.5,
+    face_only_rate_per_sec=0.2,
+    body_cap=15.0,
+    face_only_cap=8.0,
+    recovery_sec=20.0,
+)
+NORMAL_DISTANCE_PENALTY_CONFIG = DistancePenaltyConfig(
+    body_rate_per_sec=0.01,
+    face_only_rate_per_sec=0.004,
+    body_cap=15.0,
+    face_only_cap=8.0,
+    recovery_sec=300.0,
+)
+
+
+@dataclass(frozen=True)
 class SomaLoadConfig:
-    """Chair-based SOMA Load Model v1 engineering parameters."""
+    """Chair and relative-distance SOMA Load Model v1 engineering parameters."""
 
     static_curve: PenaltyCurve
     balance_curve: PenaltyCurve
@@ -70,6 +112,7 @@ class SomaLoadConfig:
     absent_short_multiplier: float = 1.0
     absent_medium_multiplier: float = 1.5
     absent_long_multiplier: float = 2.0
+    distance: DistancePenaltyConfig = DEMO_DISTANCE_PENALTY_CONFIG
 
 
 SOMA_LOAD_MODEL_VERSION = "soma_load_v1"
@@ -127,6 +170,7 @@ NORMAL_SOMA_LOAD_CONFIG = SomaLoadConfig(
     balance_curve=NORMAL_BALANCE_CURVE,
     static_recovery_sec=600.0,
     balance_recovery_sec=180.0,
+    distance=NORMAL_DISTANCE_PENALTY_CONFIG,
 )
 
 

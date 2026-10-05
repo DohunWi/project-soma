@@ -20,12 +20,15 @@ from dataclasses import dataclass, field, replace
 from typing import Optional
 
 from fusion.config import (
+    DEMO_DISTANCE_EVIDENCE_TIMING,
     DEMO_FUSION_TIMING,
     DEMO_SOMA_LOAD_CONFIG,
     FusionTiming,
+    DistanceEvidenceTiming,
     SomaLoadConfig,
 )
-from fusion.load import SomaLoadState, score_integer, update_chair_load
+from fusion.distance_temporal import DistanceTemporalResult
+from fusion.load import SomaLoadState, score_integer, update_chair_load, update_distance_load
 
 # ── 임계값 ───────────────────────────────────────────────────────────────────
 # 전부 추정치입니다. 실측 데이터로 재조정하기 전까지 확정값으로 쓰지 마세요.
@@ -61,6 +64,7 @@ class FusionState:
     load:            SomaLoadState = field(default_factory=SomaLoadState)
 
     _last_pressure:  tuple = field(default=())
+    _last_distance_evidence: DistanceTemporalResult | None = None
 
 
 def _balance(pressure, prev):
@@ -92,6 +96,8 @@ def step(
     *,
     timing: FusionTiming = DEMO_FUSION_TIMING,
     load_config: SomaLoadConfig = DEMO_SOMA_LOAD_CONFIG,
+    distance_evidence: DistanceTemporalResult | None = None,
+    distance_timing: DistanceEvidenceTiming = DEMO_DISTANCE_EVIDENCE_TIMING,
 ):
     """
     Args:
@@ -100,6 +106,7 @@ def step(
              {"pressure": [4], "ir": [1], "blink_rate": float,
               "face_distance_cm": float, "face_detected": bool}
         now: 현재 시각 (초)
+        distance_evidence: Backend-owned calibrated temporal evidence, never raw payload fields.
 
     Returns:
         (새 FusionState, decision dict)
@@ -111,10 +118,20 @@ def step(
     pressure = list(s.get("pressure") or [])
     seated   = len(pressure) == 4 and sum(pressure) >= OCCUPANCY_MIN
 
+    load = update_distance_load(
+        st.load,
+        previous_evidence=st._last_distance_evidence,
+        evidence=distance_evidence,
+        seated=seated,
+        dt=dt,
+        config=load_config,
+        timing=distance_timing,
+    )
+
     # ── 자리 비움: State 연속값은 리셋하고 Load memory는 회복시킵니다 ───────
     if not seated:
         load = update_chair_load(
-            st.load,
+            load,
             previous_static_sec=st.static_hold_sec,
             static_sec=0.0,
             previous_imbalance_sec=st.imbalance_sec,
@@ -129,6 +146,7 @@ def step(
             low_blink_sec=0.0, static_hold_sec=0.0,
             close_dist_sec=0.0, imbalance_sec=0.0,
             balance="CENTER", load=load, _last_pressure=(),
+            _last_distance_evidence=None,
         )
         return st2, _decision(st2, s, now, "ABSENT", 1.0, [])
 
@@ -167,7 +185,7 @@ def step(
         close_dist = st.close_dist_sec
 
     load = update_chair_load(
-        st.load,
+        load,
         previous_static_sec=st.static_hold_sec,
         static_sec=static_hold,
         previous_imbalance_sec=st.imbalance_sec,
@@ -184,6 +202,7 @@ def step(
         static_hold_sec=static_hold, static_total=static_total,
         low_blink_sec=low_blink, close_dist_sec=close_dist, load=load,
         _last_pressure=tuple(pressure),
+        _last_distance_evidence=distance_evidence,
     )
 
     # ── 상태 판정 ──────────────────────────────────────────────────────────
