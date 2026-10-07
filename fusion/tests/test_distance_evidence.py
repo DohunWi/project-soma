@@ -54,12 +54,12 @@ def test_controlled_hardware_observations(
 @pytest.mark.parametrize(
     ("face_delta", "chair_delta", "expected"),
     [
-        (9.999, 39.999, DistanceEvidenceClass.NORMAL),
-        (10.0, 39.999, DistanceEvidenceClass.FACE_ONLY_CLOSE),
-        (10.001, 39.999, DistanceEvidenceClass.FACE_ONLY_CLOSE),
-        (9.999, 40.0, DistanceEvidenceClass.BACKREST_AWAY),
-        (9.999, 40.001, DistanceEvidenceClass.BACKREST_AWAY),
-        (10.0, 40.0, DistanceEvidenceClass.BODY_FORWARD_CLOSE),
+        (7.999, 39.999, DistanceEvidenceClass.NORMAL),
+        (8.0, 39.999, DistanceEvidenceClass.FACE_ONLY_CLOSE),
+        (8.001, 39.999, DistanceEvidenceClass.FACE_ONLY_CLOSE),
+        (7.999, 40.0, DistanceEvidenceClass.BACKREST_AWAY),
+        (7.999, 40.001, DistanceEvidenceClass.BACKREST_AWAY),
+        (8.0, 40.0, DistanceEvidenceClass.BODY_FORWARD_CLOSE),
     ],
 )
 def test_candidate_threshold_boundaries(face_delta, chair_delta, expected):
@@ -110,7 +110,7 @@ def test_result_is_observational_and_serializable():
         "face_approach_delta_cm": 18.0,
         "backrest_departure_delta_mm": 128.5,
     }
-    assert DEFAULT_DISTANCE_EVIDENCE_CONFIG.face_approach_threshold_cm == 10.0
+    assert DEFAULT_DISTANCE_EVIDENCE_CONFIG.face_approach_threshold_cm == 8.0
     assert (
         DEFAULT_DISTANCE_EVIDENCE_CONFIG.backrest_departure_threshold_mm
         == 40.0

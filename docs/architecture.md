@@ -284,13 +284,14 @@ Phase C를 위해 `face_approach_delta_cm = face working baseline - current face
 `BODY_FORWARD_CLOSE`, `BACKREST_AWAY`, `UNKNOWN`을 구분합니다. fresh Vision, 유효 Chair IR,
 착석이 모두 확인되지 않으면 `UNKNOWN`이며 이를 비정상으로 해석하지 않습니다.
 
-초기 engineering 후보는 얼굴 접근 `>= 10cm`, 등받이 이탈 `>= 40mm`입니다. 통제 실측에서
-비접근 얼굴 변화 `+4.9cm`와 접근 `+18cm`, FACE_ONLY IR `-21mm`와 BACKREST_AWAY
-`+56mm`/BODY_FORWARD `+128.5mm` 사이에 두었고, 반복 baseline spread 약 `0.9cm/8mm`보다
-충분히 큽니다. 한 설치·제한된 세션의 분리 확인값이므로 보편적·의학적 자세 임계가
-아니며 반복 실측으로 재검증해야 하는 engineering 후보입니다. 순간 관측에는 hysteresis나
-지속시간을 넣지 않습니다. 별도 temporal evidence 정책을 거쳐 현재 유효한 sustained
-Face/Chair 관측을 **하나의** distance/forward penalty에 연결합니다. 두 센서를 각각 감점해
+현재 engineering 후보는 얼굴 접근 `>= 8cm`, 등받이 이탈 `>= 40mm`입니다. 통제 실측의
+비접근 얼굴 변화 최대 `+4.9cm`와 최근 demo-chair FACE_ONLY 관측 `+9.5..+11.2cm` 사이에
+얼굴 경계를 두어 10cm 부근 측정 흔들림이 temporal accumulation을 반복해서 끊지 않게
+했습니다. FACE_ONLY IR `+10..+27.5mm`와 BODY_FORWARD IR `+180..+200mm` 관측은 기존
+40mm 등받이 경계를 유지할 근거가 됩니다. 한 설치·제한된 세션의 분리 확인값이므로
+보편적·의학적 자세 임계가 아니며 반복 실측으로 재검증해야 하는 engineering 후보입니다.
+순간 관측에는 hysteresis나 지속시간을 넣지 않습니다. 별도 temporal evidence 정책을 거쳐
+현재 유효한 sustained Face/Chair 관측을 **하나의** distance/forward penalty에 연결합니다. 두 센서를 각각 감점해
 이중 penalty를 만들지 않습니다. hardware 검증 완료나 의학적 유효성을 의미하지 않습니다.
 
 순간/temporal 상세 결과는 opt-in `cross_validation_observation`에서 관찰합니다. Backend가
