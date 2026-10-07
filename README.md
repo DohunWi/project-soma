@@ -40,6 +40,12 @@ pip install -r requirements.txt -r <본인폴더>/requirements.txt
 **Python 3.10 ~ 3.12** 를 씁니다. 3.13 은 mediapipe 가 아직 지원하지 않습니다.
 프론트는 `web/dependencies.txt` 를 보세요 (npm 없이 정적 HTML).
 
+SOMA Vision은 `opencv-contrib-python==5.0.0.93`과 `mediapipe==0.10.35`를 사용합니다.
+OpenCV는 `opencv-contrib-python` 하나로 통일합니다. `opencv-python`,
+`opencv-contrib-python`, 두 패키지의 headless 변형은 같은 환경에 함께 설치하지 마세요.
+이미 여러 OpenCV 배포판이 설치된 환경에서 복구할 때는 깨끗한 가상환경을 새로 만들고
+`pip install -r requirements.txt -r vision/requirements.txt`로 설치하는 것을 권장합니다.
+
 > **`.env` 는 절대 커밋하지 않습니다.** `.gitignore` 에 들어 있지만 `git add -f` 로 강제하지 마세요.
 > DB 는 `postgres` 슈퍼유저 대신 앱 전용 롤을 만들어 쓰세요.
 
