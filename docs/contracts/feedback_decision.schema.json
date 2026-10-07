@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "feedback_decision",
+  "description": "Feedback Policy → Backend → authenticated Front/output adapters. Fusion state와 별개인 논리적 피드백 결정이며 BREAK는 Fusion state가 아닙니다. 값이 없으면 null 대신 키를 생략합니다.",
+  "type": "object",
+  "required": ["v", "t", "session_id", "level", "transition"],
+  "additionalProperties": false,
+  "properties": {
+    "v": { "const": 1 },
+    "t": { "type": "number" },
+    "session_id": { "type": "string", "format": "uuid" },
+    "level": { "enum": ["NORMAL", "NOTICE", "WARNING", "BREAK"] },
+    "reason": {
+      "enum": [
+        "FUSION_CAUTION",
+        "FUSION_DANGER",
+        "LOW_SCORE",
+        "SUSTAINED_DANGER",
+        "CONTINUOUS_WORK",
+        "ABSENT"
+      ]
+    },
+    "transition": {
+      "type": "boolean",
+      "description": "직전 logical feedback level과 달라졌을 때만 true입니다."
+    },
+    "recommended_break_sec": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "BREAK일 때만 제공하는 engineering recommendation duration입니다."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "level": { "const": "BREAK" } }, "required": ["level"] },
+      "then": {
+        "properties": {
+          "reason": {
+            "enum": ["LOW_SCORE", "SUSTAINED_DANGER", "CONTINUOUS_WORK"]
+          }
+        },
+        "required": ["reason", "recommended_break_sec"]
+      },
+      "else": { "not": { "required": ["recommended_break_sec"] } }
+    },
+    {
+      "if": { "properties": { "level": { "const": "NOTICE" } }, "required": ["level"] },
+      "then": { "properties": { "reason": { "const": "FUSION_CAUTION" } }, "required": ["reason"] }
+    },
+    {
+      "if": { "properties": { "level": { "const": "WARNING" } }, "required": ["level"] },
+      "then": { "properties": { "reason": { "const": "FUSION_DANGER" } }, "required": ["reason"] }
+    },
+    {
+      "if": { "properties": { "level": { "const": "NORMAL" } }, "required": ["level"] },
+      "then": { "properties": { "reason": { "const": "ABSENT" } } }
+    }
+  ],
+  "examples": [
+    {
+      "v": 1,
+      "t": 1725345600.0,
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "level": "NORMAL",
+      "transition": false
+    },
+    {
+      "v": 1,
+      "t": 1725345660.0,
+      "session_id": "11111111-1111-4111-8111-111111111111",
+      "level": "BREAK",
+      "reason": "SUSTAINED_DANGER",
+      "transition": true,
+      "recommended_break_sec": 300
+    }
+  ]
+}

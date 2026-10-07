@@ -18,8 +18,28 @@
 |---|---|---|
 | `sensor_data.schema.json` | 수집 → 서버 | `chair/bridge`, `vision/` → `server` |
 | `state.schema.json` | 분석 → 서버 → UI | `fusion` → `server` → `web`, `feedback` |
-| `feedback.schema.json` | 서버 → 액추에이터 | `server` → `chair`(진동), `feedback/ambient_led`, `web` |
+| `feedback.schema.json` | legacy 출력 계약 | 이전 Chair 진동·ambient LED 자산에서만 사용 |
+| `feedback_decision.schema.json` | 정책 → UI·출력 어댑터 | Backend integrated policy → 인증된 `web`, Feedback Nano adapter |
 | `report.schema.json` | DB → 서버 → 프론트 | `db/report` → `server` → `web` |
+| `state_history.schema.json` | DB → 서버 → 프론트 | `state_logs` → `server` → `web` |
+| `measurement_session.schema.json` | 인증 사용자 ↔ 서버 | `web` → `server` start/stop 응답 |
+| `measurement_phase.schema.json` | 서버 → 인증 사용자 room | Backend measurement calibration lifecycle → `web` |
+
+`feedback_decision`의 `NORMAL / NOTICE / WARNING / BREAK`는 Fusion state와 별개입니다.
+`BREAK`를 `state.schema.json`에 추가하지 않으며, 사용자 소유권은 payload의 `user_id`가
+아니라 Backend가 검증한 measurement session과 Socket.IO room으로 정합니다. 선택값이
+없으면 다른 계약과 마찬가지로 `null` 대신 키를 생략합니다.
+
+`state_history`는 Supabase Bearer access token의 `sub`에서 얻은 `user_id`와
+Backend가 관리하는 현재 ACTIVE measurement의 `session_id`를 함께 사용합니다.
+`user_name`과 `device_id`는 소유권이나 조회 경계가 아닙니다. Front는 Supabase를 직접
+조회하지 않고 인증된 Backend의 `GET /api/state/history`만 사용합니다. 현재-session
+조회에서는 클라이언트가 `session_id`를 전달하지 않으며, 과거 session 조회는 향후
+별도 API에서 동일한 `user_id + session_id` 소유권 검사를 거쳐 확장합니다.
+
+`measurement_phase`의 `OFF / CALIBRATING / READY / MEASURING`은 Backend가 관리하는
+측정 실행 단계입니다. Fusion의 `NORMAL / CAUTION / DANGER / ABSENT`와 다른 축이며,
+READY는 baseline 수락을 알린 직후 MEASURING으로 진행하는 일회성 전이 이벤트입니다.
 
 ## 왜 `t` 와 `source` 가 필수인가
 
