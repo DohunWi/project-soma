@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "measurement_session",
+  "description": "Supabase Auth 사용자 → Backend measurement start/stop 응답. user_id는 검증된 access token의 sub에서만 얻습니다.",
+  "type": "object",
+  "required": ["v", "status", "measurement"],
+  "additionalProperties": false,
+  "properties": {
+    "v": { "const": 1 },
+    "status": { "const": "success" },
+    "measurement": { "$ref": "#/$defs/measurement" },
+    "created": { "type": "boolean" },
+    "already_stopped": { "type": "boolean" }
+  },
+  "$defs": {
+    "measurement": {
+      "type": "object",
+      "required": ["session_id", "user_id", "status", "started_at"],
+      "additionalProperties": false,
+      "properties": {
+        "session_id": { "type": "string", "format": "uuid" },
+        "user_id": { "type": "string", "format": "uuid" },
+        "status": { "enum": ["ACTIVE", "STOPPED"] },
+        "started_at": { "$ref": "#/$defs/utcTimestamp" },
+        "ended_at": { "$ref": "#/$defs/utcTimestamp" }
+      }
+    },
+    "utcTimestamp": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T.*Z$"
+    }
+  }
+}

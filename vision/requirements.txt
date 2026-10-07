@@ -1,15 +1,16 @@
 # 웹캠 — 얼굴 거리 + 눈 깜빡임
 -r ../requirements.txt
 
-opencv-python>=4.9
-mediapipe>=0.10.14,<1.0
+opencv-contrib-python==5.0.0.93
+mediapipe==0.10.35
 numpy>=1.24
+python-socketio[client]>=5.11,<6.0
 pytest>=8.0
 
 # 눈 깜빡임에는 얼굴 468점 랜드마크가 필요합니다.
 # Pose(33점)에는 눈 윤곽이 없어 EAR 을 계산할 수 없습니다.
 #
-# ── mediapipe 상한(<1.0)의 이유 ──────────────────────────────
+# ── mediapipe 고정 버전의 이유 ──────────────────────────────
 # 1.0.1 은 macOS(Apple Silicon)에서 첫 추론 때 프로세스가 abort 합니다.
 # 파이썬 예외가 아니라 네이티브 죽음이라 try/except 로 못 잡습니다.
 #     F0000 graph_service.h:139] Check failed: service_ Service is unavailable.
@@ -23,4 +24,5 @@ pytest>=8.0
 #
 # 설치가 실패하면:
 #   - Python 3.13 인지 확인 (mediapipe 미지원). 3.12 로 내리세요
-#   - numpy 충돌이면 `pip install "numpy<2"` 후 재시도
+#   - OpenCV 5.0.0.93은 Python 3.10~3.12에서 numpy>=2를 요구합니다.
+#     numpy<2로 강제하지 말고 해당 Python 버전과 호환되는 NumPy를 사용하세요.

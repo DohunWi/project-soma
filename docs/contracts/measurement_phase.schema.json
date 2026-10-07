@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "measurement_phase",
+  "description": "Backend → authenticated user room. Measurement runtime lifecycle; this is separate from Fusion state.",
+  "type": "object",
+  "required": ["v", "t", "active", "phase"],
+  "properties": {
+    "v": { "const": 1 },
+    "t": { "type": "number" },
+    "session_id": { "type": "string", "format": "uuid" },
+    "active": { "type": "boolean" },
+    "phase": { "enum": ["OFF", "CALIBRATING", "READY", "MEASURING"] },
+    "calibration": {
+      "type": "object",
+      "required": ["status", "progress", "valid_samples", "required_samples", "readiness"],
+      "properties": {
+        "status": { "enum": ["COLLECTING", "READY", "ACCEPTED", "FAILED"] },
+        "progress": { "type": "number", "minimum": 0, "maximum": 1 },
+        "valid_samples": {
+          "type": "object",
+          "required": ["vision", "chair_ir"],
+          "properties": {
+            "vision": { "type": "integer", "minimum": 0 },
+            "chair_ir": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "required_samples": {
+          "type": "object",
+          "required": ["vision", "chair_ir"],
+          "properties": {
+            "vision": { "type": "integer", "minimum": 0 },
+            "chair_ir": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "readiness": {
+          "type": "object",
+          "required": ["duration", "vision", "chair_ir"],
+          "properties": {
+            "duration": { "type": "boolean" },
+            "vision": { "type": "boolean" },
+            "chair_ir": { "type": "boolean" }
+          }
+        },
+        "error": { "enum": ["calibration_timeout"] }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "phase": { "const": "OFF" } }, "required": ["phase"] },
+      "then": { "properties": { "active": { "const": false } } },
+      "else": {
+        "required": ["session_id", "calibration"],
+        "properties": { "active": { "const": true } }
+      }
+    }
+  ]
+}
