@@ -413,7 +413,7 @@
                                     class="flex-1 py-3 bg-red-500 hover:bg-red-600 text-white font-bold rounded-lg transition-colors shadow-sm opacity-50 cursor-not-allowed"
                                     disabled>측정 중지</button>
                                 <!-- 🔽 새로 추가할 팝업 테스트 버튼 나중에 삭제 🔽 -->
-                                <button onclick="testPopup()"
+                                <button onclick="testPopup()" hidden style="display:none"
                                     class="flex-1 py-3 bg-purple-500 hover:bg-purple-600 text-white font-bold rounded-lg transition-colors shadow-sm">팝업
                                     테스트</button>
                             </div>
@@ -479,19 +479,20 @@
                     <div class="section-title">
                         <h2 style="margin: 0; color: var(--text-main); font-size: 1.2rem; font-weight: bold;"
                             data-i18n="daily_report">일간 통계 리포트</h2>
+                        <p id="daily-report-unavailable" data-i18n="daily_report_unavailable">이번 데모에서는 일간 통계가 연결되지 않았습니다. 실시간 측정 화면을 확인해 주세요.</p>
                     </div>
-                    <div class="feedback-card">
+                    <div class="feedback-card" hidden style="display:none">
                         <div class="feedback-icon">🌟</div>
                         <div class="feedback-text">
                             <h4>데이터 수집 대기 중</h4>
                             <p>오늘 수집된 자세 분석 데이터가 아직 없습니다.</p>
                         </div>
                     </div>
-                    <div class="card half-chart">
+                    <div class="card half-chart" hidden style="display:none">
                         <h3 data-i18n="pie_title">오늘 하루 상태 비율</h3>
                         <div class="chart-container"><canvas id="pieChart"></canvas></div>
                     </div>
-                    <div class="card half-chart-wide">
+                    <div class="card half-chart-wide" hidden style="display:none">
                         <h3 data-i18n="timeline_title">시간대별 상태 이력</h3>
                         <div class="chart-container"><canvas id="timelineChart"></canvas></div>
                     </div>
@@ -563,6 +564,7 @@
                 current_posture: "현재 종합 상태", data_wait: "분석 대기 중", analyzing: "데이터를 수집하고 있습니다.",
                 metric_blink: "분당 눈 깜빡임 (Rate)", metric_dist: "화면과의 거리 (Dist)", metric_static: "정적 유지 시간 (Hold)", metric_balance: "좌우 하중 밸런스",
                 recent_history: "최근 점수 이력 (Score)", daily_report: "일간 통계 리포트",
+                daily_report_unavailable: "이번 데모에서는 일간 통계가 연결되지 않았습니다. 실시간 측정 화면을 확인해 주세요.",
                 excellent: "훌륭합니다!", excellent_desc: "오늘 하루 종일 좋은 자세 패턴을 유지하셨네요.",
                 pie_title: "오늘 하루 상태 비율", timeline_title: "시간대별 상태 이력",
                 lang_setting: "언어 설정",
@@ -579,6 +581,7 @@
                 current_posture: "Overall Status", data_wait: "Waiting...", analyzing: "Collecting data.",
                 metric_blink: "Blink Rate (per min)", metric_dist: "Screen Distance (cm)", metric_static: "Static Hold (sec)", metric_balance: "L/R Balance",
                 recent_history: "Recent Score History", daily_report: "Daily Report",
+                daily_report_unavailable: "Daily statistics are not connected for this demo. Please use the realtime measurement view.",
                 excellent: "Excellent!", excellent_desc: "You maintained a good pattern today.",
                 pie_title: "Daily Status Ratio", timeline_title: "Timeline History",
                 lang_setting: "Language Settings",
@@ -830,18 +833,18 @@
             },
             "CAUTION": {
                 color: "var(--warn-color)", bg: "rgba(241, 196, 15, 0.1)",
-                ko: { label: "주의", msg: "수치 변화 감지", sub: "눈 깜빡임이나 움직임에 신경써주세요.", topDetail: "수치가 떨어지고 있습니다. 스트레칭을 권장합니다." },
-                en: { label: "Caution", msg: "Change detected", sub: "Pay attention to blinking and movement.", topDetail: "Your metrics are dropping. Try stretching." }
+                ko: { label: "주의", msg: "수치 변화 감지", sub: "현재 측정 지표를 확인해 주세요.", topDetail: "상태 지표의 변화가 관측되었습니다." },
+                en: { label: "Caution", msg: "Change detected", sub: "Please check the current measurements.", topDetail: "A change in state indicators has been observed." }
             },
             "DANGER": {
                 color: "var(--danger-color)", bg: "rgba(231, 76, 60, 0.1)",
-                ko: { label: "위험", msg: "피로 누적 발생", sub: "즉각적인 휴식이 필요합니다.", topDetail: "장시간 정적 상태입니다. 자리에서 일어나세요!" },
-                en: { label: "Danger", msg: "Fatigue building up", sub: "You need a break right away.", topDetail: "You've been static for too long. Stand up!" }
+                ko: { label: "위험", msg: "상태 변화 지속", sub: "현재 측정 지표를 확인하고 잠깐 쉬어보세요.", topDetail: "상태 지표의 변화가 지속되고 있습니다." },
+                en: { label: "Danger", msg: "State change sustained", sub: "Check the current measurements and consider a short break.", topDetail: "A change in state indicators is continuing." }
             },
             "ABSENT": {
                 color: "var(--neutral-color)", bg: "var(--card-bg)",
-                ko: { label: "자리 비움", msg: "사용자 없음", sub: "누적 지표 계산이 일시 정지됩니다.", topDetail: "자리에 돌아오면 분석을 재개합니다." },
-                en: { label: "Away", msg: "No user detected", sub: "Cumulative metrics are paused.", topDetail: "Analysis resumes when you return." }
+                ko: { label: "자리 비움", msg: "사용자 없음", sub: "자리 비움 · 착석하면 실시간 표시를 재개합니다.", topDetail: "착석하면 실시간 표시를 재개합니다." },
+                en: { label: "Away", msg: "No user detected", sub: "Away · Realtime display resumes when you sit down.", topDetail: "Realtime display resumes when you sit down." }
             },
             "UNKNOWN": {
                 color: "var(--text-main)", bg: "var(--card-bg)",
@@ -855,16 +858,18 @@
            ========================================= */
         // Socket/REST effects are installed by the module after Auth restoration.
         let presentationRevision = -1;
+        let activeFeedbackToast = null;
 
         function updateDashboardUI(data, appendChart = true) {
             if (!isMeasuring) return;
 
             const stateKey = data.state || "UNKNOWN";
+            const absent = stateKey === "ABSENT";
             const theme = STATE_MAP[stateKey] || STATE_MAP["UNKNOWN"];
             const textInfo = theme[currentLang] || theme.ko;
 
             const currentScore = (data.score !== undefined) ? data.score : 0;
-            document.getElementById('currentScore').innerText = (data.score !== undefined) ? data.score : "-";
+            document.getElementById('currentScore').innerText = absent ? "—" : (data.score !== undefined) ? data.score : "-";
             document.getElementById('scoreRing').style.borderColor = theme.color;
 
             document.getElementById('topStatusDot').style.backgroundColor = theme.color;
@@ -886,8 +891,8 @@
             document.getElementById('val-dist').innerText = (m.face_distance_cm !== undefined) ? m.face_distance_cm.toFixed(1) : "-";
             document.getElementById('val-static').innerText = (m.static_hold_sec !== undefined) ? m.static_hold_sec : "-";
 
-            let balText = "-";
-            if (m.balance !== undefined && translations[currentLang]['bal_' + m.balance]) {
+            let balText = absent ? "—" : "-";
+            if (!absent && m.balance !== undefined && translations[currentLang]['bal_' + m.balance]) {
                 balText = translations[currentLang]['bal_' + m.balance];
             }
             document.getElementById('val-balance').innerText = balText;
@@ -929,6 +934,7 @@
                 realtimeChart.data.labels = [];
                 realtimeChart.data.datasets[0].data = [];
                 realtimeChart.update('none');
+                activeFeedbackToast = null;
                 Swal.close();
             }
             const pending = model.pendingAction;
@@ -1070,13 +1076,24 @@
                 renderMeasurementUI();
                 updateDashboardUI(data);
             },
-            onFeedback: message => Swal.fire({
-                toast: true, position: 'bottom-end', icon: message.icon,
-                title: message.title, text: message.text,
-                showConfirmButton: false, showCloseButton: true,
-                timer: message.persistent ? undefined : 5000,
-                timerProgressBar: !message.persistent,
-            }),
+            onFeedback: message => {
+                if (message.dismiss) {
+                    if (activeFeedbackToast?.persistent) Swal.close();
+                    activeFeedbackToast = null;
+                    return;
+                }
+                activeFeedbackToast = message;
+                Swal.fire({
+                    toast: true, position: 'bottom-end', icon: message.icon,
+                    title: message.title, text: message.text,
+                    showConfirmButton: false, showCloseButton: true,
+                    timer: message.persistent ? undefined : 5000,
+                    timerProgressBar: !message.persistent,
+                    didClose: () => {
+                        if (activeFeedbackToast === message) activeFeedbackToast = null;
+                    },
+                });
+            },
         });
         window.measurementRuntime = runtime;
         renderMeasurementUI();
@@ -1111,6 +1128,8 @@
 
         // [일간 통계 리포트 데이터 로드]
         window.fetchDailyReport = async () => {
+            // Keep the legacy query, but never present it as current state_logs data.
+            if (document.getElementById('daily-report-unavailable')) return;
             const today = new Date();
             today.setHours(0, 0, 0, 0);
             const todayStr = today.toISOString();

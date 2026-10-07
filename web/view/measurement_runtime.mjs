@@ -89,6 +89,8 @@ export function createMeasurementRuntime({
     }
     function bindEvents(target, owner) {
         const generation = model.connectionGeneration;
+        let feedbackSessionId = null;
+        let lastFeedbackTime = null;
         const valid = () => target === socket && owner === userGeneration;
         const bind = (name, handler) => {
             target.on(name, handler);
@@ -106,7 +108,15 @@ export function createMeasurementRuntime({
         bind("feedback", event => {
             if (!valid()) return;
             const presentation = feedbackPresentation(model, event, generation);
-            if (presentation) onFeedback(presentation);
+            if (!presentation) return;
+            if (feedbackSessionId !== model.sessionId) {
+                feedbackSessionId = model.sessionId;
+                lastFeedbackTime = null;
+            }
+            // Old/duplicate transitions must not dismiss or replace a newer toast.
+            if (lastFeedbackTime !== null && event.t <= lastFeedbackTime) return;
+            lastFeedbackTime = event.t;
+            onFeedback(presentation);
         });
     }
     function setSession(nextSession) {

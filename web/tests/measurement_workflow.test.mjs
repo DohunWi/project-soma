@@ -398,6 +398,40 @@ test('runtime feedback only accepts matching MEASURING transitions', () => {
     assert.equal(f.feedbacks.length, 1);
 });
 
+test('NORMAL dismissal retains feedback session/generation/transition validation', () => {
+    const model = active();
+    const recovery = { v: 1, t: 12, session_id: SID, level: 'NORMAL', transition: true };
+    assert.deepEqual(feedbackPresentation(model, recovery), { dismiss: true });
+    assert.deepEqual(feedbackPresentation(model, { ...recovery, reason: 'ABSENT' }), { dismiss: true });
+    for (const event of [{ ...recovery, session_id: OLD }, { ...recovery, transition: false },
+        { ...recovery, t: NaN }, { ...recovery, reason: 'LOW_SCORE' }]) {
+        assert.equal(feedbackPresentation(model, event), null);
+    }
+    assert.equal(feedbackPresentation(model, recovery, -1), null);
+    assert.equal(feedbackPresentation(apply(model, 'STOP'), recovery), null);
+});
+
+test('feedback timestamp guard resets per session and rejects obsolete connection callbacks', async () => {
+    const f = fixture();
+    f.socket.fire('measurement_phase', phase('MEASURING'));
+    f.socket.fire('feedback', { ...feedback(), t: 100 });
+    await f.runtime.stop();
+    f.socket.fire('measurement_phase', phase('CALIBRATING', NEXT, 20));
+    f.socket.fire('measurement_phase', phase('MEASURING', NEXT, 21));
+    f.socket.fire('feedback', { ...feedback(NEXT), t: 10 });
+    assert.equal(f.feedbacks.length, 2);
+    f.socket.fire('feedback', { v: 1, t: 200, session_id: SID, level: 'NORMAL', transition: true });
+    assert.equal(f.feedbacks.length, 2);
+    const oldFeedback = f.socket.events.get('feedback')[0];
+    f.socket.fire('disconnect');
+    f.socket.fire('connect');
+    f.socket.fire('measurement_phase', phase('MEASURING', NEXT, 50));
+    f.socket.fire('feedback', { ...feedback(NEXT), t: 60 });
+    oldFeedback({ v: 1, t: 61, session_id: NEXT, level: 'NORMAL', transition: true });
+    oldFeedback({ ...feedback(NEXT), t: 62 });
+    assert.equal(f.feedbacks.length, 3);
+});
+
 test('REST obtains current token, preserves options and never sends client user identity', async () => {
     let currentSession = session(), seen = [];
     const helper = createAuthenticatedFetch({ getSession: async () => ({ data: { session: currentSession } }) },

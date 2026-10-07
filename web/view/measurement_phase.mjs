@@ -140,6 +140,9 @@ export function feedbackPresentation(state, event, generation = state.connection
     if (!canRenderState(state, generation) || event?.v !== 1 ||
         !Number.isFinite(event.t) || event.session_id !== state.sessionId ||
         event.transition !== true) return null;
+    if (event.level === "NORMAL") {
+        return event.reason === undefined || event.reason === "ABSENT" ? { dismiss: true } : null;
+    }
     const messages = {
         NOTICE: { icon: "warning", title: "수치 변화가 감지됐어요",
             text: "현재 상태를 확인하고 잠깐 움직여보세요." },
