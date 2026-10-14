@@ -285,6 +285,38 @@ def test_stale_vision_is_unknown_even_when_last_face_was_close():
     assert evidence.vision_available is False
 
 
+def test_fresh_vision_without_face_distance_is_unknown_and_freezes_penalty():
+    app, socketio, clock, _timers, _persistence = make_runtime()
+    producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
+    start(app)
+    calibrate(app, producer, clock)
+    pipeline = app.extensions["chair_pipeline"]
+    calibration = app.extensions["measurement_calibration"]
+
+    for t in range(6, 21):
+        clock.set(t)
+        producer.emit("sensor_data", vision_payload(t, distance=42.0))
+        producer.emit(
+            "sensor_data",
+            chair_payload(t, ir=380, pressure=[300 + (t % 2) * 20] * 4),
+        )
+    penalty_before_dropout = pipeline._state.load.distance_penalty
+    assert penalty_before_dropout > 0
+
+    clock.set(21)
+    producer.emit("sensor_data", vision_payload(21, distance=None, detected=True))
+    producer.emit("sensor_data", chair_payload(21, ir=380, pressure=[320] * 4))
+
+    assert pipeline.sensor_cache.vision_availability.value == "FRESH"
+    assert (
+        calibration.latest_distance_evidence.classification
+        is DistanceEvidenceClass.UNKNOWN
+    )
+    assert calibration.latest_distance_evidence.vision_available is False
+    assert calibration.latest_distance_temporal.reasons == ("unavailable_freeze",)
+    assert pipeline._state.load.distance_penalty == penalty_before_dropout
+
+
 def test_opt_in_observer_receives_distance_evidence_without_state_contract_change():
     app, socketio, clock, _timers, _persistence = make_runtime()
     observer = socketio.test_client(

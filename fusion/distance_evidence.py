@@ -46,14 +46,15 @@ class DistanceEvidenceConfig:
             raise ValueError("backrest departure threshold must be positive and finite")
 
 
-# One controlled hardware session separated the largest non-close face delta
-# (+4.9 cm) from close examples (+18 cm), and repeated baselines varied by only
-# ~0.9 cm.  10 cm is an intentionally provisional candidate within that gap.
+# Controlled hardware sessions separated non-close face deltas (up to +4.9 cm)
+# from FACE_ONLY_CLOSE observations (+9.5..+11.2 cm).  8 cm is a provisional
+# candidate below the observed close range so normal measurement jitter around
+# 10 cm does not repeatedly reset temporal accumulation.
 # Chair IR separated FACE_ONLY_CLOSE (-21 mm) from BACKREST_AWAY (+56 mm) and
 # BODY_FORWARD_CLOSE (+128.5 mm); repeat baselines spread ~8 mm.  40 mm stays
 # above observed baseline variation while preserving the controlled separation.
 DEFAULT_DISTANCE_EVIDENCE_CONFIG = DistanceEvidenceConfig(
-    face_approach_threshold_cm=10.0,
+    face_approach_threshold_cm=8.0,
     backrest_departure_threshold_mm=40.0,
 )
 

@@ -78,12 +78,13 @@ def test_monitor_flag_parses_without_changing_stdout_default():
     assert args.stdout is False
 
 
-def test_monitor_output_formats_all_fsr_values_sum_and_diff():
-    line = format_monitor_line([938, 912, 965, 927])
+@pytest.mark.parametrize("raw_ir", [118, -1])
+def test_monitor_output_formats_all_fsr_values_sum_diff_and_raw_ir(raw_ir):
+    line = format_monitor_line([938, 912, 965, 927], raw_ir)
 
     assert line == (
         "[chair-monitor] FL=  938 FR=  912 BL=  965 BR=  927 "
-        "SUM= 3742 DIFF=   +64"
+        f"SUM= 3742 DIFF=   +64 IR= {raw_ir}mm"
     )
 
 
@@ -92,9 +93,9 @@ def test_monitor_is_rate_limited_to_about_one_hz():
     lines = []
     monitor = ChairMonitor(clock=lambda: next(times), diagnostic=lines.append)
 
-    assert monitor.observe([1, 2, 3, 4]) is True
-    assert monitor.observe([5, 6, 7, 8]) is False
-    assert monitor.observe([9, 10, 11, 12]) is True
+    assert monitor.observe([1, 2, 3, 4], 101) is True
+    assert monitor.observe([5, 6, 7, 8], 202) is False
+    assert monitor.observe([9, 10, 11, 12], -1) is True
     assert len(lines) == 2
 
 
@@ -108,8 +109,8 @@ def test_monitor_does_not_disable_backend_emit_path():
     observed = []
 
     class Monitor:
-        def observe(self, pressure):
-            observed.append(pressure)
+        def observe(self, pressure, raw_ir):
+            observed.append((pressure, raw_ir))
 
     event = sample_event()
     dispatch_sample(
@@ -119,7 +120,7 @@ def test_monitor_does_not_disable_backend_emit_path():
         emit=emitted.append,
     )
 
-    assert observed == [[938, 912, 965, 927]]
+    assert observed == [([938, 912, 965, 927], 505)]
     assert emitted == [event]
 
 
@@ -127,7 +128,7 @@ def test_stdout_keeps_inspection_only_behavior_with_monitor():
     stdout_lines = []
 
     class Monitor:
-        def observe(self, pressure):
+        def observe(self, pressure, raw_ir):
             return None
 
     event = sample_event()
@@ -148,8 +149,8 @@ def test_raw_log_monitor_and_backend_emit_can_run_together():
     emitted = []
 
     class Monitor:
-        def observe(self, pressure):
-            observed.append(pressure)
+        def observe(self, pressure, raw_ir):
+            observed.append((pressure, raw_ir))
 
     event = sample_event()
     dispatch_sample(
@@ -168,5 +169,5 @@ def test_raw_log_monitor_and_backend_emit_can_run_together():
         "br": 927,
         "ir": 505,
     }
-    assert observed == [[938, 912, 965, 927]]
+    assert observed == [([938, 912, 965, 927], 505)]
     assert emitted == [event]

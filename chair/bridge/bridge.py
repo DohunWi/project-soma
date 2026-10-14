@@ -112,15 +112,15 @@ def emit_sensor_data(socket_client, event, *, debug=False, diagnostic=print):
         )
 
 
-def format_monitor_line(pressure):
-    """Return one human-readable raw FSR diagnostic line."""
+def format_monitor_line(pressure, raw_ir):
+    """Return one human-readable raw Chair diagnostic line."""
     fl, fr, bl, br = pressure
     pressure_sum = fl + fr + bl + br
     balance_diff = (fl + bl) - (fr + br)
     return (
         "[chair-monitor] "
         f"FL={fl:5d} FR={fr:5d} BL={bl:5d} BR={br:5d} "
-        f"SUM={pressure_sum:5d} DIFF={balance_diff:+6d}"
+        f"SUM={pressure_sum:5d} DIFF={balance_diff:+6d} IR= {raw_ir}mm"
     )
 
 
@@ -141,7 +141,7 @@ class ChairMonitor:
         self._diagnostic = diagnostic
         self._last_output_at = None
 
-    def observe(self, pressure):
+    def observe(self, pressure, raw_ir):
         now = self._clock()
         if (
             self._last_output_at is not None
@@ -149,7 +149,7 @@ class ChairMonitor:
         ):
             return False
 
-        self._diagnostic(format_monitor_line(pressure))
+        self._diagnostic(format_monitor_line(pressure, raw_ir))
         self._last_output_at = now
         return True
 
@@ -173,7 +173,7 @@ def dispatch_sample(
         ) + "\n")
 
     if monitor is not None:
-        monitor.observe(pressure)
+        monitor.observe(pressure, raw_ir)
 
     if emit is not None:
         emit(event)
