@@ -93,3 +93,32 @@ def test_캘리브레이션_중임을_알린다():
     ev = vision_payload(t=1000.0, user_name="g", face_detected=True, calibrating=True)
     assert ev["vision"]["calibrating"] is True
     assert errors(ev) == []
+
+
+def test_lateral_observations_are_additive_and_unavailable_values_are_omitted():
+    available = vision_payload(
+        t=1000.0,
+        user_name="g",
+        face_detected=True,
+        face_lateral_offset=-0.125,
+        head_roll_deg=2.5,
+        head_roll_delta_deg=1.0,
+        face_lateral_calibrated=True,
+        face_lean_direction="LEFT",
+    )
+    unavailable = vision_payload(
+        t=1001.0,
+        user_name="g",
+        face_detected=False,
+        face_lateral_calibrated=False,
+        face_lean_direction="UNKNOWN",
+    )
+
+    assert errors(available) == []
+    assert available["vision"]["face_lateral_offset"] == -0.125
+    assert available["vision"]["head_roll_deg"] == 2.5
+    assert available["vision"]["face_lean_direction"] == "LEFT"
+    assert errors(unavailable) == []
+    assert unavailable["vision"]["face_lateral_calibrated"] is False
+    assert unavailable["vision"]["face_lean_direction"] == "UNKNOWN"
+    assert "face_lateral_offset" not in unavailable["vision"]
