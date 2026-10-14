@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 from functools import wraps
+from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, jsonify, request
@@ -55,8 +56,10 @@ from server.measurement_calibration import (  # noqa: E402
 )
 from server.state_history import (  # noqa: E402
     HistoryRequestError,
+    HistorySessionNotFound,
     HistoryUnavailable,
     StateHistoryReader,
+    parse_session_id,
     resolve_history_period,
     utc_iso8601,
 )
@@ -75,6 +78,7 @@ log = logging.getLogger("soma.server")
 SENSOR_SCHEMA_PATH = ROOT / "docs" / "contracts" / "sensor_data.schema.json"
 STATE_SCHEMA_PATH = ROOT / "docs" / "contracts" / "state.schema.json"
 STATE_HISTORY_SCHEMA_PATH = ROOT / "docs" / "contracts" / "state_history.schema.json"
+HISTORY_SESSIONS_SCHEMA_PATH = ROOT / "docs" / "contracts" / "history_sessions.schema.json"
 MEASUREMENT_PHASE_SCHEMA_PATH = (
     ROOT / "docs" / "contracts" / "measurement_phase.schema.json"
 )
@@ -141,6 +145,7 @@ def _load_validator(path):
 SENSOR_VALIDATOR = _load_validator(SENSOR_SCHEMA_PATH)
 STATE_VALIDATOR = _load_validator(STATE_SCHEMA_PATH)
 STATE_HISTORY_VALIDATOR = _load_validator(STATE_HISTORY_SCHEMA_PATH)
+HISTORY_SESSIONS_VALIDATOR = _load_validator(HISTORY_SESSIONS_SCHEMA_PATH)
 MEASUREMENT_PHASE_VALIDATOR = _load_validator(MEASUREMENT_PHASE_SCHEMA_PATH)
 
 
@@ -576,6 +581,64 @@ def create_app(
                 },
             }), 500
         return jsonify(response)
+
+    def history_error(status, code, message):
+        return jsonify({
+            "v": 1, "status": "error", "error": {"code": code, "message": message},
+        }), status
+
+    def checked_history_response(payload, validator):
+        if _validation_message(validator, payload):
+            return history_error(500, "invalid_history_response", "기록 응답을 만들 수 없습니다.")
+        return jsonify(payload)
+
+    @app.get("/api/state/history/sessions")
+    @token_required
+    def get_recorded_sessions(user_id):
+        if request.args:
+            return history_error(400, "invalid_request", "지원하지 않는 query parameter입니다.")
+        try:
+            recorded = history_reader.list_sessions(user_id)
+        except HistoryUnavailable:
+            return history_error(503, "history_unavailable", "저장된 기록을 불러올 수 없습니다.")
+        return checked_history_response({
+            "v": 1, "status": "success", "user_id": str(user_id), "sessions": recorded,
+        }, HISTORY_SESSIONS_VALIDATOR)
+
+    @app.get("/api/state/history/sessions/<session_id>")
+    @token_required
+    def get_recorded_session_history(user_id, session_id):
+        try:
+            selected_id = parse_session_id(session_id)
+        except HistoryRequestError as error:
+            return history_error(400, "invalid_session_id", str(error))
+        if set(request.args) - {"start", "end"} or any(
+            len(request.args.getlist(key)) != 1 for key in request.args
+        ):
+            return history_error(400, "invalid_request", "지원하지 않는 query parameter입니다.")
+        try:
+            # Ownership is DB-backed, not the in-memory ACTIVE registry. No measurement lock.
+            recorded = history_reader.get_session(user_id, selected_id)
+            start, end = resolve_history_period(
+                request.args.get("start"), request.args.get("end"),
+                now=datetime.fromisoformat(recorded["last_measured_at"].replace("Z", "+00:00")),
+            )
+            baseline, states = history_reader.fetch(user_id, selected_id, start, end)
+        except HistorySessionNotFound:
+            return history_error(404, "session_not_found", "저장된 측정 기록을 찾을 수 없습니다.")
+        except HistoryRequestError as error:
+            return history_error(400, "invalid_time_range", str(error))
+        except HistoryUnavailable:
+            return history_error(503, "history_unavailable", "저장된 기록을 불러올 수 없습니다.")
+        payload = {
+            "v": 1, "status": "success",
+            "stream": {"user_id": str(user_id), "session_id": str(selected_id)},
+            "period": {"start": utc_iso8601(start), "end": utc_iso8601(end)},
+            "states": states,
+        }
+        if baseline is not None:
+            payload["baseline"] = baseline
+        return checked_history_response(payload, STATE_HISTORY_VALIDATOR)
 
     @app.post("/api/measurement/start")
     @token_required

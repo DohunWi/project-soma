@@ -61,7 +61,8 @@ test('history aggregation excludes baseline from score points and does not fill 
     assert.equal(result.sampleCount, 3);
     assert.equal(result.points.length, 3);
     assert.ok(result.points.every(point => point.measured_at !== payload.period.start));
-    assert.equal(Object.values(result.durationMs).reduce((sum, value) => sum + value, 0), 3 * 60_000);
+    // The baseline -> first sample gap is two minutes, beyond the one-minute limit.
+    assert.equal(Object.values(result.durationMs).reduce((sum, value) => sum + value, 0), 2 * 60_000);
     assert.deepEqual(result.transitions.map(item => item.to), ['CAUTION', 'DANGER']);
 });
 

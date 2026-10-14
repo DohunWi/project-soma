@@ -44,7 +44,8 @@ CDN 두 개(`socket.io`, `chart.js`)를 `vendor/` 로 내려받고 `<script src>
 `web/view/index.html`에 연결되어 있습니다. 최신 Backend (3d40f922 또는 호환 버전)가 필요합니다.
 
 ```powershell
-C:\project-soma\.venv-clean\Scripts\python.exe C:\project-soma-front\tools\serve_front.py
+cd C:\project-soma\web
+& C:\project-soma\.venv-clean\Scripts\python.exe -c "import http.server as h; h.SimpleHTTPRequestHandler.extensions_map.update({'.js':'text/javascript','.mjs':'text/javascript'}); h.test(HandlerClass=h.SimpleHTTPRequestHandler,port=5500,bind='127.0.0.1')"
 # http://127.0.0.1:5500/view/index.html
 node --test web/tests/*.test.mjs
 ```
@@ -59,7 +60,7 @@ cd C:\project-soma
 Front 개발 서버는 `127.0.0.1:5500`에만 바인딩하고 `web`을 문서 루트로 제공합니다.
 로그인 시작 주소는 `http://127.0.0.1:5500/view/login.html`입니다. Windows의 일반
 `python -m http.server`가 `.mjs`를 `text/plain`으로 응답하면 로그인과 측정 모듈이
-실행되지 않으므로, `.mjs`를 `text/javascript`로 고정하는 위 스크립트를 사용하세요.
+실행되지 않으므로, `.mjs`를 `text/javascript`로 고정하는 위 명령을 사용하세요.
 Front와 Backend 모두 해당 PowerShell 창에서 `Ctrl+C`로 종료합니다.
 
 Backend의 `CORS_ALLOWED_ORIGINS`에 위 Front origin을 허용하고 기존 Supabase Auth 설정을
@@ -85,8 +86,19 @@ Socket.IO lifecycle 순서로 stale state를 완화하지만 payload 자체의 �
 
 측정 기록 화면은 Front에서 Supabase 테이블을 직접 읽지 않습니다. 예시 모드는 DB와 분리된
 정적 4시간 fixture이고, 실제 모드는 인증된 Backend `GET /api/state/history`가 지원하는
-현재 ACTIVE session의 최근 30분/60분만 표시합니다. 종료된 session과 4시간 실제 기록은
-별도 장기 집계 API가 생기기 전까지 제공하지 않습니다.
+현재 ACTIVE session의 최근 30분/60분을 표시합니다. 측정 종료/OFF에서는
+`GET /api/state/history/sessions` 목록의 가장 최근 저장 session을 기본 선택하고,
+`GET /api/state/history/sessions/<session_id>`로 조회합니다. 과거 30/60분의 끝은 현재 시간이
+아니라 선택 session의 `last_measured_at`입니다. 첫/마지막 시각은 실제 Start/Stop 시각이
+아닌 snapshot 범위입니다. 기록 없음, ACTIVE 없음, 인증 오류, DB 장애를 구분하며 비동기
+저장이 아직 끝나지 않은 경우 새로고침하세요. 상태 비율은 snapshot 사이의 관측 시간으로
+집계하며 긴 gap을 정상으로 채우지 않습니다. 4시간 실제 기록/장기 보고서는 구현하지 않습니다.
+
+현재 Back checkout의 `web/view/`가 최신 Front 원본입니다. `web/` 루트의 동명 파일은
+동일 내용을 유지하는 배포용 복사본이며 테스트에서 두 경로의 일치를 검증합니다.
+이 버전을 실행할 때는 `C:\project-soma\web`을 문서 루트로 제공하고
+`http://127.0.0.1:5500/view/index.html`을 엽니다. 별도 `C:\project-soma-front`의
+31094ee checkout은 이전 버전이므로 이번 변경을 포함하지 않습니다.
 
 카메라 설정은 브라우저 미리보기 전용입니다. 페이지 로드나 설정 진입만으로 카메라를 켜지
 않으며 측정 중에는 Python Vision과의 장치 충돌을 피하기 위해 테스트를 막습니다. 브라우저에서

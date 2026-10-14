@@ -22,6 +22,7 @@
 | `feedback_decision.schema.json` | 정책 → UI·출력 어댑터 | Backend integrated policy → 인증된 `web`, Feedback Nano adapter |
 | `report.schema.json` | DB → 서버 → 프론트 | `db/report` → `server` → `web` |
 | `state_history.schema.json` | DB → 서버 → 프론트 | `state_logs` → `server` → `web` |
+| `history_sessions.schema.json` | DB → 서버 → 프론트 | 인증 사용자의 저장된 session 목록 |
 | `measurement_session.schema.json` | 인증 사용자 ↔ 서버 | `web` → `server` start/stop 응답 |
 | `measurement_phase.schema.json` | 서버 → 인증 사용자 room | Backend measurement calibration lifecycle → `web` |
 
@@ -33,9 +34,17 @@
 `state_history`는 Supabase Bearer access token의 `sub`에서 얻은 `user_id`와
 Backend가 관리하는 현재 ACTIVE measurement의 `session_id`를 함께 사용합니다.
 `user_name`과 `device_id`는 소유권이나 조회 경계가 아닙니다. Front는 Supabase를 직접
-조회하지 않고 인증된 Backend의 `GET /api/state/history`만 사용합니다. 현재-session
-조회에서는 클라이언트가 `session_id`를 전달하지 않으며, 과거 session 조회는 향후
-별도 API에서 동일한 `user_id + session_id` 소유권 검사를 거쳐 확장합니다.
+조회하지 않고 인증된 Backend의 History API만 사용합니다. `GET /api/state/history`는
+현재 ACTIVE session 전용이며 기본 최근 5분, 최대 60분, ACTIVE 없음은 409입니다.
+`GET /api/state/history/sessions`는 저장된 session 목록을 마지막 snapshot 최신순으로
+반환합니다. `first_measured_at`/`last_measured_at`은 실제 Start/Stop 시각이 아닙니다.
+NULL session_id인 legacy row는 제외하며 빈 목록은 200입니다.
+`GET /api/state/history/sessions/<session_id>`는 UUID 검증 후 DB의 `user_id + session_id`로
+소유권을 확인합니다. 타인 소유와 없는 session은 같은 404, 잘못된 UUID/query/시간은 400,
+DB 장애는 503입니다. 기본 구간은 마지막 snapshot 직전 5분이며 start/end는 함께 전달하고
+최대 60분입니다. 응답은 기존 state_history 계약을 재사용하고 baseline도 동일 소유권 범위입니다.
+목록 API는 query를 받지 않으며 상세 API는 start/end만 허용합니다. 요청 user_id는 받지 않습니다.
+두 저장 기록 API는 ACTIVE registry와 독립적이어서 Stop/Backend 재시작 후에도 조회할 수 있습니다.
 
 `measurement_phase`의 `OFF / CALIBRATING / READY / MEASURING`은 Backend가 관리하는
 측정 실행 단계입니다. Fusion의 `NORMAL / CAUTION / DANGER / ABSENT`와 다른 축이며,

@@ -355,8 +355,17 @@ STOP 또는 마지막 owner socket disconnect는 accumulator/baseline을 폐기�
 token의 `sub`와 현재 ACTIVE measurement의 `session_id`를 결합해 `state_logs`를
 조회하며, 클라이언트가 보낸 `user_id`, `user_name`, `device_id` 또는 `session_id`로
 현재-session의 소유권을 정하지 않습니다. 기본 조회 범위는 최근 5분이고 최대 60분이며,
-baseline도 동일한 `user_id + session_id` 안에서만 선택합니다. 과거 session 조회는
-향후 별도 API에서 session 소유권을 검증한 뒤 제공할 수 있습니다.
+baseline도 동일한 `user_id + session_id` 안에서만 선택합니다.
+
+저장된 session은 `GET /api/state/history/sessions`와
+`GET /api/state/history/sessions/<session_id>`에서 조회합니다. 두 API는 JWT sub 기반이며
+runtime session registry를 사용하지 않고 DB의 동일 `user_id + session_id`로 소유권을
+확인합니다. 따라서 Stop 또는 Backend 재시작 후에도 기록이 남아 있으면 조회할 수 있습니다.
+목록은 마지막 snapshot 최신순이고 첫/마지막 시각은 실제 Start/Stop 시각이 아닙니다.
+NULL session_id인 legacy row는 제외합니다. 상세 기본 구간은 마지막 snapshot 직전 5분,
+명시 구간은 최대 60분이며 baseline도 선택 session 내부로 제한합니다. 없는/타인 session은
+동일 404, DB 장애는 503입니다. 조회는 measurement lock, Fusion, Socket.IO, persistence write
+경로와 분리된 HTTP 읽기 작업입니다. 비동기 저장이 아직 완료되지 않으면 새로고침이 필요할 수 있습니다.
 
 ---
 

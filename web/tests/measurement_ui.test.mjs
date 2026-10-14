@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { Script, createContext, runInContext } from 'node:vm';
 import { spawnSync } from 'node:child_process';
 import { createMeasurementRuntime } from '../view/measurement_runtime.mjs';
+import { createHistoryBrowser } from '../view/measurement_history.mjs';
 
 const html = readFileSync(new URL('../view/index.html', import.meta.url), 'utf8');
 const classic = html.match(/<script>([\s\S]*?)<\/script>/)[1];
@@ -174,12 +175,22 @@ test('UI module wiring restores authenticated socket, start/phase/state/stop, an
     Object.assign(context, {
         location: { hash: '', hostname: '127.0.0.1' },
         localStorage: { setItem() {}, removeItem() {} },
-        createMeasurementRuntime,
+        createMeasurementRuntime, createHistoryBrowser,
         supabase: { auth: {
             getSession: async () => ({ data: { session: null } }),
             onAuthStateChange: handler => { callback = handler; },
         } },
         authenticatedFetch: async url => {
+            if (url.includes('/api/state/history')) {
+                return new Response(JSON.stringify(url.endsWith('/sessions') ?
+                    { v: 1, status: 'success', user_id: USER, sessions: [{ session_id: SID,
+                        first_measured_at: '2026-10-14T00:29:30Z', last_measured_at: '2026-10-14T00:30:00Z', snapshot_count: 2 }] } :
+                    { v: 1, status: 'success', stream: { user_id: USER, session_id: SID },
+                        period: { start: '2026-10-14T00:00:00Z', end: '2026-10-14T00:30:00Z' }, states: [
+                            { measured_at: '2026-10-14T00:29:30Z', state: 'NORMAL', score: 90 },
+                            { measured_at: '2026-10-14T00:30:00Z', state: 'CAUTION', score: 85 },
+                        ] }));
+            }
             const starting = url.endsWith('/start'); calls.push(starting ? 'start' : 'stop');
             return new Response(JSON.stringify({ status: 'success', measurement: {
                 user_id: USER, session_id: SID, status: starting ? 'ACTIVE' : 'STOPPED',
@@ -216,6 +227,12 @@ test('UI module wiring restores authenticated socket, start/phase/state/stop, an
     await context.stopMeasurement();
     assert.equal(nodes.get('currentScore').innerText, '—');
     assert.deepEqual(calls, ['start', 'stop']);
+    for (let n = 0; n < 12; n++) await Promise.resolve();
+    assert.equal(nodes.get('history-session').value, SID);
+    assert.equal(nodes.get('history-session').disabled, false);
+    assert.match(nodes.get('history-status').innerText, /마지막 snapshot/);
+    assert.deepEqual(Array.from(context.window.timelineChartObj.data.datasets[0].data), [90, 85]);
+    assert.deepEqual(Array.from(context.window.pieChartObj.data.datasets[0].data), [30, 0, 0, 0]);
     // Fresh generation synchronizing to a failed Backend session: retry UI, never normal score.
     callback('SIGNED_OUT', null);
     callback('SIGNED_IN', { user: { id: USER }, access_token: 'test-token' });

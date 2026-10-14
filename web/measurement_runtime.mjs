@@ -4,10 +4,12 @@ import {
 } from "./measurement_phase.mjs";
 
 export class WorkflowError extends Error {
-    constructor(kind, message) {
+    constructor(kind, message, { status = null, code = null } = {}) {
         super(message);
         this.name = "WorkflowError";
         this.kind = kind;
+        this.status = status;
+        this.code = code;
     }
 }
 
@@ -52,7 +54,8 @@ export function createAuthenticatedFetch(auth, fetchImpl = globalThis.fetch) {
                 }
                 throw new WorkflowError("backend", response.status === 409 ?
                     "활성 측정 세션을 확인할 수 없습니다. 연결 상태를 확인해주세요." :
-                    "Backend 요청을 완료하지 못했습니다. 잠시 후 다시 시도해주세요.");
+                    "Backend 요청을 완료하지 못했습니다. 잠시 후 다시 시도해주세요.",
+                    { status: response.status, code: typeof code === "string" && /^[a-z_]+$/.test(code) ? code : null });
             }
             return response;
         }
