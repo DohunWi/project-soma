@@ -168,6 +168,21 @@ test('UI calibration clears previous score/cache/chart; READY needs no click; ne
     assert.equal(charts[0].data.datasets[0].data.length, 1); // No fabricated duplicate chart samples.
 });
 
+test('Chair-only calibration shows Vision 0/0 and nonzero Chair progress without enabling score', () => {
+    const { context, nodes } = page();
+    const model = { phase: 'CALIBRATING', sessionId: SID, connected: true,
+        presentationRevision: 1, pendingAction: null, calibration: {
+            status: 'COLLECTING', progress: .8,
+            valid_samples: { vision: 0, chair_ir: 4 }, required_samples: { vision: 0, chair_ir: 5 },
+        } };
+    context.window.measurementRuntime = { model, canRender: () => false, hasSession: () => true };
+    runInContext('renderMeasurementUI()', context);
+    assert.match(nodes.get('measurement-note').innerText, /Chair-only.*80%.*Vision 0\/0.*Chair IR 4\/5/);
+    assert.match(nodes.get('measurement-note').innerText, /사용 안 함/);
+    assert.equal(nodes.get('currentScore').innerText, '—');
+    assert.equal(nodes.get('btn-stop').disabled, false);
+});
+
 test('UI module wiring restores authenticated socket, start/phase/state/stop, and failure/retry controls', async () => {
     const { context, nodes, charts } = page();
     let callback, socket;

@@ -100,7 +100,7 @@ def chair_payload(t, ir=250, pressure=None):
     }
 
 
-def make_runtime(profile=DEMO_PROFILE):
+def make_runtime(profile=DEMO_PROFILE, *, source_mode="all"):
     clock = FakeClock()
     timers = []
 
@@ -120,6 +120,7 @@ def make_runtime(profile=DEMO_PROFILE):
         calibration_wall_clock=clock.wall,
         calibration_timer_factory=timer_factory,
         state_persistence=persistence,
+        source_mode=source_mode,
     )
     return app, socketio, clock, timers, persistence
 

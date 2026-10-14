@@ -38,7 +38,8 @@ def load_project_env(path=ROOT / ".env"):
 
 def process_specs(*, real, chair_only, nano, chair_raw_log=None):
     """Return production process commands without legacy feedback processes."""
-    specs = [("server", [PY, "server/app.py"])]
+    specs = [("server", [PY, "server/app.py", "--source-mode",
+                         "chair-only" if chair_only else "all"])]
     if real:
         chair = [PY, "chair/bridge/bridge.py"]
         if chair_raw_log:

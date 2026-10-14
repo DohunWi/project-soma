@@ -10,6 +10,7 @@ MEASURING일 때만 fresh Vision과 병합한 값을 새 ``FusionState`` 에 반
 History DB 조회는 해당 HTTP 요청에서만 수행하므로, DB 설정이나 인터넷 연결이 없어도
 Chair → Front 경로는 계속 동작합니다.
 """
+import argparse
 import hmac
 import logging
 import os
@@ -41,6 +42,9 @@ from server.config import (  # noqa: E402
     DEFAULT_SENSOR_MERGE_POLICY,
     DEMO_PROFILE,
     RuntimeProfile,
+    SOURCE_MODES,
+    calibration_for_source_mode,
+    load_source_mode,
     load_runtime_profile,
 )
 from server.db_writer import DBWriter  # noqa: E402
@@ -289,9 +293,12 @@ def create_app(
     calibration_monotonic=None,
     calibration_wall_clock=None,
     calibration_timer_factory=None,
+    source_mode=None,
     _skip_calibration_for_testing=False,
 ):
     profile = runtime_profile or load_runtime_profile()
+    selected_source_mode = load_source_mode(source_mode)
+    calibration_config = calibration_for_source_mode(profile, selected_source_mode)
     app = Flask(__name__)
     app.config["TESTING"] = testing
     CORS(app, origins=_cors_origins())
@@ -315,7 +322,7 @@ def create_app(
         feedback_config_for_mode(profile.name)
     )
     calibration = MeasurementCalibration(
-        profile.calibration,
+        calibration_config,
         occupancy_min=OCCUPANCY_MIN,
         distance_evidence_timing=profile.distance_evidence_timing,
     )
@@ -350,6 +357,7 @@ def create_app(
     app.extensions["chair_pipeline"] = pipeline
     app.extensions["sensor_cache"] = pipeline.sensor_cache
     app.extensions["runtime_profile"] = profile
+    app.extensions["source_mode"] = selected_source_mode
     app.extensions["state_persistence"] = persistence
     app.extensions["db_writer"] = db_writer
     app.extensions["auth_verifier"] = verifier
@@ -1002,13 +1010,22 @@ def create_app(
     return app, socketio
 
 
-app, socketio = create_app()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="SOMA Backend")
+    parser.add_argument("--source-mode", choices=SOURCE_MODES, default=None,
+                        help="calibration sources (default: SOMA_SOURCE_MODE or all)")
+    _source_mode = parser.parse_args().source_mode
+else:
+    _source_mode = None
+
+app, socketio = create_app(source_mode=_source_mode)
 
 
 if __name__ == "__main__":
     host = os.getenv("SERVER_HOST", "0.0.0.0")
     port = int(os.getenv("SERVER_PORT", "5000"))
     print(f"Project Soma backend: http://{host}:{port}")
+    print(f"Measurement source mode: {app.extensions['source_mode']}")
     try:
         socketio.run(app, host=host, port=port, allow_unsafe_werkzeug=True)
     finally:

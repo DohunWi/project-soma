@@ -1112,7 +1112,7 @@
                 const valid = calibration?.valid_samples || {};
                 const required = calibration?.required_samples || {};
                 detail = failed ? 'Calibration 시간이 초과되었습니다. 카메라와 Chair IR 연결을 확인한 뒤 다시 준비해 주세요.' :
-                    `평소 작업 자세로 정면을 바라봐 주세요. ${progress}% · Vision ${valid.vision ?? 0}/${required.vision ?? '—'} · Chair IR ${valid.chair_ir ?? 0}/${required.chair_ir ?? '—'}`;
+                    `${required.vision === 0 ? 'Chair-only · 평소 작업 자세를 유지해 주세요.' : '평소 작업 자세로 정면을 바라봐 주세요.'} ${progress}% · Vision ${valid.vision ?? 0}/${required.vision ?? '—'}${required.vision === 0 ? ' (사용 안 함)' : ''} · Chair IR ${valid.chair_ir ?? 0}/${required.chair_ir ?? '—'}`;
             } else if (model.phase === 'READY') {
                 title = '측정 준비 완료';
                 detail = '자동으로 측정을 시작합니다.';

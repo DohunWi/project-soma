@@ -49,6 +49,10 @@ DB 장애는 503입니다. 기본 구간은 마지막 snapshot 직전 5분이며
 `measurement_phase`의 `OFF / CALIBRATING / READY / MEASURING`은 Backend가 관리하는
 측정 실행 단계입니다. Fusion의 `NORMAL / CAUTION / DANGER / ABSENT`와 다른 축이며,
 READY는 baseline 수락을 알린 직후 MEASURING으로 진행하는 일회성 전이 이벤트입니다.
+명시적 Chair-only source mode에서는 calibration의 Vision 표본이 0/0이고
+readiness.vision=true는 Vision 검사를 요구하지 않는다는 뜻입니다. 진행률은 시간과
+Chair IR 조건으로 계산합니다. All-source의 Vision 5/8개와 안정성 조건은 유지합니다.
+내부 얼굴 baseline의 None은 public payload에 null로 추가하지 않습니다.
 
 ## 왜 `t` 와 `source` 가 필수인가
 

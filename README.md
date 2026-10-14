@@ -75,6 +75,20 @@ python vision/run.py --preview                    # 웹캠
 `vision/models/` 에 캐시합니다. **발표 전에 미리 한 번 실행해 두세요** —
 발표장 네트워크가 막히면 그 자리에서 받을 수 없습니다.
 
+### Chair-only Calibration
+
+기본 Backend source mode는 `all`입니다. `run_all.py --chair-only`가 Backend에
+`--source-mode chair-only`를 전달하므로 Vision 프로세스 없이 준비를 완료할 수 있습니다.
+단독 Backend는 `python server/app.py --source-mode chair-only`로 실행하거나
+`SOMA_SOURCE_MODE=chair-only`를 지정합니다(CLI 우선, 빈 값/잘못된 값은 오류).
+Vision 누락에 따른 자동 전환은 없습니다. Demo는 5초와 유효 Chair IR 5개, Normal은
+8초와 8개를 요구하며 IR이 -1이거나 미착석/불안정하면 여전히 준비가 완료되지 않습니다.
+Chair-only의 얼굴 baseline은 없으며 IR만으로 Phase C 거리 감점을 만들지 않습니다.
+
+인증된 최신 Front를 별도로 제공할 때는 launcher의 기존 간이 dashboard를 띄우지 않도록
+`--no-web`을 사용하고 `web/dashboard/README.md`의 `web/view/index.html` 실행 절차를 따르세요.
+Mock 준비 검증은 wall-clock 기준이므로 `--speed 1`을 권장합니다.
+
 ### 하드웨어 없이 개발하기
 
 **의자는 1대이고 공용공간에 있습니다.** 기다리지 말고 mock 으로 개발하세요.

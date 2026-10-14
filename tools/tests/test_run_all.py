@@ -68,7 +68,7 @@ def test_real_chair_only_can_enable_nano_and_raw_logging():
     )
 
     assert specs == [
-        ("server", [PY, "server/app.py"]),
+        ("server", [PY, "server/app.py", "--source-mode", "chair-only"]),
         (
             "chair",
             [
@@ -89,3 +89,14 @@ def test_project_env_is_loaded_for_child_processes(tmp_path, monkeypatch):
 
     assert load_project_env(env_file) is True
     assert __import__("os").environ["SOCKET_AUTH_TOKEN"] == "test-shared-token"
+
+
+def test_launcher_source_mode_matches_real_and_mock_producers():
+    for real in (False, True):
+        for chair_only in (False, True):
+            specs = process_specs(real=real, chair_only=chair_only, nano=False)
+            assert specs[0][1][-2:] == ["--source-mode", "chair-only" if chair_only else "all"]
+            if real:
+                assert any(name == "vision" for name, _ in specs) is (not chair_only)
+            elif chair_only:
+                assert specs[1][1][-2:] == ["--source", "chair"]

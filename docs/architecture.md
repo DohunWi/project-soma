@@ -276,6 +276,18 @@ Normal은 최소 8초와 각 8개(45초 timeout)를 요구합니다. 착석 상�
 Chair IR 40mm 이하를 요구합니다. 이 MAD 값은 자세·피로 임계가 아니라 calibration
 안정성용 provisional engineering limit입니다.
 
+Backend의 source mode는 기본 `all`이며 `--source-mode all|chair-only` 또는
+`SOMA_SOURCE_MODE`로 명시적으로 선택합니다(CLI 우선). `run_all.py --chair-only`는
+Backend에 `--source-mode chair-only`를 전달하며, 기본 실행은 `all`을 전달합니다.
+Vision 누락/stale를 이유로 자동 전환하지 않습니다. Chair-only는 시간·Chair IR 표본 수·
+IR MAD·timeout 조건을 그대로 유지하고 Vision 요구량만 0으로 바꾸며 Vision 안정성 검사를
+생략합니다. Demo는 5초와 유효 IR 5개, Normal은 8초와 8개입니다. 착석·유효 IR 조건도
+동일합니다. 얼굴 표본은 수집하지 않고 얼굴 baseline/MAD는 내부 `None`으로 유지합니다.
+공개 phase payload는 기존 필드로 Vision 0/0과 readiness.vision=true(요구 없음)를 전달하며
+진행률은 시간·Chair IR에 따라 올라갑니다. 얼굴 baseline이 없으면 face delta를 계산하지
+않고 Phase C는 UNKNOWN으로 유지합니다. IR 이탈만으로 새로운 거리 감점을 만들지 않습니다.
+MEASURING의 기존 source 병합/Fusion/Feedback/저장 경로는 변경하지 않습니다.
+
 두 session working baseline은 `face_working_baseline_cm`과 `chair_ir_baseline_mm`이며,
 Vision의 기존 기하 거리 calibration/reference와 의미가 다릅니다. MEASURING에서는 이후
 Phase C를 위해 `face_approach_delta_cm = face working baseline - current face distance`,

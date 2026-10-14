@@ -1,6 +1,6 @@
 """Runtime profile selection for the Soma backend."""
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from fusion.config import (
     DEMO_DISTANCE_EVIDENCE_TIMING,
@@ -85,6 +85,26 @@ PROFILES = {
     DEMO_PROFILE.name: DEMO_PROFILE,
     NORMAL_PROFILE.name: NORMAL_PROFILE,
 }
+
+SOURCE_MODES = ("all", "chair-only")
+
+
+def load_source_mode(mode=None):
+    """Explicit startup setting only; never infer mode from missing sensors."""
+    selected = os.getenv("SOMA_SOURCE_MODE", "all") if mode is None else mode
+    if selected not in SOURCE_MODES:
+        raise ProfileConfigError(
+            f"Invalid SOMA_SOURCE_MODE={selected!r}. Expected one of: {', '.join(SOURCE_MODES)}."
+        )
+    return selected
+
+
+def calibration_for_source_mode(profile, source_mode):
+    """Keep shared immutable profiles and every Chair/time/quality limit intact."""
+    mode = load_source_mode(source_mode)
+    if mode == "chair-only":
+        return replace(profile.calibration, minimum_vision_samples=0)
+    return profile.calibration
 
 
 def load_runtime_profile(mode=None):
