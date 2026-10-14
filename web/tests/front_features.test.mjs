@@ -93,6 +93,7 @@ test('production page has no legacy direct DB report and keeps a clearly marked 
     assert.match(indexHtml, /Front 전용 · 측정\/점수\/DB 영향 없음/);
     assert.match(indexHtml, /showTestFeedback\('NORMAL'\)/);
     assert.match(indexHtml, /showTestFeedback\('CAUTION'\)/);
+    assert.match(indexHtml, /showTestFeedback\('DANGER'\)/);
     assert.match(indexHtml, /showTestFeedback\('BREAK'\)/);
     assert.doesNotMatch(indexHtml, /addEventListener\(['"]load['"],\s*initCamera/);
     assert.match(indexHtml, /카메라는 테스트 버튼을 누를 때만 켜집니다/);

@@ -84,6 +84,21 @@ HTTPS 페이지에서는 HTTPS Backend가 필요합니다. `file://`로 열지 �
 Socket.IO lifecycle 순서로 stale state를 완화하지만 payload 자체의 완전한 session 검증은 아닙니다.
 페이지 종료와 진행 중 REST 요청의 서버 처리 순서도 실제 네트워크에서 확인해야 합니다.
 
+### 상단 최근 5분 Score 그래프
+
+- `MEASURING`에서 수신한 유효 `state.score`만 메모리에 기록합니다. `state.t`(Unix 측정 시각)를
+  사용하며 수신 시각으로 바꾸지 않습니다. MEASURING phase 시각보다 오래된 이벤트는 제외하므로
+  센서와 Backend의 시계가 맞아야 합니다. 기존 lifecycle/connection generation 가드를 유지합니다.
+- 최근 5분은 마지막 수신 측정 시각 기준이며, 30초/1분의 시계 구간별 표본 산술 평균입니다.
+  첫·마지막 구간은 부분 구간일 수 있습니다. timestamp 중복은 처음 한 건만 반영하고, 순서가
+  뒤바뀐 표본도 창 안에 있으면 반영합니다. 빈 구간은 `null`로 선을 끊고 0점으로 채우지 않습니다.
+- ABSENT는 기존처럼 점수를 추가하지 않지만 시간 창은 전진합니다. Stop/OFF에는 마지막 그래프를
+  유지하고, 새 Start/새 session/사용자 변경에는 초기화합니다. 새로고침 후 복원하지 않으며 안내를
+  표시합니다. 하단 Supabase 기반 저장 기록 조회와 별개의 데이터입니다.
+- 상단 `예시 데이터`는 `realtime_score.mjs`의 고정 5분/11표본 fixture입니다. 1분 선택도 동일
+  원본에서 평균을 계산합니다. 실제 버퍼·상태·알림·DB에는 주입하지 않으며 하단 4시간 예시와
+  별개입니다. 측정 준비를 새로 시작하면 상단은 `실제 측정`으로 전환됩니다.
+
 측정 기록 화면은 Front에서 Supabase 테이블을 직접 읽지 않습니다. 예시 모드는 DB와 분리된
 정적 4시간 fixture이고, 실제 모드는 인증된 Backend `GET /api/state/history`가 지원하는
 현재 ACTIVE session의 최근 30분/60분을 표시합니다. 측정 종료/OFF에서는

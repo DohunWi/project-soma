@@ -426,6 +426,8 @@
                                         class="py-2 rounded-md bg-green-600 text-white text-sm font-bold">NORMAL</button>
                                     <button id="feedback-test-caution" type="button" onclick="showTestFeedback('CAUTION')"
                                         class="py-2 rounded-md bg-yellow-500 text-white text-sm font-bold">CAUTION</button>
+                                    <button id="feedback-test-danger" type="button" onclick="showTestFeedback('DANGER')"
+                                        class="py-2 rounded-md bg-red-600 text-white text-sm font-bold">DANGER</button>
                                     <button id="feedback-test-break" type="button" onclick="showTestFeedback('BREAK')"
                                         class="py-2 rounded-md bg-blue-600 text-white text-sm font-bold">BREAK</button>
                                     <button id="feedback-test-close" type="button" onclick="closeTestFeedback()"
@@ -487,9 +489,26 @@
                     </nav>
                 </div>
                 <div class="dashboard-container">
-                    <div class="card chart-card">
+                    <div class="card chart-card" style="height:auto; min-height:350px;">
                         <h3 data-i18n="recent_history">최근 자세 이력 (실시간 점수 변화)</h3>
-                        <div class="chart-container"><canvas id="realtimeChart"></canvas></div>
+                        <div class="flex flex-wrap gap-2 items-center mb-2">
+                            <button id="realtime-example-button" type="button" onclick="setRealtimeMode('example')"
+                                class="px-4 py-2 rounded-md bg-gray-700 text-white" aria-pressed="false">예시 데이터</button>
+                            <button id="realtime-actual-button" type="button" onclick="setRealtimeMode('actual')"
+                                class="px-4 py-2 rounded-md bg-blue-600 text-white" aria-pressed="true">실제 측정</button>
+                            <select id="realtime-interval" class="form-select w-36" aria-label="실시간 점수 집계 간격"
+                                onchange="setRealtimeInterval(Number(this.value))">
+                                <option value="30">30초 간격</option>
+                                <option value="60">1분 간격</option>
+                            </select>
+                            <span id="realtime-mode-badge" class="text-xs font-bold text-gray-600">실제 측정 · 최근 5분</span>
+                        </div>
+                        <p id="realtime-status" class="text-xs text-gray-500 mb-2" role="status"></p>
+                        <div class="chart-container" style="height:220px;">
+                            <canvas id="realtimeChart"></canvas>
+                            <p id="realtime-empty" class="text-sm text-gray-500 text-center"
+                                style="position:absolute; top:40%; width:100%;">아직 실시간 Score 데이터가 없습니다. 측정을 시작해 주세요.</p>
+                        </div>
                     </div>
                     <div class="section-title" style="display:flex; justify-content:space-between; align-items:center;">
                         <h2 style="margin: 0; color: var(--text-main); font-size: 1.2rem; font-weight: bold;"
@@ -791,25 +810,47 @@
 
         // 실시간 차트
         const ctxRealtime = document.getElementById('realtimeChart').getContext('2d');
-        const MAX_POINTS = 30;
         const realtimeChart = new Chart(ctxRealtime, {
             type: 'line',
             data: {
                 labels: [],
-                datasets: [{ label: 'Score', data: [], borderColor: '#2ecc71', backgroundColor: 'rgba(46, 204, 113, 0.1)', borderWidth: 2, fill: true, tension: 0.4, pointRadius: 0 }]
+                datasets: [{ label: '실제 측정 · 평균 Score', data: [], borderColor: '#2ecc71', backgroundColor: 'rgba(46, 204, 113, 0.1)', borderWidth: 2, fill: true, tension: 0.4, pointRadius: 3, spanGaps: false }]
             },
-            options: { responsive: true, maintainAspectRatio: false, scales: { y: { min: 0, max: 100 }, x: { display: false } }, animation: { duration: 0 } }
+            options: { responsive: true, maintainAspectRatio: false, scales: { y: { min: 0, max: 100 }, x: { ticks: { maxTicksLimit: 6, maxRotation: 0 } } }, animation: { duration: 0 } }
         });
 
-        function updateRealtimeChart(val) {
-            const data = realtimeChart.data.datasets[0].data;
-            data.push(val);
-            realtimeChart.data.labels.push('');
-            if (data.length > MAX_POINTS) {
-                data.shift();
-                realtimeChart.data.labels.shift();
-            }
-            realtimeChart.update();
+        function renderRealtimeScoreChart() {
+            const view = window.realtimeScoreHistory?.view();
+            const example = view?.mode === 'example';
+            const points = view?.points || [];
+            const empty = !points.some(point => point.score !== null);
+            realtimeChart.data.labels = points.map(point => example ?
+                `${Math.floor((point.t - points[0].t) / 60)}:${String((point.t - points[0].t) % 60).padStart(2, '0')}` :
+                new Date(point.t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+            realtimeChart.data.datasets[0].data = points.map(point => point.score);
+            realtimeChart.data.datasets[0].label = example ? '예시 데이터 · 평균 Score (실제 측정 아님)' : '실제 측정 · 평균 Score';
+            document.getElementById('realtimeChart').hidden = empty;
+            document.getElementById('realtime-empty').hidden = !empty;
+            realtimeChart.update('none');
+            document.getElementById('realtime-mode-badge').innerText = example ?
+                '예시 데이터 · 실제 측정 아님 · 5분' : '실제 측정 · 최근 5분';
+            document.getElementById('realtime-status').innerText = example ?
+                'Front 전용 고정 예시: NORMAL → CAUTION → DANGER → 회복. 측정·알림·DB에 영향을 주지 않습니다.' :
+                (empty ? '이 페이지에서 수신한 실시간 Score가 없습니다. 새로고침 전 데이터는 복원되지 않으며 저장 기록은 아래에서 조회하세요.' :
+                    `${view.phase === 'OFF' ? '측정 종료 · ' : ''}마지막 수신 측정 시각 기준 최근 5분 · ${view.intervalSec}초 구간 평균 · 빈 구간은 표시하지 않습니다.`);
+            document.getElementById('realtime-example-button').setAttribute('aria-pressed', String(example));
+            document.getElementById('realtime-actual-button').setAttribute('aria-pressed', String(!example));
+            document.getElementById('realtime-interval').value = String(view?.intervalSec || 30);
+        }
+
+        function setRealtimeMode(mode) {
+            window.realtimeScoreHistory?.setMode(mode);
+            renderRealtimeScoreChart();
+        }
+
+        function setRealtimeInterval(seconds) {
+            window.realtimeScoreHistory?.setInterval(seconds);
+            renderRealtimeScoreChart();
         }
 
         // 상태 비율(파이 차트) 및 시간대별 이력(타임라인 차트) - 글로벌 변수로 관리
@@ -990,8 +1031,9 @@
             }
             document.getElementById('val-balance').innerText = balText;
 
-            if (appendChart && !absent && data.score !== undefined) {
-                updateRealtimeChart(currentScore);
+            if (appendChart) {
+                window.realtimeScoreHistory?.record(data, window.measurementRuntime?.model);
+                renderRealtimeScoreChart();
             }
         }
 
@@ -1019,6 +1061,10 @@
             CAUTION: {
                 icon: 'warning', title: '주의 상태 알림',
                 text: '자세 변화에 주의가 필요한 경우의 시연 알림입니다.', persistent: false,
+            },
+            DANGER: {
+                icon: 'warning', title: '작업 부하가 누적되고 있어요',
+                text: '상태 지표의 변화가 지속되고 있습니다.', persistent: false,
             },
             BREAK: {
                 icon: 'info', title: '휴식 권고 알림',
@@ -1049,7 +1095,8 @@
 
         function updateFeedbackTestControls() {
             const blocked = feedbackTestBlocked();
-            for (const id of ['feedback-test-normal', 'feedback-test-caution', 'feedback-test-break']) {
+            for (const id of ['feedback-test-normal', 'feedback-test-caution',
+                'feedback-test-danger', 'feedback-test-break']) {
                 const button = document.getElementById(id);
                 button.disabled = blocked;
                 button.classList.toggle('opacity-50', blocked);
@@ -1083,6 +1130,8 @@
             const runtime = window.measurementRuntime;
             if (!runtime) return;
             const model = runtime.model;
+            window.realtimeScoreHistory?.syncLifecycle(model);
+            renderRealtimeScoreChart();
             isMeasuring = runtime.canRender();
             lastServerStatus = model.connected;
             const color = model.connected ? 'var(--good-color)' : 'var(--neutral-color)';
@@ -1093,9 +1142,6 @@
                 presentationRevision = model.presentationRevision;
                 lastPostureData = null;
                 resetDashboardUI();
-                realtimeChart.data.labels = [];
-                realtimeChart.data.datasets[0].data = [];
-                realtimeChart.update('none');
                 Swal.close();
             }
             const pending = model.pendingAction;
@@ -1189,6 +1235,10 @@
         import { supabase, authenticatedFetch } from './auth.js';
         import { createMeasurementRuntime } from './measurement_runtime.mjs';
         import { createHistoryBrowser } from './measurement_history.mjs';
+        import { createRealtimeScoreHistory } from './realtime_score.mjs';
+
+        window.realtimeScoreHistory = createRealtimeScoreHistory();
+        renderRealtimeScoreChart();
 
         // 예전 로그인 모달 주소(index.html#login)로 들어오면 로그인 페이지로 보냅니다
         if (location.hash === '#login') location.replace('./login.html');
@@ -1252,6 +1302,7 @@
                 if (session) localStorage.setItem('access_token', session.access_token);
                 else localStorage.removeItem('access_token');
                 const nextUserId = session?.user?.id || null;
+                window.realtimeScoreHistory.setUser(nextUserId);
                 if (nextUserId !== historyUserId) {
                     historyUserId = nextUserId;
                     historyBrowser.setContext(nextUserId, runtime.model.sessionId);

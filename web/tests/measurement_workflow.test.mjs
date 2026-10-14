@@ -160,6 +160,16 @@ test('feedback is phase/session/transition gated; reason maps to non-medical tex
     assert.match(feedbackPresentation(model, feedback()).text, /작업 부하/);
 });
 
+test('FUSION_DANGER warning presentation matches the five-second Front demo content', () => {
+    const presentation = feedbackPresentation(active(), {
+        ...feedback(), level: 'WARNING', reason: 'FUSION_DANGER',
+    });
+    assert.deepEqual(presentation, {
+        icon: 'warning', title: '작업 부하가 누적되고 있어요',
+        text: '상태 지표의 변화가 지속되고 있습니다.', persistent: false,
+    });
+});
+
 test('FAILED calibration cannot silently switch to accepted/MEASURING in same session', () => {
     const model = apply(apply(initialLifecycle(), 'CONNECTED'), 'PHASE', {
         event: phase('CALIBRATING', SID, 20, 'FAILED'),
