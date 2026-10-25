@@ -12,7 +12,7 @@ vision/calibrator.py
 거리는 핀홀 근사로 구합니다.  face_width_px × distance = 상수
 캘리브레이션 시점의 거리를 알면 이후 거리를 계산할 수 있습니다.
 기본값 60cm 는 가정이며, 정확도가 필요하면 자로 재서 --calib-cm 으로 넘기세요.
-OPEN EAR은 유효 정면 프레임의 중앙값으로 만들며 blink-rate baseline과 구분합니다.
+OPEN EAR은 유효 정면 프레임의 상위 사분위수로 만들며 blink-rate baseline과 구분합니다.
 """
 import json
 import math
@@ -26,6 +26,7 @@ from typing import Callable, Optional
 CALIB_DURATION = 3.0
 MIN_VALID_SAMPLES = 20
 DEFAULT_CALIB_CM = 60.0
+OPEN_EAR_PERCENTILE = 0.75
 _AVERAGE_METRIC_KEYS = ("face_width_px", "blink_rate")
 _LATERAL_MEDIAN_KEYS = (
     "neutral_face_center_x_ratio",
@@ -38,6 +39,18 @@ _BASELINE_FILE = Path(__file__).parent / "baseline.json"
 def _calib_log(message: str) -> None:
     """Keep calibration diagnostics out of the JSONL stdout contract."""
     print(message, file=sys.stderr, flush=True)
+
+
+def _percentile(values, fraction):
+    """Inclusive linear percentile for a non-empty finite sample."""
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * fraction
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    weight = position - lower
+    return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
 
 
 def calibration_sample(
@@ -275,7 +288,11 @@ class Calibrator:
             vals = [s[k] for s in self._samples if k in s]
             b[k] = sum(vals) / len(vals) if vals else 0.0
         ear_values = [s["open_ear"] for s in self._samples]
-        b["open_ear_baseline"] = statistics.median(ear_values)
+        # Calibration is guided as eyes-open, but short natural blinks and cue
+        # transitions can still enter the sample.  The upper quartile estimates
+        # the actual open-eye cluster without raising runtime ratios globally.
+        b["open_ear_baseline"] = _percentile(ear_values, OPEN_EAR_PERCENTILE)
+        b["open_ear_statistic"] = "p75"
         b["open_ear_sample_count"] = sample_count
         for key in _LATERAL_MEDIAN_KEYS:
             values = [sample[key] for sample in self._samples if key in sample]

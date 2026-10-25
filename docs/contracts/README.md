@@ -11,6 +11,8 @@
 5. **값이 없으면 키를 생략합니다. `null` 을 보내지 않습니다.**
    `null` 은 타입 위반이라 payload 하나가 통째로 버려집니다. 같이 실려 있던
    멀쩡한 값까지 사라지므로, 없는 값은 키 자체를 빼는 편이 안전합니다.
+   단, `session_report`의 산출 불가 평균/최저값과 미지원 BREAK 여부는 계약이 명시한
+   `null`로 "0/미발생"과 구분합니다.
 
 ## 파일
 
@@ -20,9 +22,11 @@
 | `state.schema.json` | 분석 → 서버 → UI | `fusion` → `server` → `web`, `feedback` |
 | `feedback.schema.json` | legacy 출력 계약 | 이전 Chair 진동·ambient LED 자산에서만 사용 |
 | `feedback_decision.schema.json` | 정책 → UI·출력 어댑터 | Backend integrated policy → 인증된 `web`, Feedback Nano adapter |
+| `feedback_demo.schema.json` | 인증 Front → Nano adapter | 측정 OFF 상태의 하드웨어 시연 전용 |
 | `report.schema.json` | DB → 서버 → 프론트 | `db/report` → `server` → `web` |
 | `state_history.schema.json` | DB → 서버 → 프론트 | `state_logs` → `server` → `web` |
 | `history_sessions.schema.json` | DB → 서버 → 프론트 | 인증 사용자의 저장된 session 목록 |
+| `session_report.schema.json` | DB → 서버 → 프론트 | `state_logs` 기반 저장 session 요약 보고서 |
 | `measurement_session.schema.json` | 인증 사용자 ↔ 서버 | `web` → `server` start/stop 응답 |
 | `measurement_phase.schema.json` | 서버 → 인증 사용자 room | Backend measurement calibration lifecycle → `web` |
 
@@ -45,6 +49,14 @@ DB 장애는 503입니다. 기본 구간은 마지막 snapshot 직전 5분이며
 최대 60분입니다. 응답은 기존 state_history 계약을 재사용하고 baseline도 동일 소유권 범위입니다.
 목록 API는 query를 받지 않으며 상세 API는 start/end만 허용합니다. 요청 user_id는 받지 않습니다.
 두 저장 기록 API는 ACTIVE registry와 독립적이어서 Stop/Backend 재시작 후에도 조회할 수 있습니다.
+
+`GET /api/state/history/sessions/<session_id>/report`는 같은 JWT sub와
+`user_id + session_id` 소유권 경계를 재사용해 session 전체 snapshot을 요약합니다.
+0초 초과 60초 이하인 인접 snapshot 구간만 관측 시간으로 인정하고, ABSENT는 주 Score
+평균과 최저 Score에서 제외합니다. 착석 snapshot이 없으면 두 Score 요약은 null입니다.
+첫/마지막 시각은 snapshot 경계이며 실제 Start/Stop이 아니고,
+마지막 snapshot 뒤의 시간을 보충하지 않습니다. `BREAK`는 `state_logs`에 저장되지 않으므로
+역추론하지 않고 미지원으로 반환합니다.
 
 `measurement_phase`의 `OFF / CALIBRATING / READY / MEASURING`은 Backend가 관리하는
 측정 실행 단계입니다. Fusion의 `NORMAL / CAUTION / DANGER / ABSENT`와 다른 축이며,

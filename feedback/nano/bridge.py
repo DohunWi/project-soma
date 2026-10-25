@@ -29,6 +29,7 @@ except ImportError:
 
 log = logging.getLogger("soma.feedback.nano")
 LEVELS = frozenset({"NORMAL", "NOTICE", "WARNING", "BREAK"})
+DEMO_LEVELS = LEVELS | {"OFF"}
 ALERT_LEVELS = frozenset({"WARNING", "BREAK"})
 OFF_COMMAND = "LEVEL,OFF"
 DEFAULT_BAUD_RATE = 9600
@@ -54,6 +55,18 @@ def commands_for_decision(decision):
     return commands
 
 
+def commands_for_demo(payload):
+    """Map an authenticated, measurement-off demo event to Nano commands."""
+    if not isinstance(payload, dict) or payload.get("v") != 1:
+        raise ValueError("feedback demo must be a v1 object")
+    level = payload.get("level")
+    if level not in DEMO_LEVELS:
+        raise ValueError("feedback demo has invalid level")
+    if level == "OFF":
+        return [OFF_COMMAND]
+    return commands_for_decision({"level": level, "transition": True})
+
+
 class NanoSerialTransport:
     """Reconnectable non-blocking serial transport with LEVEL-only replay."""
 
@@ -66,6 +79,7 @@ class NanoSerialTransport:
         monotonic=time.monotonic,
         reconnect_initial_sec=DEFAULT_RECONNECT_INITIAL_SEC,
         reconnect_max_sec=DEFAULT_RECONNECT_MAX_SEC,
+        debug_events=False,
     ):
         self.port = port
         self.baud_rate = baud_rate
@@ -78,6 +92,7 @@ class NanoSerialTransport:
         self._serial = None
         self._ready = False
         self.latest_level = OFF_COMMAND
+        self._debug_events = debug_events
 
     @property
     def connected(self):
@@ -100,6 +115,11 @@ class NanoSerialTransport:
                 line = raw.decode("ascii", errors="ignore").strip()
                 if line == "READY":
                     self._ready = True
+                    if self._debug_events:
+                        log.info(
+                            "debug serial_ready=true replay=%s",
+                            self.latest_level,
+                        )
                     self._write(self.latest_level)
                 elif line:
                     log.debug("Nano input ignored: %r", line)
@@ -109,11 +129,20 @@ class NanoSerialTransport:
     def send(self, commands):
         """Cache LEVEL and best-effort each command once; ALERT is never queued."""
         for command in commands:
+            duplicate_level = command.startswith("LEVEL,") and command == self.latest_level
             if command.startswith("LEVEL,"):
                 self.latest_level = command
             elif not command.startswith("ALERT,"):
                 raise ValueError(f"unsupported Nano command: {command!r}")
 
+            if self._debug_events:
+                log.info(
+                    "debug serial_command=%s ready=%s duplicate_level=%s "
+                    "duplicate_blocked=false",
+                    command,
+                    self.ready,
+                    duplicate_level,
+                )
             if not self.ready:
                 continue
             try:
@@ -187,6 +216,7 @@ class NanoBridge:
         sleeper=time.sleep,
         reconnect_initial_sec=DEFAULT_RECONNECT_INITIAL_SEC,
         reconnect_max_sec=DEFAULT_RECONNECT_MAX_SEC,
+        debug_events=False,
     ):
         self.url = url
         self._token = token
@@ -198,6 +228,7 @@ class NanoBridge:
         self._reconnect_max_sec = reconnect_max_sec
         self._reconnect_delay_sec = reconnect_initial_sec
         self._next_backend_attempt = 0.0
+        self._debug_events = debug_events
         self._register_handlers()
 
     def _register_handlers(self):
@@ -205,24 +236,52 @@ class NanoBridge:
         self.socket.on("disconnect", self._on_disconnect)
         self.socket.on("feedback_device", self._on_feedback)
         self.socket.on("feedback_device_off", self._on_off)
+        self.socket.on("feedback_device_demo", self._on_demo)
 
     def _on_connect(self):
         self._reconnect_delay_sec = self._reconnect_initial_sec
         self._next_backend_attempt = 0.0
         log.info("Feedback Backend connected: %s", self.url)
+        if self._debug_events:
+            log.info("debug backend_connected=true")
 
     def _on_disconnect(self):
         self._next_backend_attempt = self._monotonic()
         log.warning("Feedback Backend disconnected; retrying")
+        if self._debug_events:
+            log.info("debug backend_connected=false reconnect=pending")
 
     def _on_feedback(self, decision):
         try:
-            self.serial.send(commands_for_decision(decision))
+            commands = commands_for_decision(decision)
+            if self._debug_events:
+                log.info(
+                    "debug event=feedback_device level=%s transition=%s commands=%s",
+                    decision.get("level"),
+                    decision.get("transition"),
+                    ",".join(commands),
+                )
+            self.serial.send(commands)
         except (TypeError, ValueError) as error:
             log.warning("Invalid feedback device event ignored: %s", error)
 
     def _on_off(self, _payload=None):
+        if self._debug_events:
+            log.info("debug event=feedback_device_off commands=%s", OFF_COMMAND)
         self.serial.send([OFF_COMMAND])
+
+    def _on_demo(self, payload):
+        try:
+            commands = commands_for_demo(payload)
+            if self._debug_events:
+                log.info(
+                    "debug event=feedback_device_demo level=%s commands=%s",
+                    payload.get("level") if isinstance(payload, dict) else None,
+                    ",".join(commands),
+                )
+            self.serial.send(commands)
+        except (TypeError, ValueError) as error:
+            log.warning("Invalid feedback demo event ignored: %s", error)
 
     def tick(self):
         """Advance both reconnect loops once without sleeping."""
@@ -260,7 +319,7 @@ class NanoBridge:
                 log.warning("Feedback Backend disconnect failed (%s)", type(error).__name__)
 
 
-def main():
+def build_arg_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", default=os.getenv("FEEDBACK_SERIAL_PORT"))
     parser.add_argument(
@@ -272,6 +331,16 @@ def main():
         "--url",
         default=f"http://127.0.0.1:{os.getenv('SERVER_PORT', 5000)}",
     )
+    parser.add_argument(
+        "--debug-events",
+        action="store_true",
+        help="수신 이벤트와 Serial 명령을 credential 없이 진단 출력합니다",
+    )
+    return parser
+
+
+def main():
+    parser = build_arg_parser()
     args = parser.parse_args()
     if not args.port:
         parser.error("FEEDBACK_SERIAL_PORT 또는 --port가 필요합니다")
@@ -290,12 +359,14 @@ def main():
         args.port,
         args.baud,
         serial_factory=serial.Serial,
+        debug_events=args.debug_events,
     )
     bridge = NanoBridge(
         args.url,
         token,
         serial_transport,
         socketio.Client(reconnection=False, logger=False, engineio_logger=False),
+        debug_events=args.debug_events,
     )
     stop_event = threading.Event()
 

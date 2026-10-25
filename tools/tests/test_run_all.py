@@ -53,7 +53,7 @@ def test_mock_exit_remains_a_core_failure():
 def test_default_processes_do_not_start_legacy_feedback():
     specs = process_specs(real=False, chair_only=False, nano=False)
 
-    assert [name for name, _command in specs] == ["server", "mock"]
+    assert [name for name, _command in specs] == ["server"]
     flattened = [part for _name, command in specs for part in command]
     assert "feedback/policy/policy.py" not in flattened
     assert "feedback/ambient_led/driver.py" not in flattened
@@ -94,7 +94,7 @@ def test_project_env_is_loaded_for_child_processes(tmp_path, monkeypatch):
 def test_launcher_source_mode_matches_real_and_mock_producers():
     for real in (False, True):
         for chair_only in (False, True):
-            specs = process_specs(real=real, chair_only=chair_only, nano=False)
+            specs = process_specs(real=real, mock=not real, chair_only=chair_only, nano=False)
             assert specs[0][1][-2:] == ["--source-mode", "chair-only" if chair_only else "all"]
             if real:
                 assert any(name == "vision" for name, _ in specs) is (not chair_only)

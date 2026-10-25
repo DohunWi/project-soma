@@ -13,6 +13,7 @@ from fusion.config import (  # noqa: E402
 )
 from fusion.state import FusionState, step  # noqa: E402
 from fusion.state import _balance  # noqa: E402
+from fusion.load import SomaLoadState  # noqa: E402
 
 SEATED = [900, 700, 1000, 910]
 EMPTY  = [1, 1, 1, 1]
@@ -107,7 +108,8 @@ def test_히스테리시스_중간값은_유지된다():
 def test_자리비움이_누적을_리셋한다():
     st, _ = run([sample(blink_rate=5.0) for _ in range(200)])
     assert st.low_blink_sec > 0
-    st, d = step(st, {"pressure": EMPTY}, 1000.0 + 200)
+    for elapsed in range(1, 6):
+        st, d = step(st, {"pressure": EMPTY}, 1199.0 + elapsed)
     assert d["state"] == "ABSENT"
     assert st.low_blink_sec == 0.0
     assert st.static_hold_sec == 0.0
@@ -117,6 +119,9 @@ def test_움직이면_정적타이머가_리셋된다():
     st, _ = run([sample() for _ in range(300)])
     assert st.static_hold_sec > 200
     st, _ = step(st, sample(jitter=200), 1000.0 + 300)       # 큰 압력 변화
+    assert st.reseat_stabilizing is True
+    st, _ = step(st, sample(jitter=200), 1000.0 + 301)
+    st, _ = step(st, sample(jitter=200), 1000.0 + 302)
     assert st.static_hold_sec == 0.0
 
 
@@ -124,6 +129,8 @@ def test_정적_누적은_리셋되지_않는다():
     st, _ = run([sample() for _ in range(300)])
     total = st.static_total
     st, _ = step(st, sample(jitter=200), 1000.0 + 300)
+    st, _ = step(st, sample(jitter=200), 1000.0 + 301)
+    st, _ = step(st, sample(jitter=200), 1000.0 + 302)
     assert st.static_hold_sec == 0.0
     assert st.static_total >= total
 
@@ -146,6 +153,9 @@ def test_좌우편중_히스테리시스():
     st, _ = step(st, sample(pressure=[900, 840, 900, 840]), 1005.0)  # 차이 120 > 100
     assert st.balance == "LEFT"                                        # 아직 유지
     st, _ = step(st, sample(pressure=[900, 890, 900, 890]), 1006.0)  # 차이 20 < 100
+    assert st.balance == "LEFT"
+    st, _ = step(st, sample(pressure=[900, 890, 900, 890]), 1007.0)
+    st, _ = step(st, sample(pressure=[900, 890, 900, 890]), 1008.0)
     assert st.balance == "CENTER"
 
 
@@ -549,7 +559,23 @@ def test_state_and_score_are_independent_during_recovery():
         sample(pressure=[1050, 1050, 1050, 1050]),
         1011.0,
     )
+    assert decision["state"] == "CAUTION"
+    assert decision["score"] == 95
+    assert st.load.static_penalty == 5.0
+
+    for timestamp in (1012.0, 1013.0):
+        st, decision = step(
+            st,
+            sample(pressure=[1050, 1050, 1050, 1050]),
+            timestamp,
+        )
+    assert decision["score"] == 95
     assert decision["state"] == "NORMAL"
+    st, decision = step(
+        st,
+        sample(pressure=[1050, 1050, 1050, 1050]),
+        1014.0,
+    )
     assert decision["score"] == 98
     assert st.load.static_penalty == 2.5
 
@@ -564,7 +590,19 @@ def test_balance_penalty_accumulates_then_recovers_at_center():
     assert decision["score"] == 90
 
     st, decision = step(st, sample(pressure=[850, 850, 850, 850]), 1011.0)
+    assert st.balance == "LEFT"
+    assert st.load.balance_penalty == 10.0
+    assert decision["score"] == 90
+
+    for timestamp in (1012.0, 1013.0):
+        st, decision = step(
+            st,
+            sample(pressure=[850, 850, 850, 850]),
+            timestamp,
+        )
+    assert decision["score"] == 90
     assert st.balance == "CENTER"
+    st, decision = step(st, sample(pressure=[850, 850, 850, 850]), 1014.0)
     assert st.load.balance_penalty == pytest.approx(10 - 25 / 6)
     assert decision["score"] == 94
 
@@ -575,11 +613,194 @@ def test_absent_resets_continuous_state_but_retains_recovering_load():
     )
     assert st.load.static_penalty == 10.0
 
-    st, decision = step(st, sample(pressure=EMPTY), 1021.0)
+    for timestamp in range(1021, 1026):
+        st, decision = step(st, sample(pressure=EMPTY), float(timestamp))
     assert decision["state"] == "ABSENT"
     assert st.static_hold_sec == 0.0
     assert st.load.static_penalty == 7.5
     assert decision["score"] == 93
+
+
+def test_brief_pressure_dropout_freezes_state_score_and_session():
+    st, before = run_elapsed(
+        lambda _offset: sample(pressure=[850, 850, 850, 850]), 20
+    )
+    session_start = st.session_start
+
+    st, during = step(st, sample(pressure=EMPTY), 1020.5)
+    st, restored = step(st, sample(pressure=[850, 850, 850, 850]), 1021.0)
+
+    assert during["state"] == before["state"] == "DANGER"
+    assert restored["state"] == before["state"]
+    assert during["score"] == restored["score"] == before["score"]
+    assert st.session_start == session_start
+    assert st.seated is True
+    assert st.absence_candidate_sec == 0.0
+    assert st.reseat_stabilizing is True
+
+
+@pytest.mark.parametrize("dropout_sec", [0.5, 1.0, 2.0, 4.9])
+def test_transient_reseat_pressure_rebound_cannot_immediately_recover_balance(
+    dropout_sec,
+):
+    def moving_left(offset):
+        delta = 50 if offset % 2 else 0
+        return sample(pressure=[1000 + delta, 700 + delta, 1000 + delta, 700 + delta])
+
+    st, before = run_elapsed(moving_left, 20)
+    score_before = before["score"]
+    penalty_before = st.load.balance_penalty
+
+    st, during = step(st, sample(pressure=EMPTY), 1020.0 + dropout_sec)
+    restored_at = 1020.0 + dropout_sec + 0.1
+    st, first = step(st, sample(pressure=[850, 850, 850, 850]), restored_at)
+    st, stabilizing = step(
+        st,
+        sample(pressure=[850, 850, 850, 850]),
+        restored_at + 1.0,
+    )
+    st, stable = step(
+        st,
+        sample(pressure=[850, 850, 850, 850]),
+        restored_at + 2.0,
+    )
+
+    assert during["score"] == first["score"] == stabilizing["score"] == stable["score"] == score_before
+    assert st.load.balance_penalty == penalty_before
+    assert st.reseat_stabilizing is False
+
+
+def test_demo_recovery_resumes_after_reseat_stabilization_window():
+    def moving_left(offset):
+        delta = 50 if offset % 2 else 0
+        return sample(pressure=[1000 + delta, 700 + delta, 1000 + delta, 700 + delta])
+
+    st, before = run_elapsed(moving_left, 20)
+    penalty_before = st.load.balance_penalty
+    st, _ = step(st, sample(pressure=EMPTY), 1020.5)
+    for timestamp in (1021.0, 1022.0, 1023.0):
+        st, decision = step(st, sample(pressure=[850, 850, 850, 850]), timestamp)
+    assert decision["score"] == before["score"]
+
+    st, decision = step(st, sample(pressure=[850, 850, 850, 850]), 1024.0)
+    assert st.load.balance_penalty == pytest.approx(penalty_before - 25 / 6)
+    assert decision["score"] > before["score"]
+
+
+def test_undetected_subsample_lift_cannot_trigger_immediate_combined_recovery():
+    st, before = run_elapsed(
+        lambda _offset: sample(pressure=[1000, 700, 1000, 700]),
+        20,
+    )
+    assert st.load.static_penalty > 0.0
+    assert st.load.balance_penalty > 0.0
+    load_before = st.load
+
+    # The 1 Hz firmware can miss a complete sub-second lift.  Fusion then sees
+    # only a large occupied-to-occupied rebound on the next Chair tick.
+    for timestamp in range(1021, 1024):
+        st, decision = step(
+            st,
+            sample(pressure=[850, 850, 850, 850]),
+            float(timestamp),
+        )
+        assert decision["score"] == before["score"]
+        assert st.load == load_before
+
+    st, decision = step(st, sample(pressure=[850, 850, 850, 850]), 1024.0)
+    assert decision["score"] > before["score"]
+    assert st.load.static_penalty < load_before.static_penalty
+    assert st.load.balance_penalty < load_before.balance_penalty
+
+
+def test_pressure_jump_stabilizes_residual_balance_penalty_already_at_center():
+    initial_load = SomaLoadState(balance_penalty=5.0)
+    st = FusionState(
+        last_t=1000.0,
+        session_start=900.0,
+        seated=True,
+        balance="CENTER",
+        load=initial_load,
+        _last_pressure=(850, 850, 850, 850),
+    )
+
+    st, decision = step(
+        st,
+        sample(pressure=[1050, 1050, 1050, 1050]),
+        1001.0,
+    )
+
+    assert st.reseat_stabilizing is True
+    assert st.load == initial_load
+    assert decision["score"] == 95
+
+
+@pytest.mark.parametrize(
+    ("timing", "load_config"),
+    [
+        (DEMO_FUSION_TIMING, DEMO_SOMA_LOAD_CONFIG),
+        (NORMAL_FUSION_TIMING, NORMAL_SOMA_LOAD_CONFIG),
+    ],
+)
+def test_pressure_stabilization_preserves_profile_recovery_rates(
+    timing,
+    load_config,
+):
+    initial_load = SomaLoadState(static_penalty=5.0, balance_penalty=5.0)
+    st = FusionState(
+        last_t=1000.0,
+        session_start=900.0,
+        seated=True,
+        static_hold_sec=600.0,
+        imbalance_sec=20.0,
+        balance="LEFT",
+        load=initial_load,
+        _last_pressure=(1000, 700, 1000, 700),
+    )
+
+    for timestamp in range(1001, 1004):
+        st, _ = step(
+            st,
+            sample(pressure=[850, 850, 850, 850]),
+            float(timestamp),
+            timing=timing,
+            load_config=load_config,
+        )
+        assert st.load == initial_load
+
+    st, _ = step(
+        st,
+        sample(pressure=[850, 850, 850, 850]),
+        1004.0,
+        timing=timing,
+        load_config=load_config,
+    )
+    assert st.load.static_penalty == pytest.approx(
+        5.0 - load_config.max_penalty / load_config.static_recovery_sec
+    )
+    assert st.load.balance_penalty == pytest.approx(
+        5.0 - load_config.max_penalty / load_config.balance_recovery_sec
+    )
+
+
+def test_five_second_pressure_loss_confirms_absent_and_reseat_starts_new_seated_period():
+    st, _ = run_elapsed(
+        lambda _offset: sample(pressure=[850, 850, 850, 850]), 20
+    )
+    old_start = st.session_start
+    for elapsed in range(1, 6):
+        st, decision = step(st, sample(pressure=EMPTY), 1020.0 + elapsed)
+
+    assert decision["state"] == "ABSENT"
+    assert st.seated is False
+    assert st.static_hold_sec == 0.0
+
+    st, decision = step(st, sample(pressure=[850, 850, 850, 850]), 1026.0)
+    assert decision["state"] == "NORMAL"
+    assert decision["score"] == 100
+    assert st.load == type(st.load)()
+    assert st.session_start == 1026.0
+    assert st.session_start != old_start
 
 
 def test_invalid_time_gap_and_clock_reversal_do_not_advance_load():
@@ -612,6 +833,7 @@ def test_large_gap_while_absent_is_not_assumed_to_be_a_break():
     before = st.load.static_penalty
 
     st, decision = step(st, sample(pressure=EMPTY), 2000.0)
-    assert decision["state"] == "ABSENT"
+    assert decision["state"] == "DANGER"
     assert st.load.static_penalty == before
     assert st.load.absent_sec == 0.0
+    assert st.absence_candidate_sec == 0.0

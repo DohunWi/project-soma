@@ -237,15 +237,16 @@ def test_backwards_recovery_sample_does_not_justify_recovery_on_either_edge():
     assert run.fusion.load.distance_penalty == pytest.approx(residual - 0.75)
 
 
-def test_absent_resets_temporal_but_recovers_residual_like_existing_load():
+def test_confirmed_absence_recovers_residual_then_reseat_starts_clean_load():
     run = DistanceRun()
     run.hold(Kind.BODY_FORWARD_CLOSE, 0, 20)
-    run.tick("ABSENT", 21)
+    for now in range(21, 26):
+        run.tick("ABSENT", now)
     assert run.evidence.active is False
     assert run.fusion._last_distance_evidence is None
     assert run.fusion.load.distance_penalty == pytest.approx(5 - 0.75)
-    run.tick(Kind.BODY_FORWARD_CLOSE, 22)
-    assert run.fusion.load.distance_penalty == pytest.approx(4.25)
+    run.tick(Kind.BODY_FORWARD_CLOSE, 26)
+    assert run.fusion.load.distance_penalty == 0.0
     assert run.evidence.accumulated_sec == 0
 
 

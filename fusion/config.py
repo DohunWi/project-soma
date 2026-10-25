@@ -17,6 +17,12 @@ class FusionTiming:
     low_blink_danger_sec: float
     close_distance_caution_sec: float
     max_gap_sec: float
+    # A brief pressure dropout must not become a restorative break.  This is
+    # sensor/session debounce, not a fatigue or posture threshold.
+    absence_grace_sec: float = 5.0
+    # After a transient dropout, absorb short pressure rebound transients before
+    # chair penalties may recover.  This is sensor stabilization, not a break.
+    reseat_stable_sec: float = 2.0
 
 
 @dataclass(frozen=True)

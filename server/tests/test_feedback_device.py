@@ -185,3 +185,82 @@ def test_device_emit_failure_does_not_block_user_state_feedback_or_persistence()
     assert [event for event in received if event["name"] == "state"]
     assert [event for event in received if event["name"] == "feedback"]
     assert len(persistence.calls) == 1
+
+
+def test_break_is_physically_off_and_reseat_starts_normal_without_old_alert():
+    app, socketio = make_app()
+    producer = socketio.test_client(app, auth={"token": DEVICE_TOKEN})
+    device = socketio.test_client(
+        app,
+        auth={"token": DEVICE_TOKEN, "role": "feedback_device"},
+    )
+    device.get_received()
+    start(app)
+    device.get_received()
+    for elapsed in range(30):
+        producer.emit("sensor_data", chair_payload(1000.0 + elapsed))
+    assert named_events(device, "feedback_device")[-1]["level"] == "BREAK"
+
+    for elapsed in range(1, 6):
+        absent = chair_payload(1029.0 + elapsed)
+        absent["chair"]["pressure"] = [0, 0, 0, 0]
+        producer.emit("sensor_data", absent)
+
+    assert named_events(device, "feedback_device_off") == [{"v": 1}]
+    assert app.extensions["latest_device_feedback"]["decision"] is None
+
+    producer.emit("sensor_data", chair_payload(1035.0))
+    resumed = named_events(device, "feedback_device")[-1]
+    assert resumed["level"] == "NORMAL"
+    assert resumed["transition"] is False
+    active = app.extensions["measurement_sessions"].active()
+    policy = app.extensions["feedback_coordinator"].state_for(active.session_id)
+    assert policy.break_active is False
+    assert policy.work_period_sec == 1.0
+
+
+def test_authenticated_demo_is_hardware_only_and_blocked_during_measurement():
+    persistence = RecordingPersistence()
+    app, socketio = make_app(state_persistence=persistence)
+    device = socketio.test_client(
+        app,
+        auth={"token": DEVICE_TOKEN, "role": "feedback_device"},
+    )
+    device.get_received()
+    client = app.test_client()
+    headers = {"Authorization": f"Bearer {USER_A_TOKEN}"}
+
+    response = client.post(
+        "/api/feedback/demo",
+        headers=headers,
+        json={"level": "WARNING"},
+    )
+    assert response.status_code == 200
+    assert named_events(device, "feedback_device_demo") == [
+        {"v": 1, "level": "WARNING"}
+    ]
+    assert persistence.calls == []
+    assert app.extensions["latest_device_feedback"]["decision"] is None
+
+    start(app)
+    response = client.post(
+        "/api/feedback/demo",
+        headers=headers,
+        json={"level": "BREAK"},
+    )
+    assert response.status_code == 409
+    assert named_events(device, "feedback_device_demo") == []
+
+
+def test_feedback_demo_requires_user_auth_and_rejects_unknown_levels():
+    app, _socketio = make_app()
+    client = app.test_client()
+
+    assert client.post(
+        "/api/feedback/demo", json={"level": "WARNING"}
+    ).status_code == 401
+    assert client.post(
+        "/api/feedback/demo",
+        headers={"Authorization": f"Bearer {USER_A_TOKEN}"},
+        json={"level": "DANGER"},
+    ).status_code == 400

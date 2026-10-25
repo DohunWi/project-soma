@@ -257,12 +257,13 @@ def test_missing_vision_invalid_ir_and_absent_never_create_posture_classificatio
     assert invalid_ir.classification is DistanceEvidenceClass.UNKNOWN
     assert invalid_ir.chair_ir_available is False
 
-    clock.set(8)
-    producer.emit("sensor_data", vision_payload(8, distance=42.0))
-    producer.emit(
-        "sensor_data",
-        chair_payload(8, pressure=[1, 1, 1, 1]),
-    )
+    for now in range(8, 13):
+        clock.set(now)
+        producer.emit("sensor_data", vision_payload(now, distance=42.0))
+        producer.emit(
+            "sensor_data",
+            chair_payload(now, pressure=[1, 1, 1, 1]),
+        )
     absent = app.extensions["measurement_calibration"].latest_distance_evidence
     assert absent.classification is DistanceEvidenceClass.UNKNOWN
     assert absent.seated is False

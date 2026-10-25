@@ -33,6 +33,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MONITOR_INTERVAL_SEC = 1.0
+# VL53L0X returns 8191 mm as an out-of-range sentinel in the deployed firmware.
+# Keep it visible in raw diagnostics, but never publish it as a real distance.
+IR_OUT_OF_RANGE_MM = 8191
 
 
 def load_env():
@@ -88,6 +91,11 @@ def parse_line(line):
     except ValueError:
         return None
     return n[:4], n[4]
+
+
+def normalize_ir_distance(raw_ir):
+    """Return contract missing-distance sentinel while preserving valid/raw values."""
+    return -1 if raw_ir >= IR_OUT_OF_RANGE_MM else raw_ir
 
 
 def raw_log_row(t, pressure, ir):
@@ -325,7 +333,7 @@ def main():
                 "source": "chair",
                 "device_id": args.device_id,
                 "user_name": args.user,
-                "chair": {"pressure": pressure, "ir": [ir]},
+                "chair": {"pressure": pressure, "ir": [normalize_ir_distance(ir)]},
             }
             dispatch_sample(
                 ev,

@@ -31,6 +31,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from fusion.state import OCCUPANCY_MIN, FusionState, step  # noqa: E402
+from fusion.load import score_integer  # noqa: E402
 from feedback.config import feedback_config_for_mode  # noqa: E402
 from server.auth import (  # noqa: E402
     AuthenticationError,
@@ -67,6 +68,12 @@ from server.state_history import (  # noqa: E402
     resolve_history_period,
     utc_iso8601,
 )
+from server.session_report import (  # noqa: E402
+    SessionReportNotFound,
+    SessionReportReader,
+    SessionReportUnavailable,
+    build_session_report,
+)
 from server.state_persistence import StatePersistence  # noqa: E402
 from server.sensor_merge import SessionSensorCache  # noqa: E402
 
@@ -78,16 +85,35 @@ except ImportError:
     pass
 
 log = logging.getLogger("soma.server")
+fusion_debug_log = logging.getLogger("soma.server.fusion_debug")
+
+
+def _enable_fusion_debug_logging():
+    """Enable the opt-in per-Chair-tick diagnostic stream exactly once."""
+    fusion_debug_log.setLevel(logging.INFO)
+    fusion_debug_log.propagate = False
+    if any(
+        getattr(handler, "_soma_fusion_debug", False)
+        for handler in fusion_debug_log.handlers
+    ):
+        return
+    handler = logging.StreamHandler()
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    handler._soma_fusion_debug = True
+    fusion_debug_log.addHandler(handler)
 
 SENSOR_SCHEMA_PATH = ROOT / "docs" / "contracts" / "sensor_data.schema.json"
 STATE_SCHEMA_PATH = ROOT / "docs" / "contracts" / "state.schema.json"
 STATE_HISTORY_SCHEMA_PATH = ROOT / "docs" / "contracts" / "state_history.schema.json"
 HISTORY_SESSIONS_SCHEMA_PATH = ROOT / "docs" / "contracts" / "history_sessions.schema.json"
+SESSION_REPORT_SCHEMA_PATH = ROOT / "docs" / "contracts" / "session_report.schema.json"
 MEASUREMENT_PHASE_SCHEMA_PATH = (
     ROOT / "docs" / "contracts" / "measurement_phase.schema.json"
 )
 _AUTO_PERSISTENCE = object()
 _AUTO_HISTORY_READER = object()
+_AUTO_SESSION_REPORT_READER = object()
 FEEDBACK_DEVICE_ROOM = "feedback_devices"
 FEEDBACK_DEVICE_ROLE = "feedback_device"
 CROSS_VALIDATION_EVENT = "cross_validation_observation"
@@ -150,6 +176,7 @@ SENSOR_VALIDATOR = _load_validator(SENSOR_SCHEMA_PATH)
 STATE_VALIDATOR = _load_validator(STATE_SCHEMA_PATH)
 STATE_HISTORY_VALIDATOR = _load_validator(STATE_HISTORY_SCHEMA_PATH)
 HISTORY_SESSIONS_VALIDATOR = _load_validator(HISTORY_SESSIONS_SCHEMA_PATH)
+SESSION_REPORT_VALIDATOR = _load_validator(SESSION_REPORT_SCHEMA_PATH)
 MEASUREMENT_PHASE_VALIDATOR = _load_validator(MEASUREMENT_PHASE_SCHEMA_PATH)
 
 
@@ -188,6 +215,11 @@ class ChairPipeline:
     @property
     def sensor_cache(self):
         return self._sensor_cache
+
+    def debug_state(self):
+        """Return the immutable Fusion checkpoint for opt-in diagnostics."""
+        with self._lock:
+            return self._state
 
     def validate(self, payload):
         """Validate sensor_data without advancing Fusion state."""
@@ -283,6 +315,7 @@ def create_app(
     runtime_profile: RuntimeProfile | None = None,
     state_persistence=_AUTO_PERSISTENCE,
     history_reader=_AUTO_HISTORY_READER,
+    session_report_reader=_AUTO_SESSION_REPORT_READER,
     history_now=None,
     auth_verifier=None,
     session_registry=None,
@@ -294,8 +327,11 @@ def create_app(
     calibration_wall_clock=None,
     calibration_timer_factory=None,
     source_mode=None,
+    debug_fusion=False,
     _skip_calibration_for_testing=False,
 ):
+    if debug_fusion:
+        _enable_fusion_debug_logging()
     profile = runtime_profile or load_runtime_profile()
     selected_source_mode = load_source_mode(source_mode)
     calibration_config = calibration_for_source_mode(profile, selected_source_mode)
@@ -365,9 +401,13 @@ def create_app(
     app.extensions["feedback_coordinator"] = feedback
     app.extensions["measurement_calibration"] = calibration
     app.extensions["latest_device_feedback"] = latest_device_feedback
+    app.extensions["debug_fusion"] = bool(debug_fusion)
     if history_reader is _AUTO_HISTORY_READER:
         history_reader = StateHistoryReader()
     app.extensions["state_history_reader"] = history_reader
+    if session_report_reader is _AUTO_SESSION_REPORT_READER:
+        session_report_reader = SessionReportReader()
+    app.extensions["session_report_reader"] = session_report_reader
 
     def token_required(function):
         @wraps(function)
@@ -648,6 +688,27 @@ def create_app(
             payload["baseline"] = baseline
         return checked_history_response(payload, STATE_HISTORY_VALIDATOR)
 
+    @app.get("/api/state/history/sessions/<session_id>/report")
+    @token_required
+    def get_recorded_session_report(user_id, session_id):
+        try:
+            selected_id = parse_session_id(session_id)
+        except HistoryRequestError as error:
+            return history_error(400, "invalid_session_id", str(error))
+        if request.args:
+            return history_error(400, "invalid_request", "지원하지 않는 query parameter입니다.")
+        try:
+            snapshots = session_report_reader.fetch(user_id, selected_id)
+            payload = build_session_report(user_id, selected_id, snapshots)
+        except SessionReportNotFound:
+            return history_error(404, "session_not_found", "저장된 측정 기록을 찾을 수 없습니다.")
+        except SessionReportUnavailable:
+            return history_error(503, "history_unavailable", "세션 보고서를 불러올 수 없습니다.")
+        except (KeyError, TypeError, ValueError):
+            log.warning("session report 계산에 사용할 수 없는 snapshot이 있습니다")
+            return history_error(500, "invalid_report_data", "세션 보고서를 만들 수 없습니다.")
+        return checked_history_response(payload, SESSION_REPORT_VALIDATOR)
+
     @app.post("/api/measurement/start")
     @token_required
     def start_measurement(user_id):
@@ -723,6 +784,38 @@ def create_app(
             "measurement": measurement.as_dict(),
             "already_stopped": already_stopped,
         })
+
+    @app.post("/api/feedback/demo")
+    @token_required
+    def demo_feedback(_user_id):
+        """Drive only the optional Nano while no measurement is active."""
+        payload = request.get_json(silent=True)
+        level = payload.get("level") if isinstance(payload, dict) else None
+        if level not in {"NORMAL", "NOTICE", "WARNING", "BREAK", "OFF"}:
+            return jsonify({
+                "v": 1,
+                "status": "error",
+                "error": {
+                    "code": "invalid_feedback_demo",
+                    "message": "지원하지 않는 시연 단계입니다.",
+                },
+            }), 400
+        with measurement_lock:
+            if sessions.active() is not None:
+                return jsonify({
+                    "v": 1,
+                    "status": "error",
+                    "error": {
+                        "code": "feedback_demo_unavailable",
+                        "message": "측정 중에는 피드백 시연을 사용할 수 없습니다.",
+                    },
+                }), 409
+            socketio.emit(
+                "feedback_device_demo",
+                {"v": 1, "level": level},
+                to=FEEDBACK_DEVICE_ROOM,
+            )
+        return jsonify({"v": 1, "status": "success", "level": level})
 
     @app.get("/api/report/weekly")
     @token_required
@@ -921,6 +1014,7 @@ def create_app(
                 if sample is None:
                     return
                 sample.update(calibration.relative_evidence(sample, now=payload["t"]))
+                debug_before = pipeline.debug_state() if debug_fusion else None
                 decision = pipeline.process_prepared(
                     payload,
                     sample,
@@ -935,6 +1029,51 @@ def create_app(
                     decision,
                     to=f"user:{measurement.user_id}",
                 )
+                if debug_before is not None:
+                    debug_after = pipeline.debug_state()
+                    pressure = list(sample.get("pressure") or [])
+                    occupied = len(pressure) == 4 and sum(pressure) >= OCCUPANCY_MIN
+                    remaining = (
+                        max(
+                            profile.fusion.reseat_stable_sec
+                            - debug_after.reseat_stable_sec,
+                            0.0,
+                        )
+                        if debug_after.reseat_stabilizing
+                        else 0.0
+                    )
+                    fusion_debug_log.info(
+                        "[fusion-debug] t=%.3f pressure=%s occupied=%s "
+                        "absence_grace=%s absence_sec=%.3f stabilization=%s "
+                        "stabilization_remaining=%.3f state=%s "
+                        "score_before=%d score_after=%d static_penalty=%.3f "
+                        "balance_penalty=%.3f static_recovery_delta=%.3f "
+                        "balance_recovery_delta=%.3f last_pressure=%s front_score=%d",
+                        payload["t"],
+                        pressure,
+                        occupied,
+                        debug_after.absence_candidate_sec > 0.0,
+                        debug_after.absence_candidate_sec,
+                        debug_after.reseat_stabilizing,
+                        remaining,
+                        decision["state"],
+                        score_integer(debug_before.load),
+                        decision["score"],
+                        debug_after.load.static_penalty,
+                        debug_after.load.balance_penalty,
+                        max(
+                            debug_before.load.static_penalty
+                            - debug_after.load.static_penalty,
+                            0.0,
+                        ),
+                        max(
+                            debug_before.load.balance_penalty
+                            - debug_after.load.balance_penalty,
+                            0.0,
+                        ),
+                        list(debug_after._last_pressure),
+                        decision["score"],
+                    )
                 if has_cross_validation_observer(measurement.user_id):
                     try:
                         socketio.emit(
@@ -977,6 +1116,15 @@ def create_app(
                             "user feedback 전송 실패 (%s)",
                             type(error).__name__,
                         )
+                # Logical BREAK may remain latched during a break, but an
+                # unoccupied chair must always make the physical device OFF.
+                if decision["state"] == "ABSENT":
+                    with device_feedback_lock:
+                        was_active = latest_device_feedback["decision"] is not None
+                        latest_device_feedback["decision"] = None
+                    if was_active:
+                        emit_device_off()
+                elif feedback_decision is not None:
                     with device_feedback_lock:
                         latest_device_feedback["decision"] = feedback_decision
                     try:
@@ -1014,11 +1162,22 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SOMA Backend")
     parser.add_argument("--source-mode", choices=SOURCE_MODES, default=None,
                         help="calibration sources (default: SOMA_SOURCE_MODE or all)")
-    _source_mode = parser.parse_args().source_mode
+    parser.add_argument(
+        "--debug-fusion",
+        action="store_true",
+        help="Chair/Fusion score transitions without credentials",
+    )
+    _args = parser.parse_args()
+    _source_mode = _args.source_mode
+    _debug_fusion = _args.debug_fusion
 else:
     _source_mode = None
+    _debug_fusion = False
 
-app, socketio = create_app(source_mode=_source_mode)
+app, socketio = create_app(
+    source_mode=_source_mode,
+    debug_fusion=_debug_fusion,
+)
 
 
 if __name__ == "__main__":

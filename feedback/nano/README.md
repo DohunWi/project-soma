@@ -30,6 +30,14 @@ SOCKET_AUTH_TOKEN=...
 python feedback/nano/bridge.py
 ```
 
+실제 이벤트와 Serial 전달 경로를 진단할 때만 `--debug-events`를 추가합니다.
+일반 실행 로그는 그대로 유지하며, 이 옵션은 수신 이벤트명·level·transition, 전송할
+Serial command, 동일 LEVEL 여부와 연결/재연결 상태만 출력하고 token은 출력하지 않습니다.
+
+```powershell
+.\.venv-clean\Scripts\python.exe feedback\nano\bridge.py --port COM4 --debug-events
+```
+
 generic COM 자동 선택은 사용하지 않습니다. Chair UNO와 Nano 포트를 명시적으로
 구분해야 합니다.
 

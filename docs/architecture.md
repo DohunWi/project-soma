@@ -74,6 +74,10 @@
 | 상체 | 압력 4채널 (FSR406, A0~A3) | 좌우·전후 하중 밸런스 |
 | 허리 | 적외선 거리 (VL53L0X) | 허리가 등받이에 붙어 있는가 |
 
+Chair firmware의 VL53L0X out-of-range sentinel `8191mm`는 bridge의 raw monitor/log에는
+진단값 그대로 남기되, `sensor_data.chair.ir[0]`에는 미감지 계약값 `-1`로 정규화합니다.
+기존 raw `-1`도 그대로 유지하므로 calibration과 Fusion에서 실제 거리로 사용되지 않습니다.
+
 압력 채널 순서는 **[전좌, 전우, 후좌, 후우]** 로 고정입니다. 순서를 바꾸면 판정이 뒤집힙니다.
 
 현재 좌우 balance는 `(FL + BL) - (FR + BR)`의 raw 차이를 사용합니다. 한 사용자와
@@ -119,7 +123,10 @@ Vision startup calibration은 기존 얼굴 폭 기반 거리 보정과 OPEN EAR
 함께 수행합니다. detector 초기화 시간이 측정 창을 소비하지 않도록 첫 유효 샘플에서
 3초 창을 시작하고, 얼굴 검출·정면·유한한 좌우/평균 EAR 조건을 만족하는 프레임을
 최소 20개 요구합니다. OPEN EAR baseline은 자연스러운 순간 blink의 영향을 줄이기 위해
-유효 평균 EAR의 중앙값을 사용하며 `vision/baseline.json`의 `open_ear_baseline`에 저장합니다.
+유효 평균 EAR의 상위 사분위수(p75)를 사용하며 `vision/baseline.json`의
+`open_ear_baseline`에 저장합니다. 안내 중 섞이는 자연 blink·cue transition의 낮은 EAR가
+OPEN 기준을 과도하게 낮추지 않도록 한 robust statistic이며, 기존 저장 파일은 호환을 위해
+계속 읽습니다. 새 방식 적용에는 명시적인 `--recalibrate`가 필요합니다.
 기존 파일에 이 필드가 없거나 calibration이 실패하면 기존 절대 임계 `0.21 / 0.25`를
 사용합니다.
 
@@ -379,6 +386,16 @@ NULL session_id인 legacy row는 제외합니다. 상세 기본 구간은 마지
 동일 404, DB 장애는 503입니다. 조회는 measurement lock, Fusion, Socket.IO, persistence write
 경로와 분리된 HTTP 읽기 작업입니다. 비동기 저장이 아직 완료되지 않으면 새로고침이 필요할 수 있습니다.
 
+저장 session의 v1 요약은
+`GET /api/state/history/sessions/<session_id>/report`에서 제공합니다. 첫/마지막 snapshot
+시각과 그 사이의 span은 실제 measurement Start/Stop이 아닙니다. 인접 snapshot 간격이
+0초 초과 60초 이하인 구간만 상태 체류·시간 가중 Score에 사용하며, 더 긴 구간은 미확인
+공백으로 분리합니다. ABSENT 시간은 별도 표시하고 착석 평균 Score에서는 제외하며 마지막
+snapshot 뒤의 시간을 임의로 더하지 않습니다. 최저 Score도 ABSENT를 제외한 저장 snapshot
+기준이며 착석 snapshot이 없으면 평균과 최저값은 null입니다. Feedback Policy의 BREAK는 state_logs에
+없으므로 보고서에서 발생 여부를 추정하지 않습니다. 이 조회도 Fusion/Feedback/persistence
+실시간 경로와 분리된 인증 HTTP 읽기 작업입니다.
+
 ---
 
 ## 6. 상태
@@ -435,8 +452,22 @@ Demo balance 값 역시 졸업작품에서 누적과 회복을 짧게 확인하�
 있는 engineering 설정입니다. 샘플 간격이 profile의 `max_gap_sec`를 넘거나 시간이 역행하면
 상태 누적과 마찬가지로 load의 증가·회복도 그 구간에서는 진행하지 않습니다.
 
-**`ABSENT` 는 불량이 아닙니다.** 자리 비움 시 상태 판정용 연속 누적값은 전부
-리셋하지만, SOMA Load의 잔여 penalty는 보존하며 회복시킵니다. 자리 비움 60초 미만은
+**`ABSENT` 는 불량이 아닙니다.** 이미 착석 중인 사용자의 압력이 잠깐 사라진 경우에는
+5초의 sensor/session debounce 동안 현재 상태·timer·SOMA Load를 그대로 동결합니다.
+이 유예 중 압력이 돌아오면 이탈 샘플과 첫 복귀 샘플을 회복 근거로 사용하지 않으며,
+이후 2초간 착석 압력을 새 기준으로 흡수하는 안정화 구간에도 timer와 SOMA Load를 동결합니다.
+따라서 재착석 압력 반동이 즉시 `LEFT/RIGHT → CENTER` 개선으로 해석되어 Demo balance
+회복률을 적용하지 않습니다. 안정화 완료 뒤의 지속적인 실제 자세 개선은 기존 회복 계산을 재개합니다.
+Chair firmware는 1Hz이므로 1초보다 짧은 이석은 두 raw sample 사이에서 완전히 누락될 수
+있습니다. 이 경우 Fusion에는 occupied→occupied 압력 급변만 보입니다. 잔여 Chair penalty가
+있는 상태에서 이런 변화가 포착되면 동일한 2초 안정화 상태로 진입하고, 연속으로 안정된
+압력이 확인된 다음 tick부터 기존 Demo/Normal 회복률을 적용합니다. 안정화 시간은 회복량에
+소급하지 않습니다. 이는 firmware 주기나 `STATIC_EPS`, penalty curve/rate를 바꾸지 않고
+누락된 순간 이석을 회복 보상으로 오인하지 않기 위한 sensor stabilization입니다.
+5초 이상 연속으로 비착석이 확인된 뒤에는 자리 비움으로 확정하고 상태 판정용 연속 누적값은 전부
+리셋합니다. 자리 비움 중에는 SOMA Load의 잔여 penalty를 보존하며 회복시키고, 확정된
+자리 비움 뒤 재착석하면 새 seated interval을 100점에서 시작합니다. 이는 인증된 measurement나
+DB session_id를 새로 만드는 동작이 아닙니다. 자리 비움 60초 미만은
 1배, 60초 이상 180초 미만은 1.5배, 180초 이상은 2배 회복속도를 적용하고 경계를
 가로지른 시간은 구간별로 정확히 나눕니다.
 
@@ -476,9 +507,10 @@ Demo도 두 기존 penalty를 즉시 압도하지 않습니다. 의료·생리�
 - UNKNOWN은 distance residual을 동결합니다. 누적도 회복도 하지 않으며 첫 복귀 sample까지의
   구간도 사용하지 않습니다. remembered active와 현재 유효한 관측을 구분합니다. 5초 초과 gap,
   역행/중복 또는 evidence 미제공 역시 새 distance 증가/회복의 근거로 사용하지 않습니다.
-- ABSENT는 temporal을 reset하되 기존 numeric residual은 유지하면서 위 선형 회복률에 기존
+- ABSENT는 temporal을 reset하되 자리 비움 동안 기존 numeric residual은 유지하면서 위 선형 회복률에 기존
   60/180초의 1/1.5/2배 ABSENT 가중치를 적용합니다. absence 시간은 Chair load에서 한 번만
-  증가합니다. READY→MEASURING과 새 session은 FusionState 전체를 초기화하여 distance도 0입니다.
+  증가합니다. 확정 이탈 후 재착석, READY→MEASURING과 새 measurement는 FusionState의
+  numeric load를 0으로 초기화합니다.
 - 기존 절대 얼굴 거리 45/50cm hysteresis와 close-distance state/reasons는 변경하지 않습니다.
   이 로직은 numeric distance 슬롯에 기여하지 않으므로 relative penalty와 수치 이중 감점이
   없습니다. Phase C가 state/reasons/confidence에 새 판정 규칙을 추가하지 않습니다.
@@ -561,10 +593,12 @@ low score 지속, DANGER 지속, 연속 작업시간 중 하나로 승격시키�
 `CONTINUOUS_WORK` 순서로 reason을 선택합니다.
 
 Policy는 measurement session마다 새 immutable state로 시작합니다. `session_sec` 대신
-별도 `work_period_sec`를 착석 중에만 누적하고, ABSENT 중에는 일시 정지합니다. 짧은
-자리 비움은 기존 작업시간과 BREAK latch를 유지합니다. effective break에 도달하면
-BREAK를 해제하고 작업시간·trigger timer를 리셋하며 cooldown을 시작합니다. BREAK가
-발생하지 않았더라도 앞선 작업 뒤 effective break가 확인되면 작업시간을 리셋합니다.
+별도 `work_period_sec`를 착석 중에만 누적합니다. Fusion이 5초 debounce 뒤 `ABSENT`를
+발행한 시점은 seated interval의 확정 종료이므로, 같은 DB measurement session 안에서도
+기존 작업시간과 BREAK latch를 즉시 지웁니다. Fusion의
+debounce 중에는 Policy에 ABSENT가 전달되지 않으므로 짧은 압력 dropout은 기존 작업시간과
+BREAK latch를 유지합니다. 확정 ABSENT가 기존 effective break 시간까지 이어지면 재착석 후의
+seated-time cooldown을 시작하며, recommended break 시간도 이후 ABSENT 관측에서 계속 추적합니다.
 동일 level 유지 중에는 `transition=false`이므로 향후 popup/진동을 반복하지 않습니다.
 
 Normal의 초기 engineering parameter는 score 60 이하 120초, DANGER 60초, 연속 작업
@@ -596,8 +630,15 @@ Bridge는 logical decision을 다음 serial protocol로 변환합니다.
 - `LEVEL,NORMAL|NOTICE|WARNING|BREAK|OFF`: stateful, 중복 허용, idempotent
 - `ALERT,WARNING|BREAK`: transition-only 진동 trigger, at-most-once 우선
 
-logical `NORMAL`의 reason이 `ABSENT`이면 물리 출력은 `LEVEL,OFF`입니다. Bridge는 마지막
-LEVEL만 캐시하고 Nano의 `READY` 또는 serial 재연결 뒤 LEVEL만 재동기화합니다. ALERT는
+logical `NORMAL`의 reason이 `ABSENT`이면 물리 출력은 `LEVEL,OFF`입니다.
+Fusion state가 `ABSENT`이면 Backend는 Nano cache를 비우고 `feedback_device_off`를 보냅니다.
+Feedback Policy도 확정 ABSENT에서 이전 seated interval의 BREAK latch를 해제하므로 자리 비움의
+물리 출력은 항상 OFF이고, 재착석한 새 seated interval은 현재 Fusion 상태에 맞는 LEVEL로 시작합니다.
+
+측정 OFF 상태의 수동 시연은 인증된 `POST /api/feedback/demo`와 별도
+`feedback_device_demo` event만 사용합니다. 이 경로는 Fusion, measurement state, score,
+feedback policy 및 DB persistence를 호출하지 않으며 ACTIVE measurement가 있으면 409로 거부합니다.
+Bridge는 마지막 LEVEL만 캐시하고 Nano의 `READY` 또는 serial 재연결 뒤 LEVEL만 재동기화합니다. ALERT는
 큐에 저장하거나 재연결 후 replay하지 않습니다. Backend 재연결 때도 server가 현재 logical
 decision 또는 OFF를 device 전용 socket에 다시 보내므로 현재 LEVEL을 복원할 수 있습니다.
 

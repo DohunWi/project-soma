@@ -1,11 +1,12 @@
 """Backend integration tests for session-scoped logical Feedback decisions."""
+import logging
 import uuid
 
 import pytest
 
 from feedback.config import DEMO_FEEDBACK_CONFIG, NORMAL_FEEDBACK_CONFIG
 from feedback.policy.break_policy import FeedbackPolicyState, step as policy_step
-from server.app import create_app
+from server.app import create_app, fusion_debug_log
 from server.auth import AuthIdentity, AuthenticationError
 from server.config import DEMO_PROFILE, NORMAL_PROFILE
 from server.feedback_coordinator import (
@@ -251,22 +252,120 @@ def test_chair_ticks_emit_current_feedback_after_state_through_break_lifecycle()
         "persistence",
     ]
 
-    for elapsed in range(32, 42):
+    # Five seconds confirm absence.  That confirmed boundary immediately ends
+    # the Feedback seated interval without changing the DB measurement session.
+    for elapsed in range(32, 47):
         producer.emit(
             "sensor_data",
             chair_payload(1000.0 + elapsed, pressure=[1, 1, 1, 1]),
         )
-    released = events(front, "feedback")[-1]
+    absence_feedback = events(front, "feedback")
+    released = absence_feedback[-1]
     active = app.extensions["measurement_sessions"].active()
     policy_state = app.extensions["feedback_coordinator"].state_for(
         active.session_id
     )
     assert released["level"] == "NORMAL"
     assert released["reason"] == "ABSENT"
-    assert released["transition"] is True
+    assert any(
+        item["level"] == "NORMAL"
+        and item["reason"] == "ABSENT"
+        and item["transition"] is True
+        for item in absence_feedback
+    )
     assert policy_state.break_active is False
     assert policy_state.work_period_sec == 0.0
-    assert policy_state.cooldown_remaining_sec == 30.0
+    assert 0 < policy_state.cooldown_remaining_sec <= 30.0
+
+
+def test_transient_reseat_emits_frozen_fusion_score_to_front_until_stable():
+    app, socketio = make_app(runtime_profile=DEMO_PROFILE)
+    producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
+    front = socketio.test_client(app, auth={"token": USER_A_TOKEN})
+    start(app)
+
+    for elapsed in range(21):
+        delta = 50 if elapsed % 2 else 0
+        producer.emit(
+            "sensor_data",
+            chair_payload(
+                1000.0 + elapsed,
+                pressure=[1000 + delta, 700 + delta, 1000 + delta, 700 + delta],
+            ),
+        )
+    before = events(front, "state")[-1]
+
+    producer.emit("sensor_data", chair_payload(1020.5, pressure=[0, 0, 0, 0]))
+    for timestamp in (1021.0, 1022.0, 1023.0):
+        producer.emit(
+            "sensor_data",
+            chair_payload(timestamp, pressure=[850, 850, 850, 850]),
+        )
+    frozen = events(front, "state")
+
+    assert [item["score"] for item in frozen] == [before["score"]] * 4
+    assert all(item["state"] == before["state"] for item in frozen[:-1])
+    assert frozen[-1]["state"] == "NORMAL"
+
+    producer.emit(
+        "sensor_data",
+        chair_payload(1024.0, pressure=[850, 850, 850, 850]),
+    )
+    recovered = events(front, "state")[-1]
+    assert recovered["score"] > before["score"]
+
+
+def test_fusion_debug_log_matches_emitted_front_score_without_credentials():
+    app, socketio = make_app(runtime_profile=DEMO_PROFILE, debug_fusion=True)
+    producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
+    front = socketio.test_client(app, auth={"token": USER_A_TOKEN})
+    start(app)
+
+    records = []
+
+    class CaptureHandler(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    capture = CaptureHandler()
+    fusion_debug_log.addHandler(capture)
+    try:
+        producer.emit("sensor_data", chair_payload(1000.0))
+    finally:
+        fusion_debug_log.removeHandler(capture)
+    emitted = events(front, "state")[-1]
+    line = next(record.getMessage() for record in records if "[fusion-debug]" in record.getMessage())
+
+    assert fusion_debug_log.isEnabledFor(logging.INFO)
+    assert f"score_after={emitted['score']}" in line
+    assert f"front_score={emitted['score']}" in line
+    assert "occupied=True" in line
+    assert "absence_grace=False" in line
+    assert "stabilization=False" in line
+    assert "static_recovery_delta=" in line
+    assert "balance_recovery_delta=" in line
+    assert SENSOR_TOKEN not in line
+    assert USER_A_TOKEN not in line
+
+
+def test_fusion_debug_log_is_not_emitted_by_default():
+    app, socketio = make_app(runtime_profile=DEMO_PROFILE)
+    producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
+    start(app)
+    records = []
+
+    class CaptureHandler(logging.Handler):
+        def emit(self, record):
+            records.append(record)
+
+    capture = CaptureHandler()
+    fusion_debug_log.addHandler(capture)
+    try:
+        producer.emit("sensor_data", chair_payload(1000.0))
+    finally:
+        fusion_debug_log.removeHandler(capture)
+
+    assert records == []
 
 
 def test_feedback_is_routed_only_to_the_authenticated_active_user_room():

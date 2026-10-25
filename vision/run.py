@@ -55,6 +55,7 @@ from lateral import (
 )
 from landmarks import FaceLandmarks                     # vision/landmarks.py
 from payload import vision_payload                      # vision/payload.py
+from preview import diagnostic_lines                    # vision/preview.py
 from quality import FrameQuality                        # vision/quality.py
 from runtime import (CameraManager, FrameResult, StdoutTransport,
                      VisionSocketTransport, run_guarded, run_vision_loop)
@@ -70,6 +71,11 @@ def main():
     ap.add_argument("--user", default=os.getenv("USER_NAME", "guest"))
     ap.add_argument("--stdout", action="store_true")
     ap.add_argument("--preview", action="store_true")
+    ap.add_argument(
+        "--preview-diagnostics",
+        action="store_true",
+        help="preview에 얼굴/EAR 임계/blink/거리/좌우/calibration 진단 표시",
+    )
     ap.add_argument(
         "--debug-blink",
         action="store_true",
@@ -311,16 +317,39 @@ def main():
                 payloads.append(build(False))
 
             stop = False
-            if args.preview:
-                txt = (f"EAR {ear:.3f}  " if ear else "no face  ") + \
-                      (f"{dist_cm:.0f}cm  " if dist_cm
-                       else ("(고개 돌림)  " if detected and not frontal else "")) + \
-                      (f"blink {rate:.1f}/min" if rate is not None
-                       else f"blink 관측중 {counter.observed_sec(now):.0f}s")
-                if calib.is_calibrating():
-                    txt = f"CALIBRATING {calib.progress()*100:.0f}%  " + txt
-                cv2.putText(frame, txt, (12, 30), cv2.FONT_HERSHEY_SIMPLEX,
-                            0.6, (0, 255, 0), 2)
+            if args.preview or args.preview_diagnostics:
+                if args.preview_diagnostics:
+                    lines = diagnostic_lines(
+                        detected=detected,
+                        calibrating=calib.is_calibrating(),
+                        progress=calib.progress(),
+                        ear=ear,
+                        closed_threshold=counter.closed_threshold,
+                        open_threshold=counter.open_threshold,
+                        blink_rate=rate,
+                        observed_sec=counter.observed_sec(now),
+                        distance_cm=dist_cm,
+                        lean_direction=face_lean_direction,
+                    )
+                else:
+                    txt = (f"EAR {ear:.3f}  " if ear else "no face  ") + \
+                          (f"{dist_cm:.0f}cm  " if dist_cm
+                           else ("(고개 돌림)  " if detected and not frontal else "")) + \
+                          (f"blink {rate:.1f}/min" if rate is not None
+                           else f"blink 관측중 {counter.observed_sec(now):.0f}s")
+                    if calib.is_calibrating():
+                        txt = f"CALIBRATING {calib.progress()*100:.0f}%  " + txt
+                    lines = [txt]
+                for index, txt in enumerate(lines):
+                    cv2.putText(
+                        frame,
+                        txt,
+                        (12, 30 + index * 25),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (0, 255, 0),
+                        2,
+                    )
                 cv2.imshow("soma vision", frame)
                 if cv2.waitKey(1) & 0xFF == 27:      # ESC
                     stop = True

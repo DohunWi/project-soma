@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "feedback demo",
+  "description": "인증 사용자가 측정 OFF 상태에서만 요청하는 Nano 시연 명령. Fusion state, score, persistence와 분리됩니다.",
+  "type": "object",
+  "required": ["level"],
+  "additionalProperties": false,
+  "properties": {
+    "level": {
+      "enum": ["NORMAL", "NOTICE", "WARNING", "BREAK", "OFF"]
+    }
+  }
+}

@@ -24,7 +24,7 @@ def complete_calibration(calibrator, values, *, start=100.0, duration=3.0):
         calibrator.add_sample(sample(value), now=start + index * step)
 
 
-def test_sufficient_valid_open_samples_create_median_baseline(tmp_path):
+def test_sufficient_valid_open_samples_create_upper_quartile_baseline(tmp_path):
     path = tmp_path / "baseline.json"
     calibrator = Calibrator(
         path,
@@ -37,12 +37,12 @@ def test_sufficient_valid_open_samples_create_median_baseline(tmp_path):
 
     assert calibrator.is_done() is True
     assert calibrator.is_calibrating() is False
-    assert calibrator.open_ear_baseline() == pytest.approx(0.81)
+    assert calibrator.open_ear_baseline() == pytest.approx(0.82)
     assert calibrator.get_baseline()["open_ear_sample_count"] == 5
     assert path.exists()
 
 
-def test_natural_blink_outlier_does_not_pull_down_median(tmp_path):
+def test_natural_blink_outlier_does_not_pull_down_upper_quartile(tmp_path):
     calibrator = Calibrator(
         tmp_path / "baseline.json",
         min_valid_samples=7,
@@ -55,7 +55,7 @@ def test_natural_blink_outlier_does_not_pull_down_median(tmp_path):
         [0.80, 0.81, 0.79, 0.08, 0.82, 0.80, 0.81],
     )
 
-    assert calibrator.open_ear_baseline() == pytest.approx(0.80)
+    assert calibrator.open_ear_baseline() == pytest.approx(0.81)
 
 
 @pytest.mark.parametrize(
@@ -145,9 +145,24 @@ def test_baseline_json_save_and_load(tmp_path):
     saved = json.loads(path.read_text(encoding="utf-8"))
     loaded = Calibrator(path)
 
-    assert saved["open_ear_baseline"] == pytest.approx(0.80)
+    assert saved["open_ear_baseline"] == pytest.approx(0.825)
+    assert saved["open_ear_statistic"] == "p75"
     assert saved["open_ear_sample_count"] == 3
-    assert loaded.open_ear_baseline() == pytest.approx(0.80)
+    assert loaded.open_ear_baseline() == pytest.approx(0.825)
+
+
+def test_open_ear_upper_quartile_resists_blink_and_transition_contamination(tmp_path):
+    path = tmp_path / "baseline.json"
+    calibrator = Calibrator(path, min_valid_samples=20, duration_sec=1.0)
+    calibrator.start()
+    ears = [0.10] * 11 + [0.24] * 9
+    for index, ear in enumerate(ears):
+        calibrator.add_sample(sample(ear), now=10.0 + index / 19)
+
+    baseline = calibrator.open_ear_baseline()
+    assert baseline == pytest.approx(0.24)
+    # Existing ratio now places the measured natural-blink minimum below CLOSED.
+    assert 0.0532 < baseline * 0.225
 
 
 def test_legacy_baseline_without_open_ear_remains_usable_for_distance(tmp_path):
