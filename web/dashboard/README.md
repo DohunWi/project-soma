@@ -9,6 +9,16 @@ python -m http.server 5500 --directory web/dashboard
 # → http://127.0.0.1:5500
 ```
 
+실제 인증 Front의 측정 기록 화면에서는 다음 조회를 구분합니다.
+
+- `현재 측정 기록`: ACTIVE 세션의 최근 30분/60분을 조회합니다.
+- `저장된 세션`: Backend의 `/api/state/history/sessions` 목록에서 세션을 선택하고,
+  `/api/state/history/sessions/<session_id>`로 마지막 저장 시각 기준 30분/60분을 조회합니다.
+  Stop 후에도 로그인 상태에서 조회할 수 있습니다. 목록은 snapshot 기준이므로 현재 ACTIVE
+  세션도 포함될 수 있으며, 표시 시각은 실제 Start/Stop 시각이 아닙니다.
+- 저장 직후 목록이 비어 있으면 비동기 DB 저장이 끝난 뒤 `새로고침`을 누릅니다.
+  로그아웃/사용자 전환 시 이전 목록과 그래프는 비워집니다. Front는 Supabase DB를 직접 조회하지 않습니다.
+
 `.env` 의 `CORS_ALLOWED_ORIGINS` 에 `http://127.0.0.1:5500` 을 넣어야 소켓이 붙습니다.
 
 ## 이전 시안과 달라진 점
@@ -44,10 +54,27 @@ CDN 두 개(`socket.io`, `chart.js`)를 `vendor/` 로 내려받고 `<script src>
 `web/view/index.html`에 연결되어 있습니다. 최신 Backend (3d40f922 또는 호환 버전)가 필요합니다.
 
 ```powershell
-python -m http.server 5500 --bind 127.0.0.1 --directory C:\project-soma-front\web
+C:\project-soma\.venv-clean\Scripts\python.exe C:\project-soma-front\tools\serve_front.py
 # http://127.0.0.1:5500/view/index.html
 node --test web/tests/*.test.mjs
 ```
+
+이 명령은 반드시 `C:\project-soma-front\web`을 제공합니다. Backend checkout의
+`C:\project-soma\web`을 별도 HTTP server로 열면 Front 전용 최신 기능(예: 인증된
+Feedback Nano 수동 시연)이 반영되지 않을 수 있습니다.
+
+Backend는 별도 PowerShell에서 다음과 같이 실행합니다.
+
+```powershell
+cd C:\project-soma
+.\.venv-clean\Scripts\python.exe server\app.py
+```
+
+Front 개발 서버는 `127.0.0.1:5500`에만 바인딩하고 `web`을 문서 루트로 제공합니다.
+로그인 시작 주소는 `http://127.0.0.1:5500/view/login.html`입니다. Windows의 일반
+`python -m http.server`가 `.mjs`를 `text/plain`으로 응답하면 로그인과 측정 모듈이
+실행되지 않으므로, `.mjs`를 `text/javascript`로 고정하는 위 스크립트를 사용하세요.
+Front와 Backend 모두 해당 PowerShell 창에서 `Ctrl+C`로 종료합니다.
 
 Backend의 `CORS_ALLOWED_ORIGINS`에 위 Front origin을 허용하고 기존 Supabase Auth 설정을
 사용합니다. Backend URL은 기본 `http://<현재 페이지 hostname>:5000`이며,
@@ -69,7 +96,26 @@ HTTPS 페이지에서는 HTTPS Backend가 필요합니다. `file://`로 열지 �
 공개 `state`에는 `session_id`가 없습니다. phase gating, 연결 generation, cache 삭제,
 Socket.IO lifecycle 순서로 stale state를 완화하지만 payload 자체의 완전한 session 검증은 아닙니다.
 페이지 종료와 진행 중 REST 요청의 서버 처리 순서도 실제 네트워크에서 확인해야 합니다.
-기존 일간 리포트/fatigue_logs/History 조회 구조는 이번 작업에서 변경하지 않았습니다.
+
+측정 기록 화면은 Front에서 Supabase 테이블을 직접 읽지 않습니다. 예시 모드는 DB와 분리된
+정적 4시간 fixture입니다. 현재 측정 기록은 인증된 Backend `GET /api/state/history`로
+ACTIVE session의 최근 30분/60분을 조회하고, 저장된 세션은 목록·상세 API로 Stop 이후에도
+선택 조회합니다. 저장 세션의 30분/60분 구간은 마지막 snapshot 시각이 기준입니다.
+60분을 넘는 장기 집계/보고서는 제공하지 않습니다.
+
+카메라 설정은 브라우저 미리보기 전용입니다. 페이지 로드나 설정 진입만으로 카메라를 켜지
+않으며 측정 중에는 Python Vision과의 장치 충돌을 피하기 위해 테스트를 막습니다. 브라우저에서
+고른 장치는 Python Vision의 `WEBCAM_INDEX`를 변경하지 않습니다.
+
+Supabase Auth의 이메일 확인 redirect를 사용하려면 Supabase Dashboard의
+Authentication → URL Configuration → Redirect URLs에 다음 개발 URL을 허용하세요.
+
+```text
+http://127.0.0.1:5500/view/login.html
+```
+
+다른 hostname/port로 Front를 제공할 때는 그 origin의 `/view/login.html`도 별도로
+허용해야 합니다. Site URL을 `/`에만 두는 것으로는 이 Front의 confirmation UX가 완성되지 않습니다.
 
 브라우저 수동 검증: 로그인 → 준비 중 Stop → 다시 Start → READY/MEASURING → state/feedback,
 센서 중단으로 calibration timeout → 다시 준비, 로그인 만료/409/네트워크 장애,

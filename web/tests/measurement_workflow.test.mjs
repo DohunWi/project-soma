@@ -151,7 +151,7 @@ test('feedback is phase/session/transition gated; reason maps to non-medical tex
     assert.ok(feedbackPresentation(model, feedback()).persistent);
     assert.equal(feedbackPresentation(model, feedback(OLD)), null);
     assert.equal(feedbackPresentation(model, { ...feedback(), transition: false }), null);
-    assert.equal(feedbackPresentation(model, { ...feedback(), level: 'NORMAL' }), null);
+    assert.deepEqual(feedbackPresentation(model, { ...feedback(), level: 'NORMAL' }), { clear: true });
     for (const name of ['OFF', 'CALIBRATING', 'READY']) {
         assert.equal(feedbackPresentation({ ...model, phase: name }, feedback()), null);
     }
@@ -396,6 +396,8 @@ test('runtime feedback only accepts matching MEASURING transitions', () => {
     f.socket.fire('feedback', feedback(OLD));
     f.socket.fire('feedback', feedback());
     assert.equal(f.feedbacks.length, 1);
+    f.socket.fire('feedback', { ...feedback(), level: 'NORMAL' });
+    assert.deepEqual(f.feedbacks[1], { clear: true });
 });
 
 test('REST obtains current token, preserves options and never sends client user identity', async () => {

@@ -45,19 +45,48 @@ pip install -r requirements.txt -r <본인폴더>/requirements.txt
 
 ### 실행
 
-```bash
-python tools/demo/run_all.py          # 서버 + mock + 대시보드 (하드웨어 없이)
-python tools/demo/run_all.py --real   # 서버 + 의자 + 웹캠 + 대시보드
+> 인증 Front는 반드시 이 Front 작업본의 루트에서 실행합니다. Backend 저장소의
+> `C:\project-soma\web`은 별도 checkout의 정적 파일이므로 수동 Feedback API 연동을
+> 검증할 때 서버 루트로 사용하지 마세요.
+
+공식 일괄 실행은 **Backend 작업본**의 실행기를 사용합니다. 이 Front 작업본의 기존
+`tools/serve_front.py`를 재사용하며 `.mjs` MIME과 Supabase 인증 흐름을 유지합니다.
+
+```powershell
+Set-Location C:\project-soma
+& .\.venv-clean\Scripts\python.exe tools\demo\run_all.py `
+  --front-root C:\project-soma-front --mode demo --source-mode chair-only --mock
 ```
+
+Mock 없이 Backend/Front만 점검하려면 `--mock`을 생략합니다. all-source 소프트웨어 점검은
+`--source-mode all --mock`, 실제 Chair+Vision은 `--source-mode all --real`, Nano는 명시적으로
+`--nano --nano-port COM4`를 추가합니다(현재 포트 확인 필요). Chair/Nano 동시 실행은
+`--chair-port COM3`처럼 서로 다른 포트를 지정하세요. Normal은 `--mode normal`입니다.
+
+평소 작업 자세로 준비한 뒤 브라우저에서 로그인 → Start → Backend Calibration → READY →
+MEASURING 순서로 진행합니다. 측정을 자동으로 시작하거나 인증을 우회하지 않습니다. 종료는 Front Stop →
+Nano OFF 확인 → 실행기 터미널 Ctrl+C입니다. 포트/환경변수/실패 복구의 공식 절차는
+`C:\project-soma\README.md`의 실행 절을 따릅니다. `--check-only`는 프로세스 없이 점검합니다.
 
 낱개로 띄우려면:
 
 ```bash
 python server/app.py                              # 백엔드      :5000
-python -m http.server 5500 --directory web/dashboard   # 대시보드 :5500
+python tools/serve_front.py                       # 인증 Front  :5500
 python chair/bridge/bridge.py                     # 의자
 python vision/run.py --preview                    # 웹캠
 ```
+
+Front 개발 서버는 `web`을 문서 루트로 제공하므로 다음 주소를 사용합니다.
+
+- 로그인: `http://127.0.0.1:5500/view/login.html`
+- 회원가입: `http://127.0.0.1:5500/view/signup.html`
+- 대시보드: `http://127.0.0.1:5500/view/index.html`
+
+일반 `python -m http.server`는 Windows 환경에 따라 `.mjs`를 `text/plain`으로 제공해
+브라우저 ES module 로딩을 막을 수 있습니다. `tools/serve_front.py`는 `.mjs`를
+`text/javascript`로 고정하며 기본적으로 외부에 노출하지 않고 `127.0.0.1:5500`에만
+바인딩합니다. 서버는 실행 중인 PowerShell에서 `Ctrl+C`로 종료합니다.
 
 웹캠은 mediapipe 모델 파일(3.7MB)을 씁니다. 없으면 처음 실행할 때 내려받아
 `vision/models/` 에 캐시합니다. **발표 전에 미리 한 번 실행해 두세요** —

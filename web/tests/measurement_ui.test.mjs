@@ -16,32 +16,206 @@ const phase = (name, status = 'ACCEPTED') => ({ v: 1, t: 10,
 });
 
 // Tiny DOM/Chart doubles only: exercise the real inline wiring without a browser framework.
-function page() {
-    const nodes = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(([, id]) => [id, {
-        style: {}, innerText: '', classList: { add() {}, remove() {}, toggle() {} },
-        getContext: () => ({}), setAttribute() {}, addEventListener() {},
-    }]));
+function page({ mediaDevices } = {}) {
+    const eventHandlers = new Map();
+    const makeNode = () => ({
+        style: {}, innerText: '', textContent: '', hidden: false, disabled: false, value: '',
+        children: [], classList: { add() {}, remove() {}, toggle() {} },
+        getContext: () => ({}), setAttribute() {},
+        addEventListener(name, handler) { eventHandlers.set(name, handler); },
+        appendChild(child) { this.children.push(child); },
+        replaceChildren(...children) { this.children = children; },
+        play: async () => {},
+    });
+    const nodes = new Map([...html.matchAll(/\bid="([^"]+)"/g)].map(([, id]) => [id, makeNode()]));
+    const windowEvents = new Map();
     const charts = [];
+    const alerts = [];
+    let alertCloses = 0;
     const context = createContext({
         document: { getElementById: id => {
             assert.ok(nodes.has(id), `UI references missing element ${id}`); return nodes.get(id);
-        }, querySelectorAll: () => [], querySelector: () => ({ style: {} }) },
-        window: { addEventListener() {} }, navigator: {},
+        }, querySelectorAll: () => [], querySelector: () => makeNode(), createElement: () => makeNode() },
+        window: { addEventListener: (name, handler) => windowEvents.set(name, handler) },
+        navigator: { ...(mediaDevices ? { mediaDevices } : {}) },
         Chart: class { constructor(_ctx, config) { this.data = config.data; charts.push(this); } update() {} },
-        Swal: { close() {}, fire() {} },
+        Swal: { close() { alertCloses++; }, fire(options) { alerts.push(options); } },
     });
     runInContext(classic, context);
-    return { context, nodes, charts };
+    return { context, nodes, charts, windowEvents, eventHandlers, alerts,
+        alertCloses: () => alertCloses };
 }
 
 test('syntax: inline classic/module scripts and auth/runtime modules', () => {
     new Script(classic);
-    const sources = [moduleScript, ...['auth.js', 'measurement_phase.mjs', 'measurement_runtime.mjs'].map(
+    const sources = [moduleScript, ...[
+        'auth.js', 'auth_redirect.mjs', 'measurement_phase.mjs',
+        'measurement_runtime.mjs', 'measurement_history.mjs',
+    ].map(
         name => readFileSync(new URL(`../view/${name}`, import.meta.url), 'utf8'))];
     for (const source of sources) {
         const result = spawnSync(process.execPath, ['--input-type=module', '--check'], { input: source, encoding: 'utf8' });
         assert.equal(result.status, 0, result.stderr);
     }
+});
+
+test('ABSENT hides score and instantaneous metrics, adds no chart point, then recovers', () => {
+    const { context, nodes, charts } = page();
+    runInContext('isMeasuring = true', context);
+    runInContext(`updateDashboardUI({ state: "ABSENT", score: 73,
+        metrics: { balance: "LEFT", blink_rate: 3, face_distance_cm: 20, static_hold_sec: 99 } })`, context);
+    assert.equal(nodes.get('currentScore').innerText, '—');
+    assert.equal(nodes.get('val-balance').innerText, '—');
+    assert.equal(nodes.get('val-blink').innerText, '—');
+    assert.equal(charts[0].data.datasets[0].data.length, 0);
+    assert.equal(nodes.get('topStatusLabel').innerText, '자리 비움');
+    runInContext(`updateDashboardUI({ state: "NORMAL", score: 98,
+        metrics: { balance: "CENTER", blink_rate: 12, face_distance_cm: 60, static_hold_sec: 2 } })`, context);
+    assert.equal(nodes.get('currentScore').innerText, 98);
+    assert.equal(nodes.get('val-balance').innerText, '균형 (정상)');
+    assert.equal(charts[0].data.datasets[0].data.length, 1);
+});
+
+test('state description uses Backend reasons without guessing Phase C classifications', () => {
+    const { context, nodes } = page();
+    runInContext('isMeasuring = true', context);
+    runInContext('updateDashboardUI({ state: "DANGER", score: 90, reasons: ["imbalance"] })', context);
+    assert.match(nodes.get('posture-sub').innerText, /좌우 하중 차이/);
+    assert.doesNotMatch(nodes.get('posture-sub').innerText, /FACE_ONLY|BODY_FORWARD|장시간 정적/);
+});
+
+test('camera preview starts only on demand, stops on change/pagehide, and is blocked during measurement', async () => {
+    let opens = 0, stops = 0;
+    const listeners = new Map();
+    const stream = { getTracks: () => [{ stop: () => { stops++; } }],
+        getVideoTracks: () => [{ getSettings: () => ({ deviceId: 'cam-1' }), label: 'Camera 1' }] };
+    const mediaDevices = {
+        enumerateDevices: async () => [{ kind: 'videoinput', deviceId: 'cam-1', label: 'Camera 1' }],
+        getUserMedia: async () => { opens++; return stream; },
+        addEventListener: (name, handler) => listeners.set(name, handler),
+    };
+    const { context, nodes, windowEvents } = page({ mediaDevices });
+    assert.equal(opens, 0);
+    await context.startCameraTest();
+    assert.equal(opens, 1);
+    assert.equal(nodes.get('webcamPreview').hidden, false);
+    context.changeCamera('cam-2');
+    assert.equal(stops, 1);
+    await context.startCameraTest();
+    context.switchView('monitoring', { classList: { add() {} } });
+    assert.equal(stops, 2);
+    await context.startCameraTest();
+    windowEvents.get('pagehide')();
+    assert.equal(stops, 3);
+    context.window.measurementRuntime = { model: { phase: 'MEASURING', sessionId: SID, pendingAction: null } };
+    await context.startCameraTest();
+    assert.equal(opens, 3);
+    assert.match(nodes.get('camera-test-status').innerText, /측정 중/);
+});
+
+test('hardware-isolated feedback demo supports every level, OFF, and blocks during measurement', async () => {
+    const { context, nodes, alerts, alertCloses } = page();
+    const commands = [];
+    const model = { phase: 'OFF', sessionId: null, pendingAction: null };
+    context.window.measurementRuntime = { model, hasSession: () => true };
+    context.window.requestFeedbackDemo = async level => { commands.push(level); return true; };
+    for (const level of ['NORMAL', 'CAUTION', 'DANGER', 'BREAK']) {
+        assert.equal(await context.showTestFeedback(level), true);
+    }
+    assert.equal(alerts.length, 4);
+    assert.ok(alerts.every(alert => alert.title.startsWith('[테스트]')));
+    assert.ok(alerts.every(alert => alert.text.includes('실제 측정 결과가 아닙니다')));
+    assert.equal(alerts[0].timer, 5000);
+    assert.equal(alerts[1].timer, 5000);
+    assert.equal(alerts[2].timer, 5000);
+    assert.equal(alerts[3].timer, undefined);
+    assert.equal(alerts[3].showCloseButton, true);
+    await context.closeTestFeedback();
+    assert.deepEqual(commands,
+        ['NORMAL', 'OFF', 'CAUTION', 'OFF', 'DANGER', 'OFF', 'BREAK', 'OFF']);
+    assert.ok(alertCloses() >= 1);
+
+    model.phase = 'MEASURING'; model.sessionId = SID;
+    assert.equal(await context.showTestFeedback('CAUTION'), false);
+    assert.equal(alerts.length, 4);
+    assert.match(nodes.get('feedback-test-status').innerText, /측정.*사용할 수 없습니다/);
+});
+
+test('late didClose from replaced popup cannot turn off the current Nano demo', async () => {
+    const { context, alerts } = page();
+    const commands = [];
+    context.window.measurementRuntime = {
+        model: { phase: 'OFF', sessionId: null, pendingAction: null },
+        hasSession: () => true,
+    };
+    context.window.requestFeedbackDemo = async level => { commands.push(level); return true; };
+
+    assert.equal(await context.showTestFeedback('NORMAL'), true);
+    const oldDidClose = alerts[0].didClose;
+    assert.equal(await context.showTestFeedback('CAUTION'), true);
+    assert.deepEqual(commands, ['NORMAL', 'OFF', 'CAUTION']);
+
+    oldDidClose();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(commands, ['NORMAL', 'OFF', 'CAUTION']);
+
+    alerts[1].didClose();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(commands, ['NORMAL', 'OFF', 'CAUTION', 'OFF']);
+});
+
+test('rapid transitions serialize and retain only the latest requested popup state', async () => {
+    const { context, alerts } = page();
+    const commands = [];
+    let releaseOff;
+    context.window.measurementRuntime = {
+        model: { phase: 'OFF', sessionId: null, pendingAction: null },
+        hasSession: () => true,
+    };
+    context.window.requestFeedbackDemo = async level => {
+        commands.push(level);
+        if (level === 'OFF') await new Promise(resolve => { releaseOff = resolve; });
+        return true;
+    };
+
+    assert.equal(await context.showTestFeedback('NORMAL'), true);
+    const normalDidClose = alerts[0].didClose;
+    const caution = context.showTestFeedback('CAUTION');
+    await new Promise(resolve => setImmediate(resolve));
+    const danger = context.showTestFeedback('DANGER');
+    const breaking = context.showTestFeedback('BREAK');
+    assert.deepEqual(commands, ['NORMAL', 'OFF']);
+    releaseOff();
+
+    assert.equal(await caution, false);
+    assert.equal(await danger, false);
+    assert.equal(await breaking, true);
+    assert.deepEqual(commands, ['NORMAL', 'OFF', 'BREAK']);
+    assert.equal(alerts.at(-1).title, '[테스트] 휴식 권고 알림');
+
+    normalDidClose();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(commands, ['NORMAL', 'OFF', 'BREAK']);
+});
+
+test('measurement start owns demo cleanup and late popup close cannot send another OFF', async () => {
+    const { context, alerts } = page();
+    const actions = [];
+    context.window.measurementRuntime = {
+        model: { phase: 'OFF', sessionId: null, pendingAction: null },
+        hasSession: () => true,
+        start: async () => { actions.push('START'); return true; },
+    };
+    context.window.requestFeedbackDemo = async level => { actions.push(level); return true; };
+
+    assert.equal(await context.showTestFeedback('DANGER'), true);
+    const staleDidClose = alerts[0].didClose;
+    assert.equal(await context.startMeasurement(), true);
+    assert.deepEqual(actions, ['DANGER', 'OFF', 'START']);
+
+    staleDidClose();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(actions, ['DANGER', 'OFF', 'START']);
 });
 
 test('UI calibration clears previous score/cache/chart; READY needs no click; new state restores display', () => {
@@ -100,6 +274,9 @@ test('UI module wiring restores authenticated socket, start/phase/state/stop, an
                 connect() {}, disconnect() {},
             }; return socket;
         },
+        aggregateHistory: () => ({ points: [], durationMs: { NORMAL: 0, CAUTION: 0, DANGER: 0, ABSENT: 0 }, transitions: [], sampleCount: 0 }),
+        exampleHistoryPayload: () => ({ period: {}, states: [] }),
+        historyRequestUrl: () => 'http://backend.test/api/state/history',
     });
     runInContext(moduleScript.replace(/^\s*import .*;$/gm, ''), context);
     await Promise.resolve();

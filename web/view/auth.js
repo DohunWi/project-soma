@@ -3,6 +3,7 @@
 // ES module 이라 file:// 로 열면 import 가 막힙니다. http 서버로 띄우세요.
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 import { createAuthenticatedFetch } from "./measurement_runtime.mjs";
+import { confirmationRedirectUrl } from "./auth_redirect.mjs";
 
 const SUPABASE_URL = "https://dzkionspeweesqwlrxex.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR6a2lvbnNwZXdlZXNxd2xyeGV4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzNzkzNjAsImV4cCI6MjA5NDk1NTM2MH0.VoYhfIg7h1PGpm72NYPTe3sXGqk0pt54k_UCsNcQxVI";
@@ -32,7 +33,11 @@ export async function signup(email, password, confirmation) {
     }
     if (password !== confirmation) throw new Error("비밀번호가 일치하지 않습니다.");
 
-    const { data, error } = await supabase.auth.signUp({ email, password });
+    const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { emailRedirectTo: confirmationRedirectUrl() },
+    });
     if (error) throw error;
 
     // 이메일 인증이 꺼져 있으면 가입과 동시에 세션이 나옵니다
