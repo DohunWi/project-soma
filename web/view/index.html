@@ -524,7 +524,7 @@
                             예시 데이터, 현재 측정 기록 또는 저장된 세션을 선택해 주세요.
                         </p>
                     </div>
-                    <div class="feedback-card">
+                    <div class="feedback-card" hidden style="display:none">
                         <div class="feedback-icon">🌟</div>
                         <div class="feedback-text">
                             <h4>측정 기록 대기 중</h4>
@@ -944,18 +944,18 @@
             },
             "CAUTION": {
                 color: "var(--warn-color)", bg: "rgba(241, 196, 15, 0.1)",
-                ko: { label: "주의", msg: "관측 지표 변화", sub: "일부 작업 부하 지표가 변화했습니다.", topDetail: "현재 상태를 확인하고 잠깐 움직여보세요." },
-                en: { label: "Caution", msg: "Observed change", sub: "One or more workload indicators changed.", topDetail: "Check your current condition and move briefly." }
+                ko: { label: "주의", msg: "수치 변화 감지", sub: "현재 측정 지표를 확인해 주세요.", topDetail: "상태 지표의 변화가 관측되었습니다." },
+                en: { label: "Caution", msg: "Change detected", sub: "Please check the current measurements.", topDetail: "A change in state indicators has been observed." }
             },
             "DANGER": {
                 color: "var(--danger-color)", bg: "rgba(231, 76, 60, 0.1)",
-                ko: { label: "경고", msg: "관측 부하 누적", sub: "관측된 변화가 지속되고 있습니다.", topDetail: "작업을 잠시 멈추고 편하게 움직여보세요." },
-                en: { label: "Warning", msg: "Observed load accumulated", sub: "The observed change is continuing.", topDetail: "Pause your work and move comfortably." }
+                ko: { label: "위험", msg: "상태 변화 지속", sub: "현재 측정 지표를 확인하고 잠깐 쉬어보세요.", topDetail: "상태 지표의 변화가 지속되고 있습니다." },
+                en: { label: "Danger", msg: "State change sustained", sub: "Check the current measurements and consider a short break.", topDetail: "A change in state indicators is continuing." }
             },
             "ABSENT": {
                 color: "var(--neutral-color)", bg: "var(--card-bg)",
-                ko: { label: "자리 비움", msg: "사용자 없음", sub: "누적 지표 계산이 일시 정지됩니다.", topDetail: "자리에 돌아오면 분석을 재개합니다." },
-                en: { label: "Away", msg: "No user detected", sub: "Cumulative metrics are paused.", topDetail: "Analysis resumes when you return." }
+                ko: { label: "자리 비움", msg: "사용자 없음", sub: "자리 비움 · 착석하면 실시간 표시를 재개합니다.", topDetail: "착석하면 실시간 표시를 재개합니다." },
+                en: { label: "Away", msg: "No user detected", sub: "Away · Realtime display resumes when you sit down.", topDetail: "Realtime display resumes when you sit down." }
             },
             "UNKNOWN": {
                 color: "var(--text-main)", bg: "var(--card-bg)",
@@ -991,15 +991,16 @@
            ========================================= */
         // Socket/REST effects are installed by the module after Auth restoration.
         let presentationRevision = -1;
+        let activeFeedbackToast = null;
 
         function updateDashboardUI(data, appendChart = true) {
             if (!isMeasuring) return;
 
             const stateKey = data.state || "UNKNOWN";
+            const absent = stateKey === "ABSENT";
             const theme = STATE_MAP[stateKey] || STATE_MAP["UNKNOWN"];
             const textInfo = theme[currentLang] || theme.ko;
 
-            const absent = stateKey === "ABSENT";
             const currentScore = (!absent && data.score !== undefined) ? data.score : null;
             document.getElementById('currentScore').innerText = currentScore ?? "—";
             document.getElementById('scoreRing').style.borderColor = theme.color;
@@ -1078,11 +1079,15 @@
             },
         });
 
-        function presentFeedbackToast(message, { test = false, didClose } = {}) {
+        function presentFeedbackToast(message, { test = false, owner = 'manual', didClose } = {}) {
             if (message.clear) {
-                Swal.close();
+                const current = activeFeedbackToast;
+                activeFeedbackToast = null;
+                if (current?.message.persistent) Swal.close();
                 return;
             }
+            const toastOwner = { message, owner };
+            if (owner === 'runtime') activeFeedbackToast = toastOwner;
             Swal.fire({
                 toast: true, position: 'bottom-end', icon: message.icon,
                 title: test ? `[테스트] ${message.title}` : message.title,
@@ -1090,7 +1095,10 @@
                 showConfirmButton: false, showCloseButton: true,
                 timer: message.persistent ? undefined : 5000,
                 timerProgressBar: !message.persistent,
-                didClose,
+                didClose: () => {
+                    if (activeFeedbackToast === toastOwner) activeFeedbackToast = null;
+                    didClose?.();
+                },
             });
         }
 
@@ -1214,6 +1222,7 @@
                 realtimeChart.data.labels = [];
                 realtimeChart.data.datasets[0].data = [];
                 realtimeChart.update('none');
+                activeFeedbackToast = null;
                 Swal.close();
             }
             const pending = model.pendingAction;
@@ -1382,7 +1391,7 @@
                 updateDashboardUI(data);
             },
             onFeedback: message => {
-                presentFeedbackToast(message);
+                presentFeedbackToast(message, { owner: 'runtime' });
             },
         });
         window.measurementRuntime = runtime;

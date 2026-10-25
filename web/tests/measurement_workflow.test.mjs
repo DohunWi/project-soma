@@ -148,10 +148,11 @@ test('obsolete connection/request generations are ignored', () => {
 
 test('feedback is phase/session/transition gated; reason maps to non-medical text', () => {
     const model = active();
+    const recovery = { v: 1, t: 12, session_id: SID, level: 'NORMAL', transition: true };
     assert.ok(feedbackPresentation(model, feedback()).persistent);
     assert.equal(feedbackPresentation(model, feedback(OLD)), null);
     assert.equal(feedbackPresentation(model, { ...feedback(), transition: false }), null);
-    assert.deepEqual(feedbackPresentation(model, { ...feedback(), level: 'NORMAL' }), { clear: true });
+    assert.deepEqual(feedbackPresentation(model, recovery), { clear: true });
     for (const name of ['OFF', 'CALIBRATING', 'READY']) {
         assert.equal(feedbackPresentation({ ...model, phase: name }, feedback()), null);
     }
@@ -396,8 +397,42 @@ test('runtime feedback only accepts matching MEASURING transitions', () => {
     f.socket.fire('feedback', feedback(OLD));
     f.socket.fire('feedback', feedback());
     assert.equal(f.feedbacks.length, 1);
-    f.socket.fire('feedback', { ...feedback(), level: 'NORMAL' });
+    f.socket.fire('feedback', { v: 1, t: 12, session_id: SID, level: 'NORMAL', transition: true });
     assert.deepEqual(f.feedbacks[1], { clear: true });
+});
+
+test('NORMAL clear retains feedback session/generation/transition validation', () => {
+    const model = active();
+    const recovery = { v: 1, t: 12, session_id: SID, level: 'NORMAL', transition: true };
+    assert.deepEqual(feedbackPresentation(model, recovery), { clear: true });
+    assert.deepEqual(feedbackPresentation(model, { ...recovery, reason: 'ABSENT' }), { clear: true });
+    for (const event of [{ ...recovery, session_id: OLD }, { ...recovery, transition: false },
+        { ...recovery, t: NaN }, { ...recovery, reason: 'LOW_SCORE' }]) {
+        assert.equal(feedbackPresentation(model, event), null);
+    }
+    assert.equal(feedbackPresentation(model, recovery, -1), null);
+    assert.equal(feedbackPresentation(apply(model, 'STOP'), recovery), null);
+});
+
+test('feedback timestamp guard resets per session and rejects obsolete connection callbacks', async () => {
+    const f = fixture();
+    f.socket.fire('measurement_phase', phase('MEASURING'));
+    f.socket.fire('feedback', { ...feedback(), t: 100 });
+    await f.runtime.stop();
+    f.socket.fire('measurement_phase', phase('CALIBRATING', NEXT, 20));
+    f.socket.fire('measurement_phase', phase('MEASURING', NEXT, 21));
+    f.socket.fire('feedback', { ...feedback(NEXT), t: 10 });
+    assert.equal(f.feedbacks.length, 2);
+    f.socket.fire('feedback', { v: 1, t: 200, session_id: SID, level: 'NORMAL', transition: true });
+    assert.equal(f.feedbacks.length, 2);
+    const oldFeedback = f.socket.events.get('feedback')[0];
+    f.socket.fire('disconnect');
+    f.socket.fire('connect');
+    f.socket.fire('measurement_phase', phase('MEASURING', NEXT, 50));
+    f.socket.fire('feedback', { ...feedback(NEXT), t: 60 });
+    oldFeedback({ v: 1, t: 61, session_id: NEXT, level: 'NORMAL', transition: true });
+    oldFeedback({ ...feedback(NEXT), t: 62 });
+    assert.equal(f.feedbacks.length, 3);
 });
 
 test('REST obtains current token, preserves options and never sends client user identity', async () => {

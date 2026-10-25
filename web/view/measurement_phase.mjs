@@ -140,9 +140,11 @@ export function feedbackPresentation(state, event, generation = state.connection
     if (!canRenderState(state, generation) || event?.v !== 1 ||
         !Number.isFinite(event.t) || event.session_id !== state.sessionId ||
         event.transition !== true) return null;
-    // NORMAL is the Backend's explicit recovery transition. It clears a
-    // persistent BREAK toast without inventing a new user notification.
-    if (event.level === "NORMAL") return { clear: true };
+    if (event.level === "NORMAL") {
+        // Backend recovery has no reason; confirmed absence uses ABSENT.
+        // Both clear only the currently owned persistent feedback toast.
+        return event.reason === undefined || event.reason === "ABSENT" ? { clear: true } : null;
+    }
     const messages = {
         NOTICE: { icon: "warning", title: "수치 변화가 감지됐어요",
             text: "현재 상태를 확인하고 잠깐 움직여보세요." },
