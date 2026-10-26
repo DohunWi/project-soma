@@ -1,4 +1,6 @@
 import logging
+import threading
+import time
 
 from vision.runtime import (
     CameraManager,
@@ -109,13 +111,70 @@ def make_camera(clock, captures, **kwargs):
     return camera, factory
 
 
+def run_inline(task):
+    task()
+
+
 def make_transport(clock, socket):
     return VisionSocketTransport(
         socket,
         "http://backend.invalid:5000",
         "not-logged",
         monotonic=clock.monotonic,
+        background_start=run_inline,
     )
+
+
+class BlockingConnectSocket(FakeSocket):
+    def __init__(self):
+        super().__init__()
+        self.connect_started = threading.Event()
+        self.release_connect = threading.Event()
+        self.connect_finished = threading.Event()
+
+    def connect(self, url, auth=None, wait_timeout=None):
+        del url, auth, wait_timeout
+        self.connect_started.set()
+        self.release_connect.wait(timeout=2)
+        self.connect_finished.set()
+        raise ConnectionError("offline")
+
+
+def test_slow_connect_attempt_does_not_block_frame_processing():
+    clock = FakeClock()
+    socket = BlockingConnectSocket()
+    transport = VisionSocketTransport(
+        socket,
+        "http://backend.invalid:5000",
+        "not-logged",
+        monotonic=clock.monotonic,
+    )
+    camera, _ = make_camera(
+        clock,
+        [FakeCapture(reads=[(True, "a"), (True, "b")])],
+    )
+
+    started_at = time.monotonic()
+    transport.start()
+    assert socket.connect_started.wait(timeout=1)
+    stats = run_vision_loop(
+        camera,
+        lambda frame, now: FrameResult([{"frame": frame, "t": now}]),
+        transport,
+        wall_clock=clock.wall,
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
+        max_iterations=2,
+    )
+    elapsed = time.monotonic() - started_at
+
+    socket.release_connect.set()
+    assert socket.connect_finished.wait(timeout=1)
+    transport.close()
+
+    assert elapsed < 0.2
+    assert stats.processed_frames == 2
+    assert transport.dropped_payloads == 2
 
 
 def test_backend_unavailable_keeps_processing_and_drops_without_replay():

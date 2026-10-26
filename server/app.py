@@ -50,6 +50,7 @@ from server.config import (  # noqa: E402
 )
 from server.db_writer import DBWriter  # noqa: E402
 from server.feedback_coordinator import FeedbackCoordinator  # noqa: E402
+from server.feedback_device_projection import FeedbackDeviceProjector  # noqa: E402
 from server.measurement_sessions import (  # noqa: E402
     MeasurementInUse,
     MeasurementSessionRegistry,
@@ -328,6 +329,7 @@ def create_app(
     calibration_timer_factory=None,
     source_mode=None,
     debug_fusion=False,
+    feedback_device_monotonic=None,
     _skip_calibration_for_testing=False,
 ):
     if debug_fusion:
@@ -357,6 +359,8 @@ def create_app(
     feedback = feedback_coordinator or FeedbackCoordinator(
         feedback_config_for_mode(profile.name)
     )
+    feedback_device_projector = FeedbackDeviceProjector()
+    feedback_device_monotonic = feedback_device_monotonic or time.monotonic
     calibration = MeasurementCalibration(
         calibration_config,
         occupancy_min=OCCUPANCY_MIN,
@@ -399,6 +403,7 @@ def create_app(
     app.extensions["auth_verifier"] = verifier
     app.extensions["measurement_sessions"] = sessions
     app.extensions["feedback_coordinator"] = feedback
+    app.extensions["feedback_device_projector"] = feedback_device_projector
     app.extensions["measurement_calibration"] = calibration
     app.extensions["latest_device_feedback"] = latest_device_feedback
     app.extensions["debug_fusion"] = bool(debug_fusion)
@@ -442,6 +447,7 @@ def create_app(
             log.warning("feedback device OFF 전송 실패 (%s)", type(error).__name__)
 
     def reset_device_feedback():
+        feedback_device_projector.reset()
         with device_feedback_lock:
             latest_device_feedback["decision"] = None
         emit_device_off()
@@ -1119,18 +1125,24 @@ def create_app(
                 # Logical BREAK may remain latched during a break, but an
                 # unoccupied chair must always make the physical device OFF.
                 if decision["state"] == "ABSENT":
+                    feedback_device_projector.reset()
                     with device_feedback_lock:
                         was_active = latest_device_feedback["decision"] is not None
                         latest_device_feedback["decision"] = None
                     if was_active:
                         emit_device_off()
                 elif feedback_decision is not None:
-                    with device_feedback_lock:
-                        latest_device_feedback["decision"] = feedback_decision
                     try:
+                        device_decision = feedback_device_projector.project(
+                            feedback_decision,
+                            decision,
+                            feedback_device_monotonic(),
+                        )
+                        with device_feedback_lock:
+                            latest_device_feedback["decision"] = device_decision
                         socketio.emit(
                             "feedback_device",
-                            feedback_decision,
+                            device_decision,
                             to=FEEDBACK_DEVICE_ROOM,
                         )
                     except Exception as error:  # noqa: BLE001

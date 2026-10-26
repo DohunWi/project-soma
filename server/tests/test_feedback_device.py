@@ -42,14 +42,14 @@ def make_app(**kwargs):
     )
 
 
-def chair_payload(t=1000.0):
+def chair_payload(t=1000.0, pressure=None):
     return {
         "v": 1,
         "t": t,
         "source": "chair",
         "user_name": "device-test",
         "device_id": "chair-test",
-        "chair": {"pressure": [850, 850, 850, 850], "ir": [250]},
+        "chair": {"pressure": pressure or [850, 850, 850, 850], "ir": [250]},
     }
 
 
@@ -163,6 +163,102 @@ def test_new_start_and_device_reconnect_do_not_replay_old_alert():
     received = reconnect.get_received()
     assert [event for event in received if event["name"] == "feedback_device"] == []
     assert [event for event in received if event["name"] == "feedback_device_off"]
+
+
+def test_break_display_holds_three_seconds_then_nano_tracks_fusion_without_new_alert(
+    monkeypatch,
+):
+    class Clock:
+        value = 0.0
+
+        def __call__(self):
+            return self.value
+
+    clock = Clock()
+
+    def deterministic_fusion(state, sample, now, **_kwargs):
+        marker = sample["pressure"][0]
+        fusion_state = {
+            850: "DANGER",
+            851: "CAUTION",
+            852: "NORMAL",
+            0: "ABSENT",
+        }[marker]
+        return state, {
+            "v": 1,
+            "t": now,
+            "user_name": sample["user_name"],
+            "state": fusion_state,
+            "confidence": 1.0,
+            "score": 50 if fusion_state == "DANGER" else 80,
+            "reasons": [],
+            "metrics": {
+                "balance": "CENTER",
+                "seated": fusion_state != "ABSENT",
+                "static_hold_sec": 0.0,
+                "session_sec": 0.0,
+            },
+        }
+
+    monkeypatch.setattr("server.app.step", deterministic_fusion)
+    app, socketio = make_app(feedback_device_monotonic=clock)
+    producer = socketio.test_client(app, auth={"token": DEVICE_TOKEN})
+    user = socketio.test_client(app, auth={"token": USER_A_TOKEN})
+    device = socketio.test_client(
+        app,
+        auth={"token": DEVICE_TOKEN, "role": "feedback_device"},
+    )
+    device.get_received()
+    start(app)
+    device.get_received()
+
+    for elapsed in range(11):
+        clock.value = float(elapsed)
+        producer.emit("sensor_data", chair_payload(1000.0 + elapsed))
+    logical = named_events(user, "feedback")
+    physical = named_events(device, "feedback_device")
+    assert logical[-1]["level"] == physical[-1]["level"] == "BREAK"
+    assert logical[-1]["transition"] is physical[-1]["transition"] is True
+
+    clock.value = 12.9
+    producer.emit("sensor_data", chair_payload(1011.0, pressure=[851, 850, 850, 850]))
+    assert named_events(user, "feedback")[-1]["level"] == "BREAK"
+    held = named_events(device, "feedback_device")[-1]
+    assert held["level"] == "BREAK"
+    assert held["transition"] is False
+
+    clock.value = 13.0
+    producer.emit("sensor_data", chair_payload(1012.0, pressure=[851, 850, 850, 850]))
+    assert named_events(user, "feedback")[-1]["level"] == "BREAK"
+    notice = named_events(device, "feedback_device")[-1]
+    assert notice["level"] == "NOTICE"
+    assert notice["reason"] == "FUSION_CAUTION"
+    assert notice["transition"] is False
+
+    clock.value = 14.0
+    producer.emit("sensor_data", chair_payload(1013.0, pressure=[850, 850, 850, 850]))
+    warning = named_events(device, "feedback_device")[-1]
+    assert warning["level"] == "WARNING"
+    assert warning["transition"] is False
+
+    clock.value = 15.0
+    producer.emit("sensor_data", chair_payload(1014.0, pressure=[852, 850, 850, 850]))
+    normal = named_events(device, "feedback_device")[-1]
+    assert normal["level"] == "NORMAL"
+    assert normal["transition"] is False
+
+    reconnect = socketio.test_client(
+        app,
+        auth={"token": DEVICE_TOKEN, "role": "feedback_device"},
+    )
+    synchronized = named_events(reconnect, "feedback_device")[-1]
+    assert synchronized["level"] == "NORMAL"
+    assert synchronized["transition"] is False
+
+    clock.value = 15.1
+    producer.emit("sensor_data", chair_payload(1015.0, pressure=[0, 0, 0, 0]))
+    assert named_events(device, "feedback_device_off") == [{"v": 1}]
+    assert app.extensions["latest_device_feedback"]["decision"] is None
 
 
 def test_device_emit_failure_does_not_block_user_state_feedback_or_persistence():

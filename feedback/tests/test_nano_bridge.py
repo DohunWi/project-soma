@@ -114,6 +114,7 @@ class RecordingTransport:
     [
         ({"level": "NORMAL", "transition": False}, ["LEVEL,NORMAL"]),
         ({"level": "NOTICE", "transition": True}, ["LEVEL,NOTICE"]),
+        ({"level": "NOTICE", "transition": False}, ["LEVEL,NOTICE"]),
         (
             {"level": "WARNING", "transition": True},
             ["LEVEL,WARNING", "ALERT,WARNING"],

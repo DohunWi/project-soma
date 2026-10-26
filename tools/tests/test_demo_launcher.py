@@ -37,7 +37,9 @@ def test_modes_and_wall_clock_mock(configured, mode, source):
     assert env["SOMA_MODE"] == mode
     assert env["SERVER_HOST"] == "127.0.0.1"
     assert env["SERVER_PORT"] == "5000"
-    assert env["CORS_ALLOWED_ORIGINS"] == "http://127.0.0.1:5500"
+    assert env["CORS_ALLOWED_ORIGINS"] == (
+        "http://127.0.0.1:5500,http://127.0.0.1:5000"
+    )
     assert specs[0][1][-2:] == ["--source-mode", source]
     assert specs[1][1][-6:] == ["--speed", "1", "--hz", "1", "--source",
                               "chair" if source == "chair-only" else "all"]

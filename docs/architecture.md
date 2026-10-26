@@ -635,12 +635,20 @@ Fusion state가 `ABSENT`이면 Backend는 Nano cache를 비우고 `feedback_devi
 Feedback Policy도 확정 ABSENT에서 이전 seated interval의 BREAK latch를 해제하므로 자리 비움의
 물리 출력은 항상 OFF이고, 재착석한 새 seated interval은 현재 Fusion 상태에 맞는 LEVEL로 시작합니다.
 
+Logical BREAK latch와 Front 휴식 권고는 기존 session policy대로 유지하지만 Nano의 steady LED는
+device-only projection을 사용합니다. 최초 `BREAK transition=true`는 최소 3초간 `LEVEL,BREAK`와
+단 한 번의 `ALERT,BREAK`로 파란 LED/2회 진동을 표시합니다. 그 뒤 logical BREAK가 계속
+latch되어도 Nano LEVEL은 현재 Fusion state를 `NORMAL / NOTICE / WARNING`으로 투영하며
+`transition=false`로 보내므로 새 진동을 만들지 않습니다. `ABSENT`, measurement Stop 및 마지막
+owner disconnect의 `LEVEL,OFF`는 이 최소 표시시간보다 항상 우선합니다. 재연결은 마지막 투영
+LEVEL만 복원하고 과거 ALERT는 replay하지 않습니다.
+
 측정 OFF 상태의 수동 시연은 인증된 `POST /api/feedback/demo`와 별도
 `feedback_device_demo` event만 사용합니다. 이 경로는 Fusion, measurement state, score,
 feedback policy 및 DB persistence를 호출하지 않으며 ACTIVE measurement가 있으면 409로 거부합니다.
 Bridge는 마지막 LEVEL만 캐시하고 Nano의 `READY` 또는 serial 재연결 뒤 LEVEL만 재동기화합니다. ALERT는
-큐에 저장하거나 재연결 후 replay하지 않습니다. Backend 재연결 때도 server가 현재 logical
-decision 또는 OFF를 device 전용 socket에 다시 보내므로 현재 LEVEL을 복원할 수 있습니다.
+큐에 저장하거나 재연결 후 replay하지 않습니다. Backend 재연결 때도 server가 현재 physical
+projection decision 또는 OFF를 device 전용 socket에 다시 보내므로 현재 LEVEL을 복원할 수 있습니다.
 
 Nano bridge는 별도 optional process이며 serial/Socket.IO 연결 실패로 종료되지 않고
 backoff 후 재시도합니다. `tools/demo/run_all.py --nano`로 명시적으로 포함할 수 있고 Nano

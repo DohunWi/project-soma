@@ -63,7 +63,9 @@ def child_environment(args):
     env = os.environ.copy()
     env.update(SOMA_MODE=args.mode, SOMA_SOURCE_MODE=args.source_mode,
                SERVER_HOST="127.0.0.1", SERVER_PORT=str(BACKEND_PORT),
-               CORS_ALLOWED_ORIGINS=f"http://127.0.0.1:{args.web_port}",
+               CORS_ALLOWED_ORIGINS=(
+                   f"http://127.0.0.1:{args.web_port},http://127.0.0.1:{BACKEND_PORT}"
+               ),
                PYTHONUNBUFFERED="1")
     return env
 
