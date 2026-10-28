@@ -339,6 +339,27 @@
             background: #f9fafb;
         }
 
+        /* 정보 > 사용 매뉴얼 본문. Tailwind 기본 초기화로 사라진 제목·목록·표 모양을 되살립니다 */
+        .manual-content h3 { font-size: 1.15rem; font-weight: 700; color: #111827; margin: 0 0 4px; }
+        .manual-content h4 { font-size: 1.02rem; font-weight: 700; color: #1f2937; margin: 0 0 8px; }
+        .manual-content h5 { font-weight: 700; color: #374151; margin: 16px 0 4px; }
+        .manual-content section { margin-top: 22px; }
+        .manual-content p { margin: 6px 0; }
+        .manual-content ul { list-style: disc; padding-left: 1.3rem; margin: 4px 0; }
+        .manual-content ol { list-style: decimal; padding-left: 1.3rem; margin: 4px 0; }
+        .manual-content li { margin: 2px 0; }
+        .manual-content code { background: #eef2ff; color: #3730a3; padding: 1px 6px; border-radius: 4px; font-size: 0.9em; }
+        .manual-content .manual-flow,
+        .manual-content .manual-formula {
+            background: #fff; border: 1px solid #e5e7eb; border-radius: 6px;
+            padding: 10px 12px; font-weight: 700; color: #1f2937; overflow-x: auto;
+        }
+        .manual-content .manual-table { overflow-x: auto; margin: 8px 0; }
+        .manual-content table { width: 100%; border-collapse: collapse; background: #fff; font-size: 14px; }
+        .manual-content th,
+        .manual-content td { border: 1px solid #e5e7eb; padding: 8px 10px; text-align: left; vertical-align: top; }
+        .manual-content th { background: #f3f4f6; font-weight: 600; color: #374151; }
+
         .error-text {
             color: #e74c3c;
             font-size: 0.85rem;
@@ -621,14 +642,203 @@
                         </button>
                     </div>
                     <div id="manual-panel-demo" role="tabpanel" aria-labelledby="manual-tab-demo"
-                        class="bg-gray-50 border border-gray-200 rounded-md p-5 text-[15px] text-gray-700 leading-relaxed">
+                        class="manual-content bg-gray-50 border border-gray-200 rounded-md p-5 text-[15px] text-gray-700 leading-relaxed">
                         <!-- 시연 모드 매뉴얼 내용 -->
-                        <p class="text-gray-400">시연 모드 사용 방법을 여기에 작성합니다.</p>
+                        <h3>시연 모드 (DEMO)</h3>
+
+                        <section>
+                            <h4>1. 모드 개요</h4>
+                            <p>시연 모드는 Project SOMA의 자세 및 시각적 활동 모니터링 기능을 짧은 시간 안에 확인하기 위한 모드입니다.</p>
+                            <p>일반 모드와 동일한 센서 수집 및 데이터 처리 구조를 사용하지만, 상태 변화와 피드백 동작을 빠르게 확인할 수 있도록 별도의 시연용 분석 정책과 시간 조건을 적용합니다.</p>
+                            <p>시연 모드는 실제 센서를 연결하여 사용할 수 있으며, Mock 센서를 이용한 가상 데이터 실행도 지원합니다. <strong>DEMO/NORMAL 모드 선택과 Mock 센서 사용 여부는 서로 독립적인 설정입니다.</strong></p>
+                        </section>
+
+                        <section>
+                            <h4>2. 측정 진행 과정</h4>
+                            <ol>
+                                <li><strong>측정 시작:</strong> Frontend의 측정 시작 버튼을 누르면 시스템이 측정을 준비합니다.</li>
+                                <li><strong>CALIBRATING(보정):</strong> 착석 압력과 사용자별 시각적 특성 등 초기 기준값을 수집합니다.</li>
+                                <li><strong>READY(준비 완료):</strong> 보정이 완료되어 측정을 시작할 수 있는 상태입니다.</li>
+                                <li><strong>MEASURING(실시간 측정):</strong> READY 상태에서 측정을 시작하면 센서 데이터를 바탕으로 분석을 수행합니다.</li>
+                                <li><strong>측정 종료:</strong> Frontend에서 측정 중지를 누르면 측정이 종료됩니다.</li>
+                            </ol>
+                        </section>
+
+                        <section>
+                            <h4>3. 데이터 수집 및 분석</h4>
+                            <p>SOMA는 다음 네 가지 항목을 기반으로 사용자 상태를 분석합니다.</p>
+                            <div class="manual-table">
+                                <table>
+                                    <thead><tr><th>항목</th><th>분석 내용</th></tr></thead>
+                                    <tbody>
+                                        <tr><td>Static(정적 자세)</td><td>동일하거나 유사한 착석 자세가 지속되는 시간과 자세 변화</td></tr>
+                                        <tr><td>Balance(압력 균형)</td><td>FSR 4개 센서에서 측정한 착석 압력 분포</td></tr>
+                                        <tr><td>Blink(눈 깜빡임)</td><td>EAR(눈 종횡비) 기반 눈 깜빡임 횟수 및 빈도</td></tr>
+                                        <tr><td>Distance(거리)</td><td>보정된 기준과 비교한 사용자·화면 간 상대적인 거리 변화</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p>Chair의 압력·IR 센서 데이터는 약 1초 간격으로 전달되며, Vision은 Webcam에서 얻은 눈과 얼굴의 특징을 분석합니다.</p>
+                            <p>Blink Rate(눈 깜빡임 빈도)는 최근 60초 동안 검출된 눈 깜빡임을 기준으로 계산합니다.</p>
+                        </section>
+
+                        <section>
+                            <h4>4. SOMA Score 계산</h4>
+                            <p>SOMA Score는 100점에서 시작하며, 각 분석 항목에서 발생한 감점을 합산하여 산출합니다.</p>
+                            <p class="manual-formula">SOMA Score = 100 − (Static + Balance + Blink + Distance 감점)</p>
+                            <p>최종 점수는 0~100 범위로 제한됩니다.</p>
+                            <p>시연 모드에서는 각 감점과 상태 판단에 시연용 정책을 적용하므로, 일반 모드보다 짧은 시간에 상태 변화와 피드백 동작을 확인할 수 있습니다.</p>
+                        </section>
+
+                        <section>
+                            <h4>5. 상태 판정 및 피드백</h4>
+                            <div class="manual-table">
+                                <table>
+                                    <thead><tr><th>구분</th><th>의미</th><th>주요 피드백</th></tr></thead>
+                                    <tbody>
+                                        <tr><td>NORMAL</td><td>정상적인 관측 상태</td><td>녹색 LED</td></tr>
+                                        <tr><td>CAUTION</td><td>주의 조건 충족</td><td>주황색 계열 알림</td></tr>
+                                        <tr><td>DANGER</td><td>경고 조건 충족</td><td>적색 LED 및 경고</td></tr>
+                                        <tr><td>ABSENT</td><td>사용자 이석 감지</td><td>측정 상태에 따른 표시 및 LED 제어</td></tr>
+                                        <tr><td>BREAK</td><td>휴식 권고 조건 충족</td><td>파란색 LED 및 진동</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p><strong>SOMA Score와 State(상태)는 별도의 정책으로 결정됩니다.</strong> 점수가 특정 수치에 도달했다는 이유만으로 반드시 CAUTION이나 DANGER가 발생하는 것은 아닙니다.</p>
+                            <p>또한 BREAK는 NORMAL·CAUTION·DANGER와 동일한 종류의 분석 상태가 아니라, 별도의 휴식 권고 피드백입니다.</p>
+                        </section>
+
+                        <section>
+                            <h4>6. 시연 모드의 해석상 주의사항</h4>
+                            <p>시연 모드의 시간 조건과 상태 변화는 기능 검증 및 발표를 위한 설정입니다.</p>
+                            <p>따라서 DEMO 모드에서 계산된 점수나 경고 발생 시간을 실제 사용 환경의 피로 누적 속도와 동일하게 해석해서는 안 됩니다.</p>
+                        </section>
                     </div>
                     <div id="manual-panel-real" role="tabpanel" aria-labelledby="manual-tab-real" hidden
-                        class="bg-gray-50 border border-gray-200 rounded-md p-5 text-[15px] text-gray-700 leading-relaxed">
+                        class="manual-content bg-gray-50 border border-gray-200 rounded-md p-5 text-[15px] text-gray-700 leading-relaxed">
                         <!-- 실제 모드 매뉴얼 내용 -->
-                        <p class="text-gray-400">실제 모드 사용 방법을 여기에 작성합니다.</p>
+                        <h3>실제 모드 (NORMAL)</h3>
+
+                        <section>
+                            <h4>1. 모드 개요</h4>
+                            <p>실제 모드는 사용자의 착석 상태와 시각적 활동 관련 신호를 장시간 수집하고, 시간에 따른 부담 요소를 분석하는 모드입니다.</p>
+                            <p>Chair의 FSR 압력 센서 4개와 IR 거리 센서, Webcam 기반 Vision 데이터를 종합하여 SOMA Score 및 사용자 상태를 실시간으로 산출합니다.</p>
+                        </section>
+
+                        <section>
+                            <h4>2. 측정 진행 과정</h4>
+                            <p class="manual-flow">측정 시작 → CALIBRATING → READY → MEASURING → 측정 종료</p>
+                            <p>측정 시작 후 초기 보정을 수행하며, READY 상태에서 측정을 시작하면 실시간 분석이 진행됩니다.</p>
+                            <p>측정 도중 사용자가 자리를 비우면 ABSENT 상태로 처리하며, 재착석 시에는 새로운 착석 구간에 맞는 기준으로 측정을 재개합니다.</p>
+                        </section>
+
+                        <section>
+                            <h4>3. 데이터 수집 및 처리 주기</h4>
+                            <div class="manual-table">
+                                <table>
+                                    <thead><tr><th>데이터</th><th>수집·분석 기준</th></tr></thead>
+                                    <tbody>
+                                        <tr><td>Chair 압력 센서</td><td>FSR 4개, 약 1초 간격</td></tr>
+                                        <tr><td>Chair IR</td><td>거리값(mm) 측정</td></tr>
+                                        <tr><td>Vision</td><td>Webcam 기반 얼굴·눈 특징 추출</td></tr>
+                                        <tr><td>Blink Rate</td><td>최근 60초의 눈 깜빡임 횟수</td></tr>
+                                        <tr><td>Sensor Fusion</td><td>수신된 최신 유효 센서 데이터를 통합</td></tr>
+                                        <tr><td>Score·State</td><td>센서 데이터 및 정책의 시간 조건에 따라 갱신</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p>Vision 데이터의 신뢰도가 충분하지 않은 경우 해당 값을 무조건 감점에 사용하지 않고, 측정 유효성 조건에 따라 판단을 보류하거나 기존 분석 상태를 유지합니다.</p>
+                        </section>
+
+                        <section>
+                            <h4>4. SOMA Score 계산 방식</h4>
+                            <p>초기 SOMA Score는 100점이며, 다음 네 가지 분석 항목에서 발생한 감점을 합산합니다.</p>
+                            <p class="manual-formula">SOMA Score = max(0, min(100, round(100 − Static − Balance − Blink − Distance)))</p>
+
+                            <h5>① Static — 정적 자세 누적 부담</h5>
+                            <ul>
+                                <li>장시간 유사한 착석 자세를 유지할 때 누적 부담을 평가합니다.</li>
+                                <li>초기 유예시간은 300초(5분)입니다.</li>
+                                <li><code>cumulative-v2</code> 정책을 적용합니다.</li>
+                                <li>자세를 잠시 변경하더라도 누적된 정적 자세 부담이 즉시 전부 초기화되지는 않습니다.</li>
+                                <li>누적 감점 약 10점에서 Static 관련 CAUTION 조건, 약 20점에서 DANGER 조건에 도달할 수 있습니다.</li>
+                            </ul>
+
+                            <h5>② Balance — 착석 압력 불균형</h5>
+                            <ul>
+                                <li>좌전·우전·좌후·우후의 FSR 센서값을 분석합니다.</li>
+                                <li>압력 분포의 불균형과 지속 여부를 평가합니다.</li>
+                                <li>유효한 착석 압력 데이터와 정책 조건을 만족할 때 감점에 반영합니다.</li>
+                            </ul>
+
+                            <h5>③ Blink — 눈 깜빡임 감소</h5>
+                            <ul>
+                                <li>Webcam으로 검출한 눈 특징점에서 EAR(Eye Aspect Ratio, 눈 종횡비)을 계산합니다.</li>
+                                <li>사용자별 EAR 기준을 보정하여 눈 감음과 뜸을 구분합니다.</li>
+                                <li>최근 60초의 Blink Rate를 계산합니다.</li>
+                                <li>분당 8회 미만의 낮은 눈 깜빡임 빈도가 지속되면 감점 조건을 평가합니다.</li>
+                                <li>저빈도 상태가 300초 지속되면 CAUTION, 900초 지속되면 DANGER 관련 조건을 평가합니다.</li>
+                                <li>분당 11회 이상으로 회복하면 Blink 감점 회복 조건을 적용합니다.</li>
+                            </ul>
+
+                            <h5>④ Distance — 거리 변화</h5>
+                            <ul>
+                                <li>Webcam 기반 얼굴 거리와 Chair IR 측정값을 활용합니다.</li>
+                                <li>초기 보정 기준에 대한 상대적인 거리 변화를 평가합니다.</li>
+                                <li>얼굴 방향이 크게 바뀌거나 거리 측정 신뢰도가 낮은 구간에서는 잘못된 감점을 방지하기 위해 판단을 보류할 수 있습니다.</li>
+                            </ul>
+                        </section>
+
+                        <section>
+                            <h4>5. 상태 판정</h4>
+                            <p>SOMA는 Score와 별도로 각 분석 항목의 조건 및 지속시간을 고려하여 상태를 판정합니다.</p>
+                            <div class="manual-table">
+                                <table>
+                                    <thead><tr><th>상태</th><th>의미</th></tr></thead>
+                                    <tbody>
+                                        <tr><td>NORMAL</td><td>정상적인 분석 상태</td></tr>
+                                        <tr><td>CAUTION</td><td>주의가 필요한 분석 조건이 충족된 상태</td></tr>
+                                        <tr><td>DANGER</td><td>경고가 필요한 분석 조건이 충족된 상태</td></tr>
+                                        <tr><td>ABSENT</td><td>사용자의 이석이 감지된 상태</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p><strong>상태는 Score의 단순한 구간 분류가 아닙니다.</strong></p>
+                            <p>예를 들어 R25 실측에서 Static 감점이 약 10점에 도달했을 때 CAUTION, 약 20점에 도달했을 때 DANGER로 전환됐습니다. 이는 Static 정책 조건에 따른 결과이며, 모든 경우에 Score 90점과 80점이 상태 전환 기준이 되는 것은 아닙니다.</p>
+                        </section>
+
+                        <section>
+                            <h4>6. 휴식 권고 및 하드웨어 피드백</h4>
+                            <p>SOMA는 분석 상태에 따라 Frontend 표시와 Nano의 LED·진동 피드백을 제공합니다.</p>
+                            <div class="manual-table">
+                                <table>
+                                    <thead><tr><th>상태·피드백</th><th>동작</th></tr></thead>
+                                    <tbody>
+                                        <tr><td>NORMAL</td><td>녹색 LED</td></tr>
+                                        <tr><td>CAUTION</td><td>주의 알림 및 NOTICE 피드백</td></tr>
+                                        <tr><td>DANGER</td><td>경고 알림 및 WARNING 피드백</td></tr>
+                                        <tr><td>BREAK</td><td>휴식 권고 및 별도의 LED·진동 패턴</td></tr>
+                                        <tr><td>ABSENT</td><td>이석 상태에 따른 LED 제어</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p>휴식 권고 정책은 다음과 같은 조건을 고려합니다.</p>
+                            <ul>
+                                <li>DANGER 상태가 60초 이상 지속</li>
+                                <li>SOMA Score 60점 이하가 120초 이상 지속</li>
+                                <li>연속 사용시간이 3,000초(50분)에 도달</li>
+                                <li>180초 이상의 유효 휴식 여부</li>
+                                <li>휴식 권고 후 900초의 재알림 제한시간</li>
+                            </ul>
+                            <p>각 조건은 측정 세션 상태와 우선순위에 따라 적용됩니다. 위 조건이 충족되더라도 다른 정책 조건에 따라 실제 알림 시점이 달라질 수 있습니다.</p>
+                        </section>
+
+                        <section>
+                            <h4>7. 측정 결과 및 해석</h4>
+                            <p>측정이 종료되면 저장된 기록을 Dashboard와 Session Report에서 확인할 수 있습니다.</p>
+                            <p>SOMA Score는 자세 및 시각적 활동과 관련된 센서 신호를 기반으로 계산한 시스템 내부 지표입니다.</p>
+                            <p><strong>SOMA는 의학적 피로도 진단이나 질병 판정을 목적으로 하지 않으며</strong>, 측정된 상태는 사용자에게 휴식과 자세 변화를 안내하기 위한 참고 정보로 활용됩니다.</p>
+                        </section>
                     </div>
                 </div>
             </section>
