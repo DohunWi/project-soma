@@ -43,9 +43,40 @@ def test_정상_payload가_계약을_통과한다():
                         blink=True, blink_rate=8.4, blink_count=8, window_sec=57.1,
                         blink_duration_ms=142.0, face_distance_cm=48.2,
                         face_distance_baseline_cm=60.0, blink_rate_baseline=15.2,
+                        ear_threshold_mode="personalized",
+                        open_ear_baseline=0.244899,
+                        ear_calibration_status="loaded_personalized",
                         detect_rate=0.97, yaw_dropped_rate=0.08, calibrating=False)
     assert errors(ev) == []
     assert ev["source"] == "vision" and ev["v"] == 1
+    assert ev["vision"]["ear_threshold_mode"] == "personalized"
+    assert ev["vision"]["open_ear_baseline"] == pytest.approx(0.244899)
+
+
+def test_fallback_threshold_diagnostic_omits_unusable_open_baseline():
+    ev = vision_payload(
+        t=1000.0,
+        user_name="g",
+        face_detected=True,
+        ear_threshold_mode="fallback",
+        open_ear_baseline=None,
+        ear_calibration_status="calibration_failed_fallback",
+    )
+
+    assert errors(ev) == []
+    assert ev["vision"]["ear_threshold_mode"] == "fallback"
+    assert "open_ear_baseline" not in ev["vision"]
+    assert ev["vision"]["ear_calibration_status"] == "calibration_failed_fallback"
+
+
+def test_invalid_threshold_mode_is_rejected_before_transport():
+    with pytest.raises(ValueError, match="ear_threshold_mode"):
+        vision_payload(
+            t=1000.0,
+            user_name="g",
+            face_detected=True,
+            ear_threshold_mode="guessed",
+        )
 
 
 def test_얼굴이_없으면_거리키를_생략한다():
@@ -93,3 +124,32 @@ def test_캘리브레이션_중임을_알린다():
     ev = vision_payload(t=1000.0, user_name="g", face_detected=True, calibrating=True)
     assert ev["vision"]["calibrating"] is True
     assert errors(ev) == []
+
+
+def test_lateral_observations_are_additive_and_unavailable_values_are_omitted():
+    available = vision_payload(
+        t=1000.0,
+        user_name="g",
+        face_detected=True,
+        face_lateral_offset=-0.125,
+        head_roll_deg=2.5,
+        head_roll_delta_deg=1.0,
+        face_lateral_calibrated=True,
+        face_lean_direction="LEFT",
+    )
+    unavailable = vision_payload(
+        t=1001.0,
+        user_name="g",
+        face_detected=False,
+        face_lateral_calibrated=False,
+        face_lean_direction="UNKNOWN",
+    )
+
+    assert errors(available) == []
+    assert available["vision"]["face_lateral_offset"] == -0.125
+    assert available["vision"]["head_roll_deg"] == 2.5
+    assert available["vision"]["face_lean_direction"] == "LEFT"
+    assert errors(unavailable) == []
+    assert unavailable["vision"]["face_lateral_calibrated"] is False
+    assert unavailable["vision"]["face_lean_direction"] == "UNKNOWN"
+    assert "face_lateral_offset" not in unavailable["vision"]

@@ -37,3 +37,100 @@ Service Worker + Notification API 를 씁니다.
 
 CDN 두 개(`socket.io`, `chart.js`)를 `vendor/` 로 내려받고 `<script src>` 를 로컬 경로로 바꾸세요.
 발표장 네트워크가 막히면 화면이 통째로 깨집니다. `web/dependencies.txt` 참조.
+
+## 메인 Front 인증/측정 화면 (`web/view/index.html`)
+
+위 `web/dashboard`는 별도 간이 화면입니다. 인증과 Phase C 측정 lifecycle은
+`web/view/index.html`에 연결되어 있습니다. 최신 Backend (3d40f922 또는 호환 버전)가 필요합니다.
+
+```powershell
+cd C:\project-soma\web
+& C:\project-soma\.venv-clean\Scripts\python.exe -c "import http.server as h; h.SimpleHTTPRequestHandler.extensions_map.update({'.js':'text/javascript','.mjs':'text/javascript'}); h.test(HandlerClass=h.SimpleHTTPRequestHandler,port=5500,bind='127.0.0.1')"
+# http://127.0.0.1:5500/view/index.html
+node --test web/tests/*.test.mjs
+```
+
+Backend는 별도 PowerShell에서 다음과 같이 실행합니다.
+
+```powershell
+cd C:\project-soma
+.\.venv-clean\Scripts\python.exe server\app.py
+```
+
+Front 개발 서버는 `127.0.0.1:5500`에만 바인딩하고 `web`을 문서 루트로 제공합니다.
+로그인 시작 주소는 `http://127.0.0.1:5500/view/login.html`입니다. Windows의 일반
+`python -m http.server`가 `.mjs`를 `text/plain`으로 응답하면 로그인과 측정 모듈이
+실행되지 않으므로, `.mjs`를 `text/javascript`로 고정하는 위 명령을 사용하세요.
+Front와 Backend 모두 해당 PowerShell 창에서 `Ctrl+C`로 종료합니다.
+
+Backend의 `CORS_ALLOWED_ORIGINS`에 위 Front origin을 허용하고 기존 Supabase Auth 설정을
+사용합니다. Backend URL은 기본 `http://<현재 페이지 hostname>:5000`이며,
+배포 환경에서는 페이지 모듈 실행 전에 `window.SOMA_BACKEND_URL`로 지정할 수 있습니다.
+HTTPS 페이지에서는 HTTPS Backend가 필요합니다. `file://`로 열지 마세요.
+
+- 로그인 복원 후 사용자 access token으로 소켓 연결합니다. 페이지 로드 시 자동 Start는 없습니다.
+- REST Start 응답은 session identity만 확정합니다. `measurement_phase`가 실제 phase 기준입니다.
+- `CALIBRATING`: 정상 작업 자세 안내, 점수 `—`, 이전 현재-session 차트/cache 삭제, Stop 가능.
+- `READY`: 클릭/대기 타이머 없이 `MEASURING`으로 자동 전환되는 이벤트를 기다립니다.
+- `MEASURING`: 첫 `state` 전에는 데이터 수신 대기, 이후 기존 점수/카드를 표시합니다.
+- `CALIBRATING + FAILED`: 센서 연결 확인 안내. 다시 준비는 **성공한 Stop → 새 Start**입니다.
+- Start/Stop 요청은 직렬화합니다. 시작 요청 중 Stop을 눌러도 뒤늦은 응답이 표시를 재개하지 않습니다.
+- 토큰 갱신은 REST 및 다음 소켓 handshake에 반영하며 건강한 소켓을 끊지 않습니다.
+- 연결 종료/사용자 변경은 표시를 비웁니다. 재연결 시 Backend phase snapshot이 있으면 동기화하고,
+  마지막 owner 종료로 세션이 정리됐으면 OFF로 남아 Start를 다시 눌러야 합니다.
+- Feedback은 현재 MEASURING session의 논리적 level/reason/transition을 기존 toast에 표시합니다.
+
+공개 `state`에는 `session_id`가 없습니다. phase gating, 연결 generation, cache 삭제,
+Socket.IO lifecycle 순서로 stale state를 완화하지만 payload 자체의 완전한 session 검증은 아닙니다.
+페이지 종료와 진행 중 REST 요청의 서버 처리 순서도 실제 네트워크에서 확인해야 합니다.
+
+### 상단 최근 5분 Score 그래프
+
+- `MEASURING`에서 수신한 유효 `state.score`만 메모리에 기록합니다. `state.t`(Unix 측정 시각)를
+  사용하며 수신 시각으로 바꾸지 않습니다. MEASURING phase 시각보다 오래된 이벤트는 제외하므로
+  센서와 Backend의 시계가 맞아야 합니다. 기존 lifecycle/connection generation 가드를 유지합니다.
+- 최근 5분은 마지막 수신 측정 시각 기준이며, 30초/1분의 시계 구간별 표본 산술 평균입니다.
+  첫·마지막 구간은 부분 구간일 수 있습니다. timestamp 중복은 처음 한 건만 반영하고, 순서가
+  뒤바뀐 표본도 창 안에 있으면 반영합니다. 빈 구간은 `null`로 선을 끊고 0점으로 채우지 않습니다.
+- ABSENT는 기존처럼 점수를 추가하지 않지만 시간 창은 전진합니다. Stop/OFF에는 마지막 그래프를
+  유지하고, 새 Start/새 session/사용자 변경에는 초기화합니다. 새로고침 후 복원하지 않으며 안내를
+  표시합니다. 하단 Supabase 기반 저장 기록 조회와 별개의 데이터입니다.
+- 상단 `예시 데이터`는 `realtime_score.mjs`의 고정 5분/11표본 fixture입니다. 1분 선택도 동일
+  원본에서 평균을 계산합니다. 실제 버퍼·상태·알림·DB에는 주입하지 않으며 하단 4시간 예시와
+  별개입니다. 측정 준비를 새로 시작하면 상단은 `실제 측정`으로 전환됩니다.
+
+측정 기록 화면은 Front에서 Supabase 테이블을 직접 읽지 않습니다. 예시 모드는 DB와 분리된
+정적 4시간 fixture이고, 실제 모드는 인증된 Backend `GET /api/state/history`가 지원하는
+현재 ACTIVE session의 최근 30분/60분을 표시합니다. 측정 종료/OFF에서는
+`GET /api/state/history/sessions` 목록의 가장 최근 저장 session을 기본 선택하고,
+`GET /api/state/history/sessions/<session_id>`로 조회합니다. 과거 30/60분의 끝은 현재 시간이
+아니라 선택 session의 `last_measured_at`입니다. 첫/마지막 시각은 실제 Start/Stop 시각이
+아닌 snapshot 범위입니다. 기록 없음, ACTIVE 없음, 인증 오류, DB 장애를 구분하며 비동기
+저장이 아직 끝나지 않은 경우 새로고침하세요. 상태 비율은 snapshot 사이의 관측 시간으로
+집계하며 긴 gap을 정상으로 채우지 않습니다. 4시간 실제 기록/장기 보고서는 구현하지 않습니다.
+
+현재 Back checkout의 `web/view/`가 최신 Front 원본입니다. `web/` 루트의 동명 파일은
+동일 내용을 유지하는 배포용 복사본이며 테스트에서 두 경로의 일치를 검증합니다.
+이 버전을 실행할 때는 `C:\project-soma\web`을 문서 루트로 제공하고
+`http://127.0.0.1:5500/view/index.html`을 엽니다. 별도 `C:\project-soma-front`의
+31094ee checkout은 이전 버전이므로 이번 변경을 포함하지 않습니다.
+
+카메라 설정은 브라우저 미리보기 전용입니다. 페이지 로드나 설정 진입만으로 카메라를 켜지
+않으며 측정 중에는 Python Vision과의 장치 충돌을 피하기 위해 테스트를 막습니다. 브라우저에서
+고른 장치는 Python Vision의 `WEBCAM_INDEX`를 변경하지 않습니다.
+
+Supabase Auth의 이메일 확인 redirect를 사용하려면 Supabase Dashboard의
+Authentication → URL Configuration → Redirect URLs에 다음 개발 URL을 허용하세요.
+
+```text
+http://127.0.0.1:5500/view/login.html
+```
+
+다른 hostname/port로 Front를 제공할 때는 그 origin의 `/view/login.html`도 별도로
+허용해야 합니다. Site URL을 `/`에만 두는 것으로는 이 Front의 confirmation UX가 완성되지 않습니다.
+
+브라우저 수동 검증: 로그인 → 준비 중 Stop → 다시 Start → READY/MEASURING → state/feedback,
+센서 중단으로 calibration timeout → 다시 준비, 로그인 만료/409/네트워크 장애,
+같은 사용자 두 탭/마지막 탭 refresh, token refresh 시 불필요한 disconnect 없는지 확인하세요.
+Backend mock을 쓸 때 calibration은 wall-clock 기준이므로 `--speed 1`과 Chair + Vision을 사용하세요.
+브라우저 웹캠 미리보기 자체는 Backend Vision producer가 아닙니다.

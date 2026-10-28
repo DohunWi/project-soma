@@ -1,0 +1,2061 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project-Soma: 스마트 자세 교정 대시보드</title>
+
+    <!-- 외부 라이브러리 및 폰트 -->
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap"
+        rel="stylesheet">
+    <style>
+        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Socket.IO 및 알림(SweetAlert2) 라이브러리 -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+
+    <style>
+        /* 기본 리셋 및 레이아웃 */
+        body {
+            font-family: 'Pretendard', 'Noto Sans KR', sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f7f6;
+            color: #333;
+        }
+
+        .app-container {
+            display: flex;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* 좌측 사이드바 */
+        .sidebar {
+            width: 240px;
+            background-color: #ffffff;
+            border-right: 1px solid #e5e7eb;
+            padding: 20px 10px;
+            display: flex;
+            flex-direction: column;
+            z-index: 10;
+        }
+
+        .sidebar-logo {
+            padding: 10px 20px;
+            font-weight: bold;
+            font-size: 1.2rem;
+            margin-bottom: 20px;
+            color: #2c3e50;
+        }
+
+        .menu-item {
+            padding: 12px 20px;
+            margin-bottom: 4px;
+            border-radius: 8px;
+            color: #4b5563;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .menu-item:hover {
+            background-color: #f3f4f6;
+        }
+
+        .menu-item.active {
+            background-color: #f3f4f6;
+            color: #111827;
+            font-weight: 600;
+        }
+
+        /* 우측 콘텐츠 영역 */
+        .main-content {
+            flex: 1;
+            padding: 30px 40px;
+            overflow-y: auto;
+            background-color: #f4f7f6;
+        }
+
+        .view-section {
+            display: none;
+        }
+
+        .view-section.active {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* 대시보드 내부 컨텐츠 스타일 */
+        :root {
+            --bg-color: #f4f7f6;
+            --card-bg: #ffffff;
+            --text-main: #2c3e50;
+            --text-sub: #7f8c8d;
+            --good-color: #2ecc71;
+            --warn-color: #e67e22;
+            --danger-color: #e74c3c;
+            --neutral-color: #95a5a6;
+            --border-color: #ecf0f1;
+            --blue-color: #4a9eff;
+        }
+
+        .dashboard-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+        }
+
+        .header,
+        .section-title {
+            grid-column: 1 / -1;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--card-bg);
+            padding: 20px 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 1.3rem;
+            font-weight: bold;
+        }
+
+        .section-title {
+            margin-top: 10px;
+            background: transparent;
+            box-shadow: none;
+            padding: 0 10px;
+            border-bottom: 2px solid var(--border-color);
+            border-radius: 0;
+        }
+
+        .connection-status {
+            font-weight: bold;
+            color: var(--neutral-color);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--neutral-color);
+        }
+
+        .card {
+            background: var(--card-bg);
+            padding: 24px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+        }
+
+        .card h3 {
+            margin: 0 0 10px 0;
+            color: var(--text-sub);
+            font-size: 0.95rem;
+            font-weight: 600;
+        }
+
+        .status-card {
+            grid-column: 1 / -1;
+            text-align: center;
+            padding: 40px 20px;
+            border: 2px solid transparent;
+            transition: all 0.3s ease;
+        }
+
+        .status-card h2 {
+            font-size: 2.2rem;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+
+        .status-card p {
+            font-size: 1.1rem;
+            color: var(--text-sub);
+            margin: 0;
+        }
+
+        .data-value {
+            font-size: 1.8rem;
+            font-weight: bold;
+        }
+
+        .data-unit {
+            font-size: 0.9rem;
+            font-weight: normal;
+            color: var(--text-sub);
+        }
+
+        .chart-card {
+            grid-column: 1 / -1;
+            height: 350px;
+        }
+
+        .feedback-card {
+            grid-column: 1 / -1;
+            background: rgba(46, 204, 113, 0.1);
+            border-left: 5px solid var(--good-color);
+            padding: 20px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .feedback-icon {
+            font-size: 2rem;
+        }
+
+        .feedback-text h4 {
+            margin: 0 0 5px 0;
+            color: var(--text-main);
+            font-size: 1.1rem;
+            font-weight: bold;
+        }
+
+        .feedback-text p {
+            margin: 0;
+            color: var(--text-sub);
+            font-size: 0.95rem;
+        }
+
+        .half-chart {
+            grid-column: span 1;
+            height: 300px;
+        }
+
+        .half-chart-wide {
+            grid-column: span 2;
+            height: 300px;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 100%;
+            width: 100%;
+        }
+
+        .score-circle {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            border: 8px solid var(--neutral-color);
+            transition: border-color 0.3s;
+            background: white;
+        }
+
+        /* 설정 화면 스타일 */
+        .settings-card {
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.02);
+        }
+
+        .settings-card h3 {
+            margin-top: 0;
+            margin-bottom: 20px;
+            font-size: 1.1rem;
+            font-weight: bold;
+            color: #111827;
+        }
+
+        .setting-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 16px;
+            margin-bottom: 16px;
+            border-bottom: 1px solid #f3f4f6;
+        }
+
+        .setting-row:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+            margin-bottom: 0;
+        }
+
+        select.form-select {
+            padding: 8px 32px 8px 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            outline: none;
+            background-color: #fff;
+            appearance: none;
+            background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3e%3cpolyline points='6 9 12 15 18 9'%3e%3c/polyline%3e%3c/svg%3e");
+            background-repeat: no-repeat;
+            background-position: right 8px center;
+            background-size: 16px;
+        }
+
+        .btn-outline {
+            padding: 8px 16px;
+            border: 1px solid #d1d5db;
+            background: #fff;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .btn-outline:hover {
+            background: #f9fafb;
+        }
+
+        /* Information > user manual. Restore headings, lists and tables hidden by Tailwind's reset. */
+        .manual-content h3 { font-size: 1.15rem; font-weight: 700; color: #111827; margin: 0 0 4px; }
+        .manual-content h4 { font-size: 1.02rem; font-weight: 700; color: #1f2937; margin: 0 0 8px; }
+        .manual-content h5 { font-weight: 700; color: #374151; margin: 16px 0 4px; }
+        .manual-content section { margin-top: 22px; }
+        .manual-content p { margin: 6px 0; }
+        .manual-content ul { list-style: disc; padding-left: 1.3rem; margin: 4px 0; }
+        .manual-content ol { list-style: decimal; padding-left: 1.3rem; margin: 4px 0; }
+        .manual-content li { margin: 2px 0; }
+        .manual-content code { background: #eef2ff; color: #3730a3; padding: 1px 6px; border-radius: 4px; font-size: 0.9em; }
+        .manual-content .manual-flow,
+        .manual-content .manual-formula {
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            padding: 10px 12px;
+            font-weight: 700;
+            color: #1f2937;
+            overflow-x: auto;
+        }
+        .manual-content .manual-table { overflow-x: auto; margin: 8px 0; }
+        .manual-content table { width: 100%; border-collapse: collapse; background: #fff; font-size: 14px; }
+        .manual-content th,
+        .manual-content td { border: 1px solid #e5e7eb; padding: 8px 10px; text-align: left; vertical-align: top; }
+        .manual-content th { background: #f3f4f6; font-weight: 600; color: #374151; }
+
+        .technical-term-button {
+            appearance: none;
+            border: 0;
+            background: transparent;
+            color: #2563eb;
+            padding: 0;
+            font: inherit;
+            font-weight: 700;
+            text-decoration: underline;
+            text-decoration-style: dotted;
+            text-underline-offset: 3px;
+            cursor: pointer;
+        }
+
+        .technical-term-button:hover { color: #1d4ed8; }
+        .technical-term-button:focus-visible {
+            outline: 3px solid rgba(37, 99, 235, 0.3);
+            outline-offset: 3px;
+            border-radius: 3px;
+        }
+
+        .technical-term-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 80;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(17, 24, 39, 0.48);
+            overflow-y: auto;
+        }
+
+        .technical-term-overlay[hidden] { display: none; }
+
+        .technical-term-dialog {
+            width: min(680px, 100%);
+            max-height: calc(100vh - 40px);
+            overflow-y: auto;
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 14px;
+            box-shadow: 0 24px 60px rgba(17, 24, 39, 0.24);
+        }
+
+        .technical-term-dialog header {
+            position: sticky;
+            top: 0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 18px 20px;
+            background: #fff;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .technical-term-dialog-body { padding: 20px; }
+        .technical-term-dialog-body h4 { margin: 18px 0 6px; font-weight: 700; color: #1f2937; }
+        .technical-term-dialog-body p { margin: 6px 0; color: #4b5563; }
+        .technical-term-dialog-body ul { list-style: disc; padding-left: 1.35rem; margin: 8px 0; color: #374151; }
+        .technical-term-dialog-body li { margin: 5px 0; }
+        .technical-term-summary {
+            padding: 12px 14px;
+            border: 1px solid #bfdbfe;
+            border-radius: 8px;
+            background: #eff6ff;
+            color: #1e3a8a;
+        }
+
+        @media (max-width: 640px) {
+            .technical-term-overlay { align-items: flex-start; padding: 12px; }
+            .technical-term-dialog { max-height: calc(100vh - 24px); border-radius: 10px; }
+            .technical-term-dialog header,
+            .technical-term-dialog-body { padding: 16px; }
+        }
+
+        .error-text {
+            color: #e74c3c;
+            font-size: 0.85rem;
+            margin-top: 12px;
+            display: none;
+            background: #fdf3f2;
+            padding: 12px;
+            border-radius: 6px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="app-container">
+
+        <!-- 사이드바 -->
+        <aside class="sidebar">
+            <div class="sidebar-logo">Project-Soma</div>
+            <div class="menu-item active" onclick="switchView('monitoring', this)" data-i18n="menu_monitoring">실시간 모니터링
+            </div>
+            <div class="menu-item" onclick="switchView('dashboard', this)" data-i18n="menu_dashboard">대시보드</div>
+            <div class="menu-item" onclick="switchView('settings', this)" data-i18n="menu_settings">설정</div>
+            <div class="menu-item" onclick="switchView('info', this)" data-i18n="menu_info">정보</div>
+        </aside>
+
+        <!-- 메인 콘텐츠 -->
+        <main class="main-content">
+
+            <!-- 뷰 A: 실시간 모니터링 -->
+            <section id="view-monitoring" class="view-section active">
+                <div class="max-w-[1200px] mx-auto mb-6">
+                    <nav class="flex justify-between items-center py-2 bg-transparent mb-4">
+                        <h2 class="text-2xl font-bold text-gray-800" data-i18n="title_monitoring">실시간 모니터링</h2>
+                        <div class="flex gap-2">
+                            <!-- 로그인 상태에 따라 로그인/로그아웃으로 바뀝니다 (아래 Supabase 스크립트) -->
+                            <button id="authButton"
+                                class="px-4 py-2 text-sm text-white bg-blue-500 rounded-md hover:bg-blue-600 shadow-sm transition-colors"
+                                data-i18n="btn_login">로그인</button>
+                        </div>
+                    </nav>
+
+                    <div class="grid grid-cols-3 gap-6 mb-6">
+                        <div
+                            class="col-span-2 flex items-center gap-8 bg-white p-6 rounded-xl shadow-sm border border-gray-100">
+                            <div id="scoreRing" class="score-circle">
+                                <span id="currentScore" class="text-4xl font-bold text-gray-800">—</span>
+                                <span class="text-[10px] text-gray-500 font-semibold tracking-wide mt-1">SCORE</span>
+                            </div>
+                            <div>
+                                <div class="flex items-center gap-2 mb-1">
+                                    <span id="topStatusDot" class="w-2 h-2 rounded-full bg-gray-400"></span>
+                                    <span id="topStatusLabel" class="text-sm font-medium text-gray-500"
+                                        data-i18n="status_waiting">대기 중</span>
+                                </div>
+                                <h1 id="topStatusMessage" class="text-3xl font-bold mb-1 text-gray-800"
+                                    data-i18n="cam_wait">데이터를 기다립니다</h1>
+                                <p id="topDetailFeedback" class="text-sm text-gray-500" data-i18n="cam_wait_sub">잠시만
+                                    기다려주세요...</p>
+                            </div>
+                        </div>
+
+                        <!-- 신규 추가: 측정 제어 버튼 영역 -->
+                        <div
+                            class="col-span-1 bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex flex-col justify-center items-center gap-5 aspect-video">
+                            <h3 class="font-bold text-gray-700 text-lg">실시간 측정 제어</h3>
+                            <div class="flex gap-3 w-full">
+                                <button id="btn-start" onclick="startMeasurement()" disabled
+                                    class="flex-1 py-3 bg-blue-500 hover:bg-blue-600 text-white font-bold rounded-lg transition-colors shadow-sm">측정
+                                    시작</button>
+                                <button id="btn-stop" onclick="stopMeasurement()"
+                                    class="flex-1 py-3 bg-red-500 hover:bg-red-600 text-white font-bold rounded-lg transition-colors shadow-sm opacity-50 cursor-not-allowed"
+                                    disabled>측정 중지</button>
+                            </div>
+                            <button id="btn-retry" onclick="retryMeasurement()" hidden
+                                class="py-2 px-4 bg-blue-500 text-white rounded-lg">다시 준비</button>
+                            <div id="feedback-test-panel"
+                                class="w-full rounded-lg border border-purple-200 bg-purple-50 p-3">
+                                <div class="flex items-center justify-between gap-2 mb-2">
+                                    <strong class="text-sm text-purple-800">알림 시연</strong>
+                                    <span class="text-xs text-purple-600">테스트 전용 · 측정/점수/DB 영향 없음</span>
+                                </div>
+                                <div class="grid grid-cols-2 gap-2">
+                                    <button id="feedback-test-normal" type="button" onclick="showTestFeedback('NORMAL')"
+                                        class="py-2 rounded-md bg-green-600 text-white text-sm font-bold">NORMAL</button>
+                                    <button id="feedback-test-caution" type="button" onclick="showTestFeedback('CAUTION')"
+                                        class="py-2 rounded-md bg-yellow-500 text-white text-sm font-bold">CAUTION</button>
+                                    <button id="feedback-test-danger" type="button" onclick="showTestFeedback('DANGER')"
+                                        class="py-2 rounded-md bg-red-600 text-white text-sm font-bold">DANGER</button>
+                                    <button id="feedback-test-break" type="button" onclick="showTestFeedback('BREAK')"
+                                        class="py-2 rounded-md bg-blue-600 text-white text-sm font-bold">BREAK</button>
+                                    <button id="feedback-test-close" type="button" onclick="closeTestFeedback()"
+                                        class="py-2 rounded-md bg-gray-600 text-white text-sm font-bold">팝업 닫기</button>
+                                </div>
+                                <p id="feedback-test-status" role="status" aria-live="polite"
+                                    class="mt-2 text-xs text-purple-700">측정이 꺼진 상태에서 시연 알림을 확인할 수 있습니다.</p>
+                            </div>
+                            <p id="measurement-note" role="status" aria-live="polite"
+                                class="text-sm text-gray-500 text-center"></p>
+                            <div class="flex items-center gap-2">
+                                <span id="measure-status-dot" class="w-3 h-3 rounded-full bg-gray-400"></span>
+                                <p id="measure-status-text" class="text-sm text-gray-500 font-medium">현재 상태: 대기 중</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="dashboard-container">
+                    <div class="header">
+                        <h1 data-i18n="conn_title">🪑 실시간 자세 데이터 백엔드 연동 현황</h1>
+                        <div class="connection-status" id="conn-status">
+                            <div class="status-dot" id="conn-dot"></div>
+                            <span id="conn-text" data-i18n="server_wait">서버 연결 대기 중...</span>
+                        </div>
+                    </div>
+
+                    <div class="card status-card" id="main-status-card">
+                        <h3 data-i18n="current_posture">현재 종합 상태</h3>
+                        <h2 id="posture-msg" data-i18n="data_wait">분석 대기 중</h2>
+                        <p id="posture-sub" data-i18n="analyzing">우측 상단의 '측정 시작' 버튼을 눌러주세요.</p>
+                    </div>
+
+                    <div class="card">
+                        <h3 data-i18n="metric_blink">분당 눈 깜빡임</h3>
+                        <div class="data-value"><span id="val-blink">-</span><span class="data-unit"> 회/분</span></div>
+                    </div>
+                    <div class="card">
+                        <h3 data-i18n="metric_dist">화면과의 거리</h3>
+                        <div class="data-value"><span id="val-dist">-</span><span class="data-unit"> cm</span></div>
+                    </div>
+                    <div class="card">
+                        <h3 data-i18n="metric_static">정적 유지 시간</h3>
+                        <div class="data-value"><span id="val-static">-</span><span class="data-unit"> 초</span></div>
+                    </div>
+                    <div class="card"
+                        style="grid-column: 1 / -1; display:flex; flex-direction:row; align-items:center; justify-content:space-between;">
+                        <h3 data-i18n="metric_balance" style="margin:0;">좌우 하중 밸런스</h3>
+                        <div class="data-value"><span id="val-balance">-</span></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 뷰 B: 대시보드 -->
+            <section id="view-dashboard" class="view-section">
+                <div class="max-w-[1200px] mx-auto mb-6">
+                    <nav class="flex justify-between items-center py-2 bg-transparent mb-4">
+                        <h2 class="text-2xl font-bold text-gray-800" data-i18n="menu_dashboard">대시보드</h2>
+                    </nav>
+                </div>
+                <div class="dashboard-container">
+                    <div class="card chart-card">
+                        <h3 data-i18n="recent_history">최근 자세 이력 (실시간 점수 변화)</h3>
+                        <div class="chart-container"><canvas id="realtimeChart"></canvas></div>
+                    </div>
+                    <div class="section-title" style="display:flex; justify-content:space-between; align-items:center;">
+                        <h2 style="margin: 0; color: var(--text-main); font-size: 1.2rem; font-weight: bold;"
+                            data-i18n="measurement_history">측정 기록</h2>
+                        <span id="history-mode-badge" class="text-xs font-bold px-3 py-1 rounded-full bg-gray-100 text-gray-600">모드 선택</span>
+                    </div>
+                    <div class="card" style="grid-column:1 / -1;">
+                        <div class="flex flex-wrap gap-2 items-center">
+                            <button id="history-example-button" type="button"
+                                class="px-4 py-2 rounded-md bg-gray-700 text-white">4시간 예시 데이터</button>
+                            <button id="history-actual-button" type="button"
+                                class="px-4 py-2 rounded-md bg-blue-600 text-white">현재 측정 기록</button>
+                            <button id="history-sessions-button" type="button"
+                                class="px-4 py-2 rounded-md bg-blue-600 text-white">저장된 세션</button>
+                            <select id="history-range" class="form-select w-36">
+                                <option value="30">최근 30분</option>
+                                <option value="60">최근 60분</option>
+                            </select>
+                            <button id="history-refresh-button" type="button"
+                                class="px-4 py-2 rounded-md border border-gray-300">새로고침</button>
+                        </div>
+                        <div id="history-session-controls" class="mt-3" hidden>
+                            <label for="history-session-select" class="block text-sm font-medium mb-1">조회할 저장 세션</label>
+                            <select id="history-session-select" class="form-select w-full" disabled>
+                                <option value="">저장된 세션을 불러와 주세요</option>
+                            </select>
+                            <p class="text-xs text-gray-500 mt-1">시각은 첫/마지막 snapshot의 저장된 측정 시각이며 실제 시작/종료 시각이 아닙니다. 현재 측정 중인 세션도 포함될 수 있습니다.</p>
+                        </div>
+                        <p id="history-status" role="status" aria-live="polite" class="text-sm text-gray-500 mt-3">
+                            예시 데이터, 현재 측정 기록 또는 저장된 세션을 선택해 주세요.
+                        </p>
+                    </div>
+                    <div class="feedback-card" hidden style="display:none">
+                        <div class="feedback-icon">🌟</div>
+                        <div class="feedback-text">
+                            <h4>측정 기록 대기 중</h4>
+                            <p>선택한 기록의 요약이 여기에 표시됩니다.</p>
+                        </div>
+                    </div>
+                    <div id="session-report-card" class="card" style="grid-column:1 / -1;" hidden>
+                        <div class="flex flex-wrap justify-between items-center gap-2 mb-4">
+                            <h3 class="text-lg font-bold text-gray-800">세션 요약 보고서</h3>
+                            <span id="session-report-status" role="status" aria-live="polite"
+                                class="text-xs text-gray-500">저장된 세션을 선택해 주세요.</span>
+                        </div>
+                        <p class="text-xs text-gray-500 mb-4">첫·마지막 저장 시각은 snapshot 경계이며 실제 측정 Start/Stop 시각이 아닙니다.</p>
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                            <div><div class="text-gray-500">첫 저장 시각</div><strong id="report-first-at">—</strong></div>
+                            <div><div class="text-gray-500">마지막 저장 시각</div><strong id="report-last-at">—</strong></div>
+                            <div><div class="text-gray-500">확인 가능한 착석 시간</div><strong id="report-seated-time">—</strong></div>
+                            <div><div class="text-gray-500">시간 가중 평균 Score</div><strong id="report-average-score">—</strong></div>
+                            <div><div class="text-gray-500">착석 snapshot 최저 Score</div><strong id="report-minimum-score">—</strong></div>
+                            <div><div class="text-gray-500">BREAK 피드백</div><strong id="report-break">현재 저장 데이터로 확인 불가</strong></div>
+                            <div class="col-span-2"><div class="text-gray-500">상태별 관측 시간</div><strong id="report-state-times">—</strong></div>
+                            <div class="col-span-2"><div class="text-gray-500">주요 상태 판정 사유</div><strong id="report-reasons">—</strong></div>
+                            <div class="col-span-2"><div class="text-gray-500">데이터 품질</div><span id="report-quality">—</span></div>
+                        </div>
+                        <div class="chart-container mt-5"><canvas id="sessionReportChart"></canvas></div>
+                    </div>
+                    <div class="card half-chart">
+                        <h3 data-i18n="pie_title">선택 구간 상태 비율</h3>
+                        <div class="chart-container"><canvas id="pieChart"></canvas></div>
+                    </div>
+                    <div class="card half-chart-wide">
+                        <h3 data-i18n="timeline_title">Score 변화</h3>
+                        <div class="chart-container"><canvas id="timelineChart"></canvas></div>
+                        <ul id="history-transitions" class="text-sm text-gray-600 mt-3 space-y-1"></ul>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 뷰 C: 설정 화면 -->
+            <section id="view-settings" class="view-section">
+                <h2 class="text-2xl font-bold text-gray-800 mb-6" data-i18n="menu_settings">설정</h2>
+
+                <div class="settings-card">
+                    <h3 data-i18n="lang_setting">언어 설정</h3>
+                    <select id="langSelect" class="form-select" onchange="changeLanguage(this.value)">
+                        <option value="ko">한국어</option>
+                        <option value="en">English</option>
+                    </select>
+                </div>
+
+                <div class="settings-card">
+                    <h3 class="mb-4" data-i18n="cam_setting_title">카메라 설정</h3>
+                    <div class="bg-[#eff6ff] border-l-4 border-blue-500 p-5 rounded-r-md">
+                        <p class="text-blue-800 text-[15px] mb-4" data-i18n="cam_setting_desc">
+                            카메라가 작동하지 않는 경우, 아래 버튼을 클릭하여 시스템 설정에서 앱의 카메라 접근 권한을 허용해주세요.
+                        </p>
+                        <button
+                            class="bg-[#111827] hover:bg-gray-800 text-white px-5 py-2.5 rounded-md text-sm transition-colors"
+                            onclick="openSystemSettings('camera')" data-i18n="btn_cam_setting">
+                            카메라 설정 안내
+                        </button>
+                    </div>
+                    <div id="cameraSettingsFallback" class="error-text" data-i18n="cam_setting_fallback">
+                        수동으로 브라우저 주소창 좌측의 자물쇠 아이콘을 눌러 카메라 권한을 허용해주세요.
+                    </div>
+                    <div class="flex justify-between items-center pt-8 mt-4">
+                        <div>
+                            <div class="font-medium text-gray-800" data-i18n="select_camera">미리보기 카메라</div>
+                            <p class="text-xs text-gray-500 mt-1">브라우저 테스트 전용이며 Python Vision 입력 장치를 변경하지 않습니다.</p>
+                        </div>
+                        <select id="cameraSelect" class="form-select w-64 bg-gray-50"
+                            onchange="changeCamera(this.value)">
+                            <option value="" data-i18n="loading_cameras">카메라 테스트 전 목록을 확인하세요</option>
+                        </select>
+                    </div>
+                    <div class="flex gap-2 mt-4">
+                        <button id="btn-camera-start" type="button" onclick="startCameraTest()"
+                            class="bg-blue-600 text-white px-4 py-2 rounded-md">카메라 테스트</button>
+                        <button id="btn-camera-stop" type="button" onclick="stopCameraTest()" disabled
+                            class="border border-gray-300 px-4 py-2 rounded-md opacity-50 cursor-not-allowed">테스트 종료</button>
+                    </div>
+                    <p id="camera-test-status" role="status" aria-live="polite" class="text-sm text-gray-500 mt-3">
+                        카메라는 테스트 버튼을 누를 때만 켜집니다.
+                    </p>
+                    <video id="webcamPreview" autoplay playsinline muted
+                        class="w-full max-w-md rounded-lg mt-4 bg-black" hidden></video>
+                </div>
+            </section>
+
+            <!-- 뷰 D: 정보 -->
+            <section id="view-info" class="view-section">
+                <h2 class="text-2xl font-bold text-gray-800 mb-6" data-i18n="menu_info">정보</h2>
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
+                    <h3 class="text-lg font-bold mb-2">Project-Soma</h3>
+                    <p class="text-gray-600 mb-1" data-i18n="version">버전: 1.0.0</p>
+                    <p class="text-gray-600" data-i18n="info_desc">스마트 피로도 자각 솔루션 시스템입니다.</p>
+                </div>
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
+                    <h3 class="text-lg font-bold mb-4">사용 매뉴얼</h3>
+                    <div class="flex gap-2 mb-4" role="tablist" aria-label="실행 모드별 사용 매뉴얼">
+                        <button id="manual-tab-demo" type="button" role="tab" aria-selected="true"
+                            aria-controls="manual-panel-demo" onclick="switchManual('demo')"
+                            class="manual-tab px-4 py-2 rounded-md text-sm font-medium bg-blue-600 text-white transition-colors">
+                            시연 모드
+                        </button>
+                        <button id="manual-tab-real" type="button" role="tab" aria-selected="false"
+                            aria-controls="manual-panel-real" onclick="switchManual('real')"
+                            class="manual-tab px-4 py-2 rounded-md text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors">
+                            실제 모드
+                        </button>
+                    </div>
+                    <div id="manual-panel-demo" role="tabpanel" aria-labelledby="manual-tab-demo"
+                        class="manual-content bg-gray-50 border border-gray-200 rounded-md p-5 text-[15px] text-gray-700 leading-relaxed">
+                        <h3>시연 모드 (DEMO)</h3>
+
+                        <section>
+                            <h4>1. 모드 개요</h4>
+                            <p>시연 모드는 Project SOMA의 자세 및 시각 활동 모니터링 기능을 짧은 시간 안에 확인하기 위한 모드입니다.</p>
+                            <p>일반 모드와 같은 센서 수집 구조를 사용하지만, 상태 변화와 피드백을 빠르게 확인할 수 있도록 시연용 시간 조건과 분석 정책을 적용합니다.</p>
+                            <p>실제 센서와 Mock 센서를 모두 사용할 수 있으며, <strong>DEMO/NORMAL 선택과 Mock 사용 여부는 서로 독립적입니다.</strong></p>
+                        </section>
+
+                        <section>
+                            <h4>2. 측정 진행 과정</h4>
+                            <p class="manual-flow">로그인 → 측정 시작 → CALIBRATING → READY → MEASURING → 측정 종료</p>
+                            <ol>
+                                <li><strong>측정 시작:</strong> 측정 시작 버튼으로 인증된 세션을 시작합니다.</li>
+                                <li><strong>CALIBRATING:</strong> 사용자 기준 자세와 유효 센서 표본을 수집합니다.</li>
+                                <li><strong>READY:</strong> 보정이 완료됐음을 알리는 전환 단계입니다.</li>
+                                <li><strong>MEASURING:</strong> Backend가 자동으로 실시간 측정 단계로 전환합니다.</li>
+                                <li><strong>측정 종료:</strong> 측정 중지 버튼으로 세션을 종료합니다.</li>
+                            </ol>
+                        </section>
+
+                        <section>
+                            <h4>3. 데이터 수집 및 분석</h4>
+                            <div class="manual-table">
+                                <table>
+                                    <thead><tr><th>항목</th><th>분석 내용</th></tr></thead>
+                                    <tbody>
+                                        <tr><td>Static</td><td>유사한 착석 자세의 지속 시간과 자세 변화</td></tr>
+                                        <tr><td>Balance</td><td>FSR 4개 센서의 착석 압력 분포</td></tr>
+                                        <tr><td>Blink</td><td>EAR 기반 눈 깜빡임 횟수와 빈도</td></tr>
+                                        <tr><td>Distance</td><td>보정 기준 대비 얼굴 및 등받이 거리 변화</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p>Blink Rate는 최근 60초 동안 검출된 눈 깜빡임을 기준으로 계산합니다.</p>
+                        </section>
+
+                        <section>
+                            <h4>4. Score와 상태</h4>
+                            <p class="manual-formula">SOMA Score = 100 − (Static + Balance + Blink + Distance 감점)</p>
+                            <p>최종 점수는 0~100 범위로 제한됩니다. State는 Score 구간만으로 정하지 않고 각 정책의 조건과 지속시간을 함께 반영합니다.</p>
+                            <div class="manual-table">
+                                <table>
+                                    <thead><tr><th>구분</th><th>의미</th><th>주요 피드백</th></tr></thead>
+                                    <tbody>
+                                        <tr><td>NORMAL</td><td>정상 관측 상태</td><td>녹색 LED</td></tr>
+                                        <tr><td>CAUTION</td><td>주의 조건 충족</td><td>NOTICE 피드백</td></tr>
+                                        <tr><td>DANGER</td><td>경고 조건 충족</td><td>WARNING 피드백</td></tr>
+                                        <tr><td>ABSENT</td><td>사용자 이석 감지</td><td>LED OFF</td></tr>
+                                        <tr><td>BREAK</td><td>별도 휴식 권고</td><td>파란 LED 및 진동</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p>DEMO의 시간 조건은 기능 검증과 발표를 위한 설정이므로 실제 피로 누적 속도로 해석하지 않습니다.</p>
+                        </section>
+                    </div>
+
+                    <div id="manual-panel-real" role="tabpanel" aria-labelledby="manual-tab-real" hidden
+                        class="manual-content bg-gray-50 border border-gray-200 rounded-md p-5 text-[15px] text-gray-700 leading-relaxed">
+                        <h3>실제 모드 (NORMAL)</h3>
+
+                        <section>
+                            <h4>1. 모드 개요</h4>
+                            <p>실제 모드는 Chair의 FSR 압력 센서 4개와 IR 거리 센서, Webcam 기반 Vision 데이터를 종합하여 장시간 착석 부담을 분석합니다.</p>
+                            <p>측정 결과는 Backend가 계산한 Score·State·Reasons를 그대로 표시하며, Front가 별도의 판정을 만들지 않습니다.</p>
+                        </section>
+
+                        <section>
+                            <h4>2. 측정 진행 과정</h4>
+                            <p class="manual-flow">로그인 → 측정 시작 → CALIBRATING → READY → MEASURING → 측정 종료</p>
+                            <p>측정 시작 후 Front는 Backend의 실제 유효 표본 진행률을 표시하며, READY 이후 MEASURING으로 자동 전환합니다. Stop은 보정 중에도 사용할 수 있습니다.</p>
+                        </section>
+
+                        <section>
+                            <h4>3. 데이터 수집</h4>
+                            <div class="manual-table">
+                                <table>
+                                    <thead><tr><th>데이터</th><th>수집·분석 기준</th></tr></thead>
+                                    <tbody>
+                                        <tr><td>Chair 압력</td><td>FSR 4개 채널, 약 1초 간격</td></tr>
+                                        <tr><td>Chair IR</td><td>등받이 방향 거리값(mm)</td></tr>
+                                        <tr><td>Vision</td><td>얼굴·눈 특징, Blink Rate, 얼굴 거리</td></tr>
+                                        <tr><td>Sensor Fusion</td><td>최신 유효 센서 데이터 통합</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p>Vision 신뢰도가 충분하지 않은 구간은 무조건 감점하지 않고 정책에 따라 판단을 보류하거나 기존 값을 동결합니다.</p>
+                        </section>
+
+                        <section>
+                            <h4>4. SOMA Score</h4>
+                            <p class="manual-formula">SOMA Score = max(0, min(100, round(100 − Static − Balance − Blink − Distance)))</p>
+                            <h5>Static</h5>
+                            <ul>
+                                <li>Normal 기본 정책은
+                                    <button type="button" class="technical-term-button"
+                                        aria-haspopup="dialog" aria-controls="technical-term-overlay"
+                                        onclick="openTechnicalTerm('cumulative-v2', this)">cumulative-v2</button>입니다.
+                                </li>
+                                <li>작은 순간 움직임만으로 누적 부담을 전부 초기화하지 않습니다.</li>
+                            </ul>
+                            <h5>Balance</h5>
+                            <ul><li>유효한 착석 압력 분포와 지속 조건을 평가합니다.</li></ul>
+                            <h5>Blink</h5>
+                            <ul>
+                                <li>사용자별 EAR 기준과 최근 60초 Blink Rate를 사용합니다.</li>
+                                <li>Normal 기본 정책은
+                                    <button type="button" class="technical-term-button"
+                                        aria-haspopup="dialog" aria-controls="technical-term-overlay"
+                                        onclick="openTechnicalTerm('score-v1', this)">score-v1</button>이며,
+                                    유효하지 않은 Vision 구간은 누적하지 않습니다.
+                                </li>
+                            </ul>
+                            <h5>Distance</h5>
+                            <ul><li>보정 기준 대비 얼굴 거리와 Chair IR 변화의 유효한 증거를 함께 사용합니다.</li></ul>
+                        </section>
+
+                        <section>
+                            <h4>5. 상태와 피드백</h4>
+                            <p>State는 Score의 단순 구간 분류가 아닙니다. 각 부담 요소의 조건과 지속시간에 따라 NORMAL, CAUTION, DANGER, ABSENT가 결정됩니다.</p>
+                            <p>BREAK는 Fusion State가 아니라 별도의 휴식 권고 피드백이며 Front 팝업과 Nano LED·진동으로 전달될 수 있습니다.</p>
+                        </section>
+
+                        <section>
+                            <h4>6. 기록 확인</h4>
+                            <p>Dashboard에서 현재 ACTIVE 기록과 저장된 종료 세션을 선택할 수 있습니다. 종료 세션의 History와 Session Report는 저장된 snapshot을 기반으로 표시됩니다.</p>
+                            <p><strong>SOMA는 의학적 진단 도구가 아니며</strong>, 측정 결과는 휴식과 자세 변화를 안내하기 위한 참고 정보입니다.</p>
+                        </section>
+                    </div>
+                </div>
+            </section>
+
+        </main>
+    </div>
+
+    <div id="technical-term-overlay" class="technical-term-overlay" hidden
+        onclick="handleTechnicalTermBackdrop(event)" onkeydown="handleTechnicalTermKeydown(event)">
+        <section class="technical-term-dialog" role="dialog" aria-modal="true"
+            aria-labelledby="technical-term-title" aria-describedby="technical-term-description">
+            <header>
+                <div>
+                    <p class="text-xs font-semibold text-blue-600 mb-1">NORMAL 기술 용어</p>
+                    <h3 id="technical-term-title" class="text-xl font-bold text-gray-900"></h3>
+                </div>
+                <button id="technical-term-close" type="button" onclick="closeTechnicalTerm()"
+                    class="shrink-0 border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                    aria-label="기술 용어 설명 닫기">닫기</button>
+            </header>
+            <div id="technical-term-description" class="technical-term-dialog-body">
+                <div id="technical-term-cumulative-v2" hidden>
+                    <p class="technical-term-summary">장시간 같은 자세에서 생기는 Static 부담을, 짧은 움직임에 쉽게 지워지지 않도록 누적해서 평가하는 정책입니다.</p>
+                    <h4>작동 방식</h4>
+                    <ul>
+                        <li>확정된 각 자세 에피소드의 처음 300초(5분)는 신규 Static 감점 시간에 포함하지 않습니다.</li>
+                        <li>300초를 넘긴 유효 착석 시간만 전체 누적 시간에 한 번씩 더합니다.</li>
+                        <li>확정된 자세 변경은 새 자세 에피소드 시간을 0초부터 시작하지만, 이미 쌓인 Static 감점은 줄이거나 초기화하지 않습니다.</li>
+                        <li>센서가 무효이거나 5초를 넘는 데이터 공백에서는 누적 시간을 진행하지 않습니다.</li>
+                    </ul>
+                    <h4>주요 기준</h4>
+                    <ul>
+                        <li>Static 감점 곡선의 상한은 25점입니다.</li>
+                        <li>누적 Static 감점이 10점 이상이면 Static 사유의 CAUTION, 20점 이상이면 DANGER 조건이 됩니다.</li>
+                        <li>SOMA Score 자체는 모든 상태 전환에 공통으로 적용되는 단일 임계값이 아닙니다. State는 각 부담 요소의 조건과 지속시간을 함께 평가합니다.</li>
+                    </ul>
+                </div>
+
+                <div id="technical-term-score-v1" hidden>
+                    <p class="technical-term-summary">사용자별 EAR 보정이 유효할 때, 최근 Blink Rate가 낮은 상태의 지속시간을 Score 감점으로 반영하는 정책입니다.</p>
+                    <h4>관측 신뢰성</h4>
+                    <ul>
+                        <li>사용자별 OPEN EAR baseline과 개인화 threshold가 유효해야 합니다.</li>
+                        <li>fallback threshold, 누락된 baseline, Blink Rate 누락 또는 최근 품질창의 얼굴 검출률 0에서는 타이머와 감점을 동결합니다.</li>
+                        <li>Blink Rate는 최근 60초 동안 검출된 눈 깜빡임을 분당 횟수로 환산한 값입니다.</li>
+                    </ul>
+                    <h4>시간·감점 기준</h4>
+                    <ul>
+                        <li>분당 8회 미만이면 low-blink 시간을 누적합니다.</li>
+                        <li>300초까지는 Blink 감점 0점이며, 300초 초과부터 900초까지 0점에서 최대 10점으로 선형 증가합니다.</li>
+                        <li>분당 8회 이상 11회 미만에서는 low-blink 시간과 기존 감점을 유지합니다.</li>
+                        <li>분당 11회 이상이면 low-blink 시간은 초기화되고, 기존 Blink 감점은 최대 300초에 걸쳐 선형 회복합니다.</li>
+                        <li>low-blink 시간이 300초 이상이면 CAUTION, 900초 이상이면 DANGER 조건이 될 수 있습니다. State와 Score는 독립 슬롯이므로 정확히 같은 순간에 변하지 않을 수 있습니다.</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        /* =========================================
+           1. 다국어 및 뷰 로직 
+           ========================================= */
+        const translations = {
+            ko: {
+                menu_monitoring: "실시간 모니터링", menu_dashboard: "대시보드", menu_settings: "설정", menu_info: "정보",
+                title_monitoring: "실시간 모니터링", btn_login: "로그인", btn_logout: "로그아웃",
+                status_waiting: "대기 중", cam_wait: "데이터 수신 대기 중", cam_wait_sub: "서버로부터 데이터를 기다립니다...",
+                live_detecting: "🔴 웹캠 모니터링 (서버 전송용 아님)", conn_title: "🪑 실시간 데이터 연동 현황", server_wait: "서버 연결 대기 중...",
+                current_posture: "현재 종합 상태", data_wait: "분석 대기 중", analyzing: "데이터를 수집하고 있습니다.",
+                metric_blink: "분당 눈 깜빡임 (Rate)", metric_dist: "화면과의 거리 (Dist)", metric_static: "정적 유지 시간 (Hold)", metric_balance: "좌우 하중 밸런스",
+                recent_history: "현재 측정 Score", measurement_history: "측정 기록",
+                excellent: "측정 기록 요약", excellent_desc: "선택한 구간의 관측 결과입니다.",
+                pie_title: "선택 구간 상태 비율", timeline_title: "Score 변화",
+                lang_setting: "언어 설정",
+                version: "버전: 1.0.0", info_desc: "스마트 피로도 자각 솔루션 시스템입니다.", server_connected: "서버 연결됨", server_disconnected: "서버 연결 끊김",
+                cam_setting_title: "카메라 설정", cam_setting_desc: "카메라 권한을 허용해주세요.", btn_cam_setting: "카메라 설정 안내",
+                cam_setting_fallback: "수동으로 브라우저 주소창 좌측의 아이콘을 눌러 권한을 허용해주세요.", select_camera: "미리보기 카메라", loading_cameras: "카메라 테스트 전 목록을 확인하세요",
+                bal_LEFT: "왼쪽 쏠림", bal_CENTER: "균형 (정상)", bal_RIGHT: "오른쪽 쏠림"
+            },
+            en: {
+                menu_monitoring: "Live Monitoring", menu_dashboard: "Dashboard", menu_settings: "Settings", menu_info: "Info",
+                title_monitoring: "Live Monitoring", btn_login: "Login", btn_logout: "Logout",
+                status_waiting: "Waiting", cam_wait: "Waiting for Data", cam_wait_sub: "Waiting for server data...",
+                live_detecting: "🔴 Webcam View", conn_title: "🪑 Server Connection Status", server_wait: "Waiting for server...",
+                current_posture: "Overall Status", data_wait: "Waiting...", analyzing: "Collecting data.",
+                metric_blink: "Blink Rate (per min)", metric_dist: "Screen Distance (cm)", metric_static: "Static Hold (sec)", metric_balance: "L/R Balance",
+                recent_history: "Current Measurement Score", measurement_history: "Measurement History",
+                excellent: "Measurement summary", excellent_desc: "Observed results for the selected period.",
+                pie_title: "Status ratio for selected period", timeline_title: "Score trend",
+                lang_setting: "Language Settings",
+                version: "Version: 1.0.0", info_desc: "Smart fatigue awareness solution.", server_connected: "Server Connected", server_disconnected: "Disconnected",
+                cam_setting_title: "Camera Settings", cam_setting_desc: "Please allow camera permissions.", btn_cam_setting: "Permission Guide",
+                cam_setting_fallback: "Please allow permissions manually from your browser.", select_camera: "Preview Camera", loading_cameras: "Check devices before testing",
+                bal_LEFT: "Leaning Left", bal_CENTER: "Balanced", bal_RIGHT: "Leaning Right"
+            }
+        };
+
+        let currentLang = 'ko';
+        let lastServerStatus = false;
+        let lastPostureData = null;
+        let currentStream = null;
+        let isMeasuring = false;
+
+        function changeLanguage(lang) {
+            currentLang = lang;
+            document.querySelectorAll('[data-i18n]').forEach(el => {
+                const key = el.getAttribute('data-i18n');
+                if (translations[lang][key]) {
+                    if (el.tagName === 'OPTION' && el.value === "") el.text = translations[lang][key];
+                    else el.innerText = translations[lang][key];
+                }
+            });
+            const connText = document.getElementById('conn-text');
+            if (lastServerStatus) connText.innerText = translations[lang].server_connected;
+            else connText.innerText = translations[lang].server_disconnected;
+
+            renderMeasurementUI();
+            if (lastPostureData && isMeasuring) updateDashboardUI(lastPostureData, false);
+
+        }
+
+        function switchView(viewId, clickedMenu) {
+            if (viewId !== 'settings') stopCameraTest();
+            document.querySelectorAll('.view-section').forEach(section => { section.classList.remove('active'); });
+            document.getElementById('view-' + viewId).classList.add('active');
+            document.querySelectorAll('.menu-item').forEach(menu => { menu.classList.remove('active'); });
+            clickedMenu.classList.add('active');
+
+            if (viewId === 'settings') refreshCameraList().catch(() => {
+                showCameraMessage("카메라 목록을 확인할 수 없습니다");
+            });
+        }
+
+        function switchManual(mode) {
+            if (!['demo', 'real'].includes(mode)) return;
+            for (const key of ['demo', 'real']) {
+                const selected = key === mode;
+                const tab = document.getElementById(`manual-tab-${key}`);
+                const panel = document.getElementById(`manual-panel-${key}`);
+                tab.setAttribute('aria-selected', String(selected));
+                tab.classList.toggle('bg-blue-600', selected);
+                tab.classList.toggle('text-white', selected);
+                tab.classList.toggle('bg-gray-100', !selected);
+                tab.classList.toggle('text-gray-700', !selected);
+                tab.classList.toggle('hover:bg-gray-200', !selected);
+                panel.hidden = !selected;
+            }
+        }
+
+        let technicalTermTrigger = null;
+
+        function openTechnicalTerm(term, trigger) {
+            if (!['cumulative-v2', 'score-v1'].includes(term)) return false;
+            const overlay = document.getElementById('technical-term-overlay');
+            const title = document.getElementById('technical-term-title');
+            const cumulativePanel = document.getElementById('technical-term-cumulative-v2');
+            const blinkPanel = document.getElementById('technical-term-score-v1');
+            technicalTermTrigger = trigger || document.activeElement || null;
+            title.innerText = term;
+            cumulativePanel.hidden = term !== 'cumulative-v2';
+            blinkPanel.hidden = term !== 'score-v1';
+            overlay.hidden = false;
+            overlay.setAttribute('aria-hidden', 'false');
+            document.body?.classList.add('overflow-hidden');
+            document.getElementById('technical-term-close').focus?.();
+            return true;
+        }
+
+        function closeTechnicalTerm() {
+            const overlay = document.getElementById('technical-term-overlay');
+            if (overlay.hidden) return false;
+            overlay.hidden = true;
+            overlay.setAttribute('aria-hidden', 'true');
+            document.body?.classList.remove('overflow-hidden');
+            const trigger = technicalTermTrigger;
+            technicalTermTrigger = null;
+            trigger?.focus?.();
+            return true;
+        }
+
+        function handleTechnicalTermBackdrop(event) {
+            if (event.target === event.currentTarget) closeTechnicalTerm();
+        }
+
+        function handleTechnicalTermKeydown(event) {
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            closeTechnicalTerm();
+        }
+
+        function openSystemSettings(type) {
+            if (type === 'camera') document.getElementById('cameraSettingsFallback').style.display = 'block';
+        }
+
+        /* =========================================
+           2. 웹캠 및 차트 로직
+           ========================================= */
+        const videoElement = document.getElementById('webcamPreview');
+        const cameraSelect = document.getElementById('cameraSelect');
+        const cameraStatus = document.getElementById('camera-test-status');
+        const cameraStartButton = document.getElementById('btn-camera-start');
+        const cameraStopButton = document.getElementById('btn-camera-stop');
+
+        function showCameraMessage(text) {
+            if (!cameraSelect) return;
+            cameraSelect.innerHTML = '';
+            const opt = document.createElement('option');
+            opt.text = text;
+            opt.disabled = true;
+            cameraSelect.appendChild(opt);
+        }
+
+        // 카메라 목록 채우기 (권한 허용 후 호출해야 이름이 정상 표시됨)
+        async function refreshCameraList() {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const videoDevices = devices.filter(d => d.kind === 'videoinput');
+            if (videoDevices.length === 0) {
+                showCameraMessage("연결된 카메라가 없습니다");
+                return;
+            }
+
+            // 켜져 있는 스트림의 트랙 이름은 항상 확인 가능하므로 label이 비었을 때 대신 사용
+            const track = currentStream ? currentStream.getVideoTracks()[0] : null;
+            const activeId = track ? track.getSettings().deviceId : null;
+
+            cameraSelect.innerHTML = '';
+            videoDevices.forEach((device, index) => {
+                const isActive = track && (device.deviceId === activeId || videoDevices.length === 1);
+                const option = document.createElement('option');
+                option.value = device.deviceId;
+                option.text = device.label || (isActive ? track.label : '') || `Camera ${index + 1}`;
+                cameraSelect.appendChild(option);
+            });
+
+            if (activeId) cameraSelect.value = activeId;
+        }
+
+        function setCameraButtons(running) {
+            cameraStartButton.disabled = running;
+            cameraStopButton.disabled = !running;
+            cameraStartButton.classList.toggle('opacity-50', running);
+            cameraStopButton.classList.toggle('opacity-50', !running);
+            cameraStopButton.classList.toggle('cursor-not-allowed', !running);
+        }
+
+        function measurementOwnsCamera() {
+            const model = window.measurementRuntime?.model;
+            return !!model && (model.phase !== 'OFF' || !!model.sessionId ||
+                ['start', 'sync', 'stop'].includes(model.pendingAction));
+        }
+
+        function stopCameraTest(message = "카메라 테스트가 종료되었습니다.") {
+            if (currentStream) currentStream.getTracks().forEach(track => track.stop());
+            currentStream = null;
+            if (videoElement) {
+                videoElement.srcObject = null;
+                videoElement.hidden = true;
+            }
+            if (cameraStatus) cameraStatus.innerText = message;
+            if (cameraStartButton && cameraStopButton) setCameraButtons(false);
+        }
+
+        async function startCameraTest() {
+            if (!videoElement || !cameraSelect) return;
+            if (measurementOwnsCamera()) {
+                cameraStatus.innerText = "측정 중에는 Python Vision과의 카메라 충돌을 막기 위해 테스트할 수 없습니다.";
+                return;
+            }
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                showCameraMessage("이 환경에서는 카메라를 사용할 수 없습니다 (https 또는 localhost 필요)");
+                return;
+            }
+            stopCameraTest("카메라를 여는 중입니다...");
+            try {
+                const selected = cameraSelect.value;
+                const video = selected ? { deviceId: { exact: selected } } : true;
+                currentStream = await navigator.mediaDevices.getUserMedia({ video });
+                videoElement.srcObject = currentStream;
+                videoElement.hidden = false;
+                videoElement.play().catch(() => { });
+                await refreshCameraList();
+                cameraStatus.innerText = "브라우저 미리보기 테스트 중입니다. Python Vision 입력에는 반영되지 않습니다.";
+                setCameraButtons(true);
+            } catch (err) {
+                stopCameraTest("");
+                if (err.name === 'NotAllowedError') cameraStatus.innerText = "카메라 권한이 거부되었습니다.";
+                else if (err.name === 'NotFoundError') cameraStatus.innerText = "카메라를 찾을 수 없습니다.";
+                else if (err.name === 'NotReadableError') cameraStatus.innerText = "다른 프로그램이 카메라를 사용 중입니다.";
+                else cameraStatus.innerText = "카메라를 불러오지 못했습니다.";
+            }
+        }
+
+        function changeCamera(_deviceId) {
+            if (currentStream) {
+                stopCameraTest("카메라가 변경되었습니다. 테스트 버튼을 눌러 새 장치를 확인하세요.");
+            }
+        }
+        if (navigator.mediaDevices?.addEventListener) {
+            navigator.mediaDevices.addEventListener('devicechange', () => {
+                stopCameraTest("카메라 장치 구성이 변경되었습니다.");
+                refreshCameraList().catch(() => showCameraMessage("카메라 목록을 확인할 수 없습니다"));
+            });
+        }
+        window.addEventListener('pagehide', () => stopCameraTest());
+
+        // 실시간 차트
+        const ctxRealtime = document.getElementById('realtimeChart').getContext('2d');
+        const MAX_POINTS = 30;
+        const realtimeChart = new Chart(ctxRealtime, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{ label: 'Score', data: [], borderColor: '#2ecc71', backgroundColor: 'rgba(46, 204, 113, 0.1)', borderWidth: 2, fill: true, tension: 0.4, pointRadius: 0 }]
+            },
+            options: { responsive: true, maintainAspectRatio: false, scales: { y: { min: 0, max: 100 }, x: { display: false } }, animation: { duration: 0 } }
+        });
+
+        function updateRealtimeChart(val) {
+            const data = realtimeChart.data.datasets[0].data;
+            data.push(val);
+            realtimeChart.data.labels.push('');
+            if (data.length > MAX_POINTS) {
+                data.shift();
+                realtimeChart.data.labels.shift();
+            }
+            realtimeChart.update();
+        }
+
+        // 상태 비율(파이 차트) 및 시간대별 이력(타임라인 차트) - 글로벌 변수로 관리
+        const ctxPie = document.getElementById('pieChart').getContext('2d');
+        window.pieChartObj = new Chart(ctxPie, {
+            type: 'doughnut',
+            data: {
+                labels: ['NORMAL', 'CAUTION', 'DANGER', 'ABSENT'],
+                datasets: [{ data: [0, 0, 0, 0], backgroundColor: ['#2ecc71', '#f1c40f', '#e74c3c', '#95a5a6'], borderWidth: 0 }]
+            },
+            options: { responsive: true, maintainAspectRatio: false }
+        });
+
+        const ctxTimeline = document.getElementById('timelineChart').getContext('2d');
+        window.timelineChartObj = new Chart(ctxTimeline, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{ label: 'Score', data: [], borderColor: '#2563eb',
+                    backgroundColor: 'rgba(37, 99, 235, 0.12)', fill: false,
+                    tension: 0.25, pointRadius: 4, pointBackgroundColor: [] }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                scales: { y: { min: 0, max: 100 } }
+            }
+        });
+
+        const ctxSessionReport = document.getElementById('sessionReportChart').getContext('2d');
+        window.sessionReportChartObj = new Chart(ctxSessionReport, {
+            type: 'line',
+            data: { labels: [], datasets: [{ label: '전체 세션 Score', data: [],
+                borderColor: '#2563eb', backgroundColor: 'rgba(37, 99, 235, 0.08)',
+                fill: false, tension: 0.15, pointRadius: 2, spanGaps: false,
+                pointBackgroundColor: [] }] },
+            options: { responsive: true, maintainAspectRatio: false, spanGaps: false,
+                scales: { y: { min: 0, max: 100 } } },
+        });
+
+        function renderHistoryData(result, modeLabel) {
+            const feedbackCard = document.querySelector('.feedback-card');
+            const icon = document.querySelector('.feedback-icon');
+            const h4 = document.querySelector('.feedback-text h4');
+            const p = document.querySelector('.feedback-text p');
+            const states = ['NORMAL', 'CAUTION', 'DANGER', 'ABSENT'];
+            const durations = states.map(state => result.durationMs[state] / 1000);
+            const total = durations.reduce((sum, value) => sum + value, 0);
+            if (result.sampleCount === 0) {
+                icon.innerText = "⏳";
+                h4.innerText = `${modeLabel} · 데이터 없음`;
+                p.innerText = "선택한 구간에 저장된 측정 snapshot이 없습니다.";
+                feedbackCard.style.borderLeftColor = "var(--neutral-color)";
+                feedbackCard.style.backgroundColor = "#f3f4f6";
+            } else {
+                const scores = result.points.map(point => point.score);
+                const average = scores.length ? Math.round(scores.reduce((sum, value) => sum + value, 0) / scores.length) : '—';
+                icon.innerText = "📊";
+                h4.innerText = `${modeLabel} · ${result.sampleCount}개 snapshot`;
+                p.innerText = `1분 집계 평균 Score ${average} · 확인 가능한 상태 구간 ${Math.round(total)}초`;
+                feedbackCard.style.borderLeftColor = "var(--good-color)";
+                feedbackCard.style.backgroundColor = "rgba(46, 204, 113, 0.08)";
+            }
+
+            window.pieChartObj.data.datasets[0].data = durations;
+            window.pieChartObj.update();
+            const colors = { NORMAL: '#2ecc71', CAUTION: '#f1c40f', DANGER: '#e74c3c', ABSENT: '#95a5a6' };
+            window.timelineChartObj.data.labels = result.points.map(point =>
+                new Date(point.measured_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+            const dataset = window.timelineChartObj.data.datasets[0];
+            dataset.data = result.points.map(point => point.score);
+            dataset.pointBackgroundColor = result.points.map(point => colors[point.state]);
+            window.timelineChartObj.update();
+
+            const list = document.getElementById('history-transitions');
+            list.replaceChildren();
+            for (const transition of result.transitions.slice(-12)) {
+                const item = document.createElement('li');
+                const time = new Date(transition.measured_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                item.textContent = `${time} · ${transition.from || 'START'} → ${transition.to}`;
+                list.appendChild(item);
+            }
+        }
+
+        function resetHistoryUI(message = "예시 데이터, 현재 측정 기록 또는 저장된 세션을 선택해 주세요.") {
+            document.getElementById('history-status').innerText = message;
+            document.getElementById('history-mode-badge').innerText = '모드 선택';
+            window.pieChartObj.data.datasets[0].data = [0, 0, 0, 0];
+            window.pieChartObj.update();
+            window.timelineChartObj.data.labels = [];
+            window.timelineChartObj.data.datasets[0].data = [];
+            window.timelineChartObj.data.datasets[0].pointBackgroundColor = [];
+            window.timelineChartObj.update();
+            document.getElementById('history-transitions').replaceChildren();
+            document.querySelector('.feedback-icon').innerText = '⏳';
+            document.querySelector('.feedback-text h4').innerText = '측정 기록 대기 중';
+            document.querySelector('.feedback-text p').innerText = '선택한 기록의 요약이 여기에 표시됩니다.';
+        }
+
+        const STATE_MAP = {
+            "NORMAL": {
+                color: "var(--good-color)", bg: "rgba(46, 204, 113, 0.1)",
+                ko: { label: "정상", msg: "안정적인 측정 상태", sub: "현재 관측 지표에 큰 변화가 없습니다.", topDetail: "측정값을 계속 확인하고 있습니다." },
+                en: { label: "Normal", msg: "Stable measurement", sub: "No significant change is currently observed.", topDetail: "Measurement continues." }
+            },
+            "CAUTION": {
+                color: "var(--warn-color)", bg: "rgba(241, 196, 15, 0.1)",
+                ko: { label: "주의", msg: "수치 변화 감지", sub: "현재 측정 지표를 확인해 주세요.", topDetail: "상태 지표의 변화가 관측되었습니다." },
+                en: { label: "Caution", msg: "Change detected", sub: "Please check the current measurements.", topDetail: "A change in state indicators has been observed." }
+            },
+            "DANGER": {
+                color: "var(--danger-color)", bg: "rgba(231, 76, 60, 0.1)",
+                ko: { label: "위험", msg: "상태 변화 지속", sub: "현재 측정 지표를 확인하고 잠깐 쉬어보세요.", topDetail: "상태 지표의 변화가 지속되고 있습니다." },
+                en: { label: "Danger", msg: "State change sustained", sub: "Check the current measurements and consider a short break.", topDetail: "A change in state indicators is continuing." }
+            },
+            "ABSENT": {
+                color: "var(--neutral-color)", bg: "var(--card-bg)",
+                ko: { label: "자리 비움", msg: "사용자 없음", sub: "자리 비움 · 착석하면 실시간 표시를 재개합니다.", topDetail: "착석하면 실시간 표시를 재개합니다." },
+                en: { label: "Away", msg: "No user detected", sub: "Away · Realtime display resumes when you sit down.", topDetail: "Realtime display resumes when you sit down." }
+            },
+            "UNKNOWN": {
+                color: "var(--text-main)", bg: "var(--card-bg)",
+                ko: { label: "대기", msg: "분석 중...", sub: "데이터를 기다리고 있습니다.", topDetail: "..." },
+                en: { label: "Waiting", msg: "Analyzing...", sub: "Waiting for data.", topDetail: "..." }
+            }
+        };
+
+        const REASON_TEXT = {
+            ko: {
+                low_blink: "눈 깜빡임 변화가 지속되고 있습니다.",
+                close_distance: "화면과 가까운 상태가 지속되고 있습니다.",
+                imbalance: "좌우 하중 차이가 지속되고 있습니다.",
+                static_hold: "움직임이 적은 상태가 지속되고 있습니다.",
+                no_backrest: "등받이와의 거리 변화가 관측되었습니다.",
+            },
+            en: {
+                low_blink: "A change in blink activity is continuing.",
+                close_distance: "A close screen distance is continuing.",
+                imbalance: "A left-right pressure difference is continuing.",
+                static_hold: "Low movement is continuing.",
+                no_backrest: "A change in backrest distance was observed.",
+            },
+        };
+
+        function reasonDescription(data, fallback) {
+            const messages = (data.reasons || []).map(reason => REASON_TEXT[currentLang]?.[reason]).filter(Boolean);
+            return messages.length ? messages.join(' ') : fallback;
+        }
+
+        /* =========================================
+           3. Socket.IO 연동 
+           ========================================= */
+        // Socket/REST effects are installed by the module after Auth restoration.
+        let presentationRevision = -1;
+        let activeFeedbackToast = null;
+
+        function updateDashboardUI(data, appendChart = true) {
+            if (!isMeasuring) return;
+
+            const stateKey = data.state || "UNKNOWN";
+            const absent = stateKey === "ABSENT";
+            const theme = STATE_MAP[stateKey] || STATE_MAP["UNKNOWN"];
+            const textInfo = theme[currentLang] || theme.ko;
+
+            const currentScore = (!absent && data.score !== undefined) ? data.score : null;
+            document.getElementById('currentScore').innerText = currentScore ?? "—";
+            document.getElementById('scoreRing').style.borderColor = theme.color;
+
+            document.getElementById('topStatusDot').style.backgroundColor = theme.color;
+            document.getElementById('topStatusLabel').innerText = textInfo.label;
+            document.getElementById('topStatusMessage').innerText = textInfo.msg;
+            document.getElementById('topDetailFeedback').innerText = reasonDescription(data, textInfo.topDetail);
+
+            const postureMsg = document.getElementById('posture-msg');
+            postureMsg.innerText = textInfo.msg;
+            postureMsg.style.color = theme.color;
+            document.getElementById('posture-sub').innerText = reasonDescription(data, textInfo.sub);
+
+            const mainCard = document.getElementById('main-status-card');
+            mainCard.style.backgroundColor = theme.bg;
+            mainCard.style.borderColor = theme.color;
+
+            const m = data.metrics || {};
+            document.getElementById('val-blink').innerText = (!absent && m.blink_rate !== undefined) ? m.blink_rate.toFixed(1) : "—";
+            document.getElementById('val-dist').innerText = (!absent && m.face_distance_cm !== undefined) ? m.face_distance_cm.toFixed(1) : "—";
+            document.getElementById('val-static').innerText = (!absent && m.static_hold_sec !== undefined) ? m.static_hold_sec : "—";
+
+            let balText = "—";
+            if (!absent && m.balance !== undefined && translations[currentLang]['bal_' + m.balance]) {
+                balText = translations[currentLang]['bal_' + m.balance];
+            }
+            document.getElementById('val-balance').innerText = balText;
+
+            if (appendChart && !absent && data.score !== undefined) {
+                updateRealtimeChart(currentScore);
+            }
+        }
+
+        /* =========================================
+           4. 실시간 측정 제어 로직 (시작/중지)
+           ========================================= */
+        function startMeasurement() {
+            stopCameraTest("측정을 시작하므로 브라우저 카메라 테스트를 종료했습니다.");
+            feedbackDemoGeneration++;
+            if (!feedbackDemoActive) {
+                Swal.close();
+                return window.measurementRuntime?.start();
+            }
+            return queueFeedbackDemo(async () => {
+                await stopFeedbackDemoHardware(feedbackDemoOwner);
+                Swal.close();
+                return window.measurementRuntime?.start();
+            });
+        }
+
+        function stopMeasurement() {
+            return window.measurementRuntime?.stop();
+        }
+
+        function retryMeasurement() {
+            return window.measurementRuntime?.retry();
+        }
+
+        const TEST_FEEDBACK = Object.freeze({
+            NORMAL: {
+                icon: 'success', title: '정상 상태 알림',
+                text: '현재 측정 상태가 안정적인 경우의 시연 알림입니다.', persistent: false,
+            },
+            CAUTION: {
+                icon: 'warning', title: '주의 상태 알림',
+                text: '자세 변화에 주의가 필요한 경우의 시연 알림입니다.', persistent: false,
+            },
+            DANGER: {
+                icon: 'error', title: '위험 상태 알림',
+                text: '작업 부하가 높아진 경우의 시연 알림입니다.', persistent: false,
+            },
+            BREAK: {
+                icon: 'info', title: '휴식 권고 알림',
+                text: '휴식이 권고되는 경우의 시연 알림입니다.', persistent: true,
+            },
+        });
+
+        function presentFeedbackToast(message, { test = false, owner = 'manual', didClose } = {}) {
+            if (message.clear) {
+                const current = activeFeedbackToast;
+                activeFeedbackToast = null;
+                if (current?.message.persistent) Swal.close();
+                return;
+            }
+            const toastOwner = { message, owner };
+            if (owner === 'runtime') activeFeedbackToast = toastOwner;
+            Swal.fire({
+                toast: true, position: 'bottom-end', icon: message.icon,
+                title: test ? `[테스트] ${message.title}` : message.title,
+                text: test ? `${message.text} 실제 측정 결과가 아닙니다.` : message.text,
+                showConfirmButton: false, showCloseButton: true,
+                timer: message.persistent ? undefined : 5000,
+                timerProgressBar: !message.persistent,
+                didClose: () => {
+                    if (activeFeedbackToast === toastOwner) activeFeedbackToast = null;
+                    didClose?.();
+                },
+            });
+        }
+
+        let feedbackDemoActive = false;
+        let feedbackDemoOwner = null;
+        let feedbackDemoGeneration = 0;
+        let feedbackDemoOperation = Promise.resolve();
+
+        function queueFeedbackDemo(operation) {
+            const next = feedbackDemoOperation.then(operation, operation);
+            feedbackDemoOperation = next.catch(() => {});
+            return next;
+        }
+
+        async function stopFeedbackDemoHardware(owner = feedbackDemoOwner) {
+            if (!feedbackDemoActive || feedbackDemoOwner !== owner) return true;
+            feedbackDemoActive = false;
+            feedbackDemoOwner = null;
+            try {
+                return await window.requestFeedbackDemo?.('OFF') !== false;
+            } catch {
+                document.getElementById('feedback-test-status').innerText =
+                    'Nano 시연 종료를 확인하지 못했습니다. Backend 연결을 확인해 주세요.';
+                return false;
+            }
+        }
+
+        function feedbackTestBlocked() {
+            const runtime = window.measurementRuntime;
+            const model = runtime?.model;
+            return !runtime?.hasSession?.() || (model.phase !== 'OFF' || !!model.sessionId ||
+                ['start', 'sync', 'stop'].includes(model.pendingAction));
+        }
+
+        function updateFeedbackTestControls() {
+            const blocked = feedbackTestBlocked();
+            for (const id of ['feedback-test-normal', 'feedback-test-caution',
+                'feedback-test-danger', 'feedback-test-break']) {
+                const button = document.getElementById(id);
+                button.disabled = blocked;
+                button.classList.toggle('opacity-50', blocked);
+                button.classList.toggle('cursor-not-allowed', blocked);
+            }
+            document.getElementById('feedback-test-status').innerText = blocked ?
+                (!window.measurementRuntime?.hasSession?.() ? '로그인 후 시연 알림을 사용할 수 있습니다.' :
+                    '실제 측정 또는 준비 중에는 시연 알림을 사용할 수 없습니다.') :
+                '측정이 꺼진 상태에서 팝업과 Nano 피드백을 함께 확인할 수 있습니다.';
+        }
+
+        async function showTestFeedback(level) {
+            if (feedbackTestBlocked()) {
+                updateFeedbackTestControls();
+                return false;
+            }
+            const message = TEST_FEEDBACK[level];
+            if (!message) return false;
+            const owner = ++feedbackDemoGeneration;
+            return queueFeedbackDemo(async () => {
+                await stopFeedbackDemoHardware(feedbackDemoOwner);
+                if (owner !== feedbackDemoGeneration) return false;
+                Swal.close();
+                if (owner !== feedbackDemoGeneration) return false;
+
+                // Claim ownership before awaiting the request. A later close/start
+                // can then enqueue one authoritative OFF even while this is in flight.
+                feedbackDemoActive = true;
+                feedbackDemoOwner = owner;
+                try {
+                    if (!await window.requestFeedbackDemo?.(level)) throw new Error('demo rejected');
+                } catch {
+                    if (feedbackDemoOwner === owner) {
+                        feedbackDemoActive = false;
+                        feedbackDemoOwner = null;
+                    }
+                    if (owner === feedbackDemoGeneration) {
+                        document.getElementById('feedback-test-status').innerText =
+                            'Nano 시연을 시작하지 못했습니다. Backend 연결과 측정 상태를 확인해 주세요.';
+                    }
+                    return false;
+                }
+                if (owner !== feedbackDemoGeneration) return false;
+                presentFeedbackToast(message, {
+                    test: true,
+                    didClose: () => {
+                        void queueFeedbackDemo(() => stopFeedbackDemoHardware(owner));
+                    },
+                });
+                document.getElementById('feedback-test-status').innerText =
+                    `${level} 테스트 팝업과 Nano 피드백을 시작했습니다. 실제 측정 결과가 아닙니다.`;
+                return true;
+            });
+        }
+
+        async function closeTestFeedback() {
+            const owner = ++feedbackDemoGeneration;
+            return queueFeedbackDemo(async () => {
+                await stopFeedbackDemoHardware(feedbackDemoOwner);
+                Swal.close();
+                if (owner === feedbackDemoGeneration) {
+                    document.getElementById('feedback-test-status').innerText =
+                        '시연 알림을 닫았습니다.';
+                }
+                return true;
+            });
+        }
+
+        function renderMeasurementUI() {
+            const runtime = window.measurementRuntime;
+            if (!runtime) return;
+            const model = runtime.model;
+            isMeasuring = runtime.canRender();
+            lastServerStatus = model.connected;
+            const color = model.connected ? 'var(--good-color)' : 'var(--neutral-color)';
+            document.getElementById('conn-dot').style.background = color;
+            document.getElementById('conn-text').innerText = model.connected ?
+                translations[currentLang].server_connected : translations[currentLang].server_disconnected;
+            if (model.presentationRevision !== presentationRevision || !isMeasuring) {
+                presentationRevision = model.presentationRevision;
+                lastPostureData = null;
+                resetDashboardUI();
+                realtimeChart.data.labels = [];
+                realtimeChart.data.datasets[0].data = [];
+                realtimeChart.update('none');
+                activeFeedbackToast = null;
+                Swal.close();
+            }
+            const pending = model.pendingAction;
+            const failed = model.phase === 'CALIBRATING' && model.calibration?.status === 'FAILED';
+            let title = '측정 대기 중';
+            let detail = '시작 버튼을 눌러 측정을 준비하세요.';
+            if (pending === 'start' || pending === 'sync') {
+                title = '측정 준비 요청 중';
+                detail = 'Backend의 준비 상태를 기다리고 있습니다.';
+            } else if (model.phase === 'CALIBRATING') {
+                title = failed ? '측정 준비를 완료하지 못했습니다.' : '측정 준비 중';
+                const calibration = model.calibration;
+                const progress = Number.isFinite(calibration?.progress) ? Math.round(calibration.progress * 100) : 0;
+                const valid = calibration?.valid_samples || {};
+                const required = calibration?.required_samples || {};
+                detail = failed ? 'Calibration 시간이 초과되었습니다. 카메라와 Chair IR 연결을 확인한 뒤 다시 준비해 주세요.' :
+                    `평소 작업 자세로 정면을 바라봐 주세요. ${progress}% · Vision ${valid.vision ?? 0}/${required.vision ?? '—'} · Chair IR ${valid.chair_ir ?? 0}/${required.chair_ir ?? '—'}`;
+            } else if (model.phase === 'READY') {
+                title = '측정 준비 완료';
+                detail = '자동으로 측정을 시작합니다.';
+            } else if (model.phase === 'MEASURING') {
+                title = lastPostureData ? '측정 중' : '측정 중 · 데이터 수신 대기';
+                detail = lastPostureData ? '현재 측정 데이터를 표시하고 있습니다.' :
+                    '새 측정 데이터를 기다리고 있습니다.';
+            }
+            if (model.stopRequested) {
+                title = '측정 중지 요청 중';
+                detail = 'Backend 종료를 확인하고 있습니다.';
+            }
+            if (model.error) {
+                const labels = { auth: '인증 확인 필요', network: '네트워크 연결 오류',
+                    connection: '서버 연결 확인 필요', conflict: '측정 사용 중', backend: 'Backend 요청 오류' };
+                title = labels[model.error.kind] || '연결 확인 필요';
+                detail = model.error.message;
+            }
+            if (!isMeasuring || !lastPostureData) {
+                document.getElementById('topStatusLabel').innerText = model.phase;
+                document.getElementById('topStatusMessage').innerText = title;
+                document.getElementById('topDetailFeedback').innerText = detail;
+                document.getElementById('posture-msg').innerText = title;
+                document.getElementById('posture-sub').innerText = detail;
+            }
+            document.getElementById('measure-status-text').innerText = title;
+            document.getElementById('measure-status-dot').style.backgroundColor = color;
+            document.getElementById('measurement-note').innerText = detail;
+            const enabled = runtime.hasSession();
+            const canStart = enabled && model.connected && !pending && !model.sessionId &&
+                !model.stopRequested;
+            const canStop = enabled && pending !== 'stop' &&
+                (!!model.sessionId || pending === 'start' || pending === 'sync' ||
+                    model.stopRequested || model.bufferedPhases.length > 0);
+            for (const [id, allowed] of [['btn-start', canStart], ['btn-stop', canStop]]) {
+                const button = document.getElementById(id);
+                button.disabled = !allowed;
+                button.classList.toggle('opacity-50', !allowed);
+                button.classList.toggle('cursor-not-allowed', !allowed);
+            }
+            document.getElementById('btn-retry').hidden = !failed;
+            document.getElementById('btn-retry').disabled = !!pending || !model.connected;
+            updateFeedbackTestControls();
+            if (lastPostureData && isMeasuring) updateDashboardUI(lastPostureData, false);
+        }
+
+        function resetDashboardUI() {
+            document.getElementById('currentScore').innerText = "—";
+            document.getElementById('val-blink').innerText = "-";
+            document.getElementById('val-dist').innerText = "-";
+            document.getElementById('val-static').innerText = "-";
+            document.getElementById('val-balance').innerText = "-";
+
+            document.getElementById('posture-msg').innerText = "측정 중지됨";
+            document.getElementById('posture-msg').style.color = "var(--neutral-color)";
+            document.getElementById('posture-sub').innerText = "시작 버튼을 눌러 측정을 재개하세요.";
+
+            document.getElementById('main-status-card').style.backgroundColor = "var(--card-bg)";
+            document.getElementById('main-status-card').style.borderColor = "transparent";
+
+            document.getElementById('topStatusLabel').innerText = "중지";
+            document.getElementById('topStatusMessage').innerText = "측정이 중지되었습니다";
+            document.getElementById('topDetailFeedback').innerText = "우측의 측정 시작 버튼을 눌러주세요.";
+            document.getElementById('topStatusDot').style.backgroundColor = "var(--neutral-color)";
+            document.getElementById('scoreRing').style.borderColor = "var(--neutral-color)";
+        }
+    </script>
+
+    <!-- =========================================
+     5. Supabase 연동 스크립트
+     ========================================= -->
+    <script type="module">
+        // 로그인은 login.html, 회원가입은 signup.html 에서 합니다. 클라이언트는 auth.js 와 공유합니다.
+        import { supabase, authenticatedFetch } from './auth.js';
+        import { createMeasurementRuntime } from './measurement_runtime.mjs';
+        import { aggregateHistory, exampleHistoryPayload, historyRequestUrl, recordedSessionsUrl, recordedSessionsFromPayload, recordedHistoryRequestUrl, recordedSessionLabel } from './measurement_history.mjs';
+        import { formatObservedDuration, sessionReportChartSeries, sessionReportFromPayload, sessionReportUrl } from './session_report.mjs';
+
+        // 예전 로그인 모달 주소(index.html#login)로 들어오면 로그인 페이지로 보냅니다
+        if (location.hash === '#login') location.replace('./login.html');
+
+        // ── 로그인/로그아웃 버튼 ──
+        const authButton = document.getElementById('authButton');
+        let isLoggedIn = false;
+        let historyUserId = null;
+        let historyRequestRevision = 0;
+        let reportRequestRevision = 0;
+        let historyMode = null;
+        let recordedSessions = [];
+        const historySessionSelect = document.getElementById('history-session-select');
+        const backendUrl = window.SOMA_BACKEND_URL || `http://${location.hostname}:5000`;
+        const feedbackDemoLevel = Object.freeze({
+            NORMAL: 'NORMAL', CAUTION: 'NOTICE', DANGER: 'WARNING', BREAK: 'BREAK', OFF: 'OFF',
+        });
+        window.requestFeedbackDemo = async level => {
+            const mapped = feedbackDemoLevel[level];
+            if (!mapped) return false;
+            const response = await authenticatedFetch(`${backendUrl}/api/feedback/demo`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ level: mapped }),
+            });
+            const body = await response.json();
+            return body.status === 'success' && body.level === mapped;
+        };
+
+        function renderAuthButton(loggedIn) {
+            isLoggedIn = loggedIn;
+            const key = loggedIn ? 'btn_logout' : 'btn_login';
+            // changeLanguage() 가 data-i18n 을 보고 다시 그리므로 키도 같이 바꿉니다
+            authButton.setAttribute('data-i18n', key);
+            authButton.innerText = translations[currentLang][key];
+            authButton.classList.toggle('bg-blue-500', !loggedIn);
+            authButton.classList.toggle('hover:bg-blue-600', !loggedIn);
+            authButton.classList.toggle('bg-gray-500', loggedIn);
+            authButton.classList.toggle('hover:bg-gray-600', loggedIn);
+        }
+
+        const runtime = createMeasurementRuntime({
+            auth: supabase.auth,
+            authenticatedFetch,
+            backendUrl,
+            socketFactory: (url, options) => io(url, options),
+            onChange: () => renderMeasurementUI(),
+            onSession: session => {
+                // Supabase owns restoration; keep the existing login-page storage compatibility.
+                if (session) localStorage.setItem('access_token', session.access_token);
+                else localStorage.removeItem('access_token');
+                const nextUserId = session?.user?.id || null;
+                if (nextUserId !== historyUserId) {
+                    historyUserId = nextUserId;
+                    historyRequestRevision++;
+                    reportRequestRevision++;
+                    historyMode = null;
+                    recordedSessions = [];
+                    clearRecordedSessionOptions('저장된 세션을 불러와 주세요');
+                    resetSessionReport();
+                    document.getElementById('history-session-controls').hidden = true;
+                    resetHistoryUI(nextUserId ?
+                        '예시 데이터, 현재 측정 기록 또는 저장된 세션을 선택해 주세요.' :
+                        '실제 측정 기록을 조회하려면 로그인해 주세요.');
+                }
+                renderAuthButton(!!session);
+                renderMeasurementUI();
+            },
+            onState: data => {
+                lastPostureData = data;
+                renderMeasurementUI();
+                updateDashboardUI(data);
+            },
+            onFeedback: message => {
+                presentFeedbackToast(message, { owner: 'runtime' });
+            },
+        });
+        window.measurementRuntime = runtime;
+        renderMeasurementUI();
+        // Synchronous callback: do not call async Supabase methods under its Auth lock.
+        supabase.auth.onAuthStateChange((event, session) => runtime.authChanged(event, session));
+        runtime.restore(); // Restore/connect only. Never automatically start measurement.
+
+        authButton.addEventListener('click', async () => {
+            if (!isLoggedIn) {
+                location.href = './login.html';
+                return;
+            }
+
+            authButton.disabled = true;
+            const { error } = await supabase.auth.signOut();
+            authButton.disabled = false;
+            if (error) {
+                Swal.fire({ icon: 'error', title: '로그아웃 실패', text: '잠시 후 다시 시도해주세요.' });
+                return;
+            }
+
+            runtime.destroy(); // Invalidate old callbacks; no anonymous reconnect.
+
+            Swal.fire({
+                icon: 'info',
+                title: '로그아웃',
+                text: '로그아웃되었습니다.',
+                timer: 1500,
+                showConfirmButton: false
+            });
+        });
+
+        const REPORT_REASON_LABELS = Object.freeze({
+            static_hold: '정적 유지', low_blink: '낮은 깜빡임', imbalance: '좌우 편중',
+            close_distance: '가까운 거리', no_backrest: '등받이 이격',
+        });
+
+        function resetSessionReport(message = '저장된 세션을 선택하면 전체 세션 요약을 표시합니다.', show = false) {
+            document.getElementById('session-report-card').hidden = !show;
+            document.getElementById('session-report-status').innerText = message;
+            for (const id of ['report-first-at', 'report-last-at', 'report-seated-time',
+                'report-average-score', 'report-minimum-score', 'report-state-times',
+                'report-reasons', 'report-quality']) {
+                document.getElementById(id).innerText = '—';
+            }
+            document.getElementById('report-break').innerText = '현재 저장 데이터로 확인 불가';
+            window.sessionReportChartObj.data.labels = [];
+            window.sessionReportChartObj.data.datasets[0].data = [];
+            window.sessionReportChartObj.data.datasets[0].pointBackgroundColor = [];
+            window.sessionReportChartObj.update();
+        }
+
+        function renderSessionReport(report) {
+            const summary = report.summary;
+            const quality = report.quality;
+            const localTime = value => new Date(value).toLocaleString('ko-KR', {
+                dateStyle: 'short', timeStyle: 'medium',
+            });
+            document.getElementById('report-first-at').innerText = localTime(report.period.start);
+            document.getElementById('report-last-at').innerText = localTime(report.period.end);
+            document.getElementById('report-seated-time').innerText = formatObservedDuration(summary.seated_observed_sec);
+            document.getElementById('report-average-score').innerText = summary.average_score === null ?
+                '산출 불가' : summary.average_score.toFixed(1);
+            document.getElementById('report-minimum-score').innerText = summary.minimum_score ??
+                '산출 불가 (착석 snapshot 없음)';
+            document.getElementById('report-break').innerText = summary.break_feedback.message;
+            document.getElementById('report-state-times').innerText =
+                ['NORMAL', 'CAUTION', 'DANGER', 'ABSENT'].map(state =>
+                    `${state} ${formatObservedDuration(summary.state_seconds[state])}`).join(' · ');
+            document.getElementById('report-reasons').innerText = summary.major_reasons.length ?
+                summary.major_reasons.slice(0, 3).map(item =>
+                    `${REPORT_REASON_LABELS[item.reason] || item.reason} ${formatObservedDuration(item.seconds)}`).join(' · ') :
+                '관측된 상태 판정 사유 없음';
+            const models = quality.score_model_versions.length ? quality.score_model_versions.join(', ') : '버전 없음';
+            const warnings = [];
+            if (quality.single_snapshot) warnings.push('단일 snapshot');
+            if (quality.long_gap_count) warnings.push(`60초 초과 공백 ${quality.long_gap_count}개`);
+            if (quality.legacy_unversioned) warnings.push('legacy 미버전 데이터 포함');
+            document.getElementById('report-quality').innerText =
+                `snapshot ${quality.snapshot_count}개 · 모델 ${models}` +
+                (warnings.length ? ` · ${warnings.join(' · ')}` : ' · 유효 구간 정상');
+
+            const series = sessionReportChartSeries(report.timeseries);
+            const colors = { NORMAL: '#2ecc71', CAUTION: '#f1c40f', DANGER: '#e74c3c', ABSENT: '#95a5a6' };
+            window.sessionReportChartObj.data.labels = series.map(point =>
+                new Date(point.measured_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+            const dataset = window.sessionReportChartObj.data.datasets[0];
+            dataset.data = series.map(point => point.score);
+            dataset.pointBackgroundColor = series.map(point => point.state ? colors[point.state] : 'transparent');
+            window.sessionReportChartObj.update();
+            document.getElementById('session-report-status').innerText =
+                `전체 세션 snapshot 기준 · 확인 가능한 관측 ${formatObservedDuration(summary.observed_coverage_sec)} · 미확인 공백 ${formatObservedDuration(summary.unknown_gap_sec)}`;
+        }
+
+        function sessionReportError(error) {
+            return {
+                auth: '인증이 만료되었습니다. 다시 로그인해 주세요.',
+                network: 'Backend에 연결할 수 없어 보고서를 불러오지 못했습니다.',
+                backend: '세션 보고서를 조회할 수 없습니다. Backend/DB 상태를 확인해 주세요.',
+            }[error?.kind] || '세션 보고서 응답을 확인하지 못했습니다.';
+        }
+
+        async function loadSessionReport() {
+            if (historyMode !== 'recorded') return;
+            const request = ++reportRequestRevision;
+            const userId = historyUserId;
+            const selected = recordedSessions.find(session => session.session_id === historySessionSelect.value);
+            resetSessionReport('선택한 세션의 전체 보고서를 불러오는 중입니다...', true);
+            if (!userId || !selected || !runtime.hasSession()) {
+                resetSessionReport('저장된 세션 목록을 불러온 뒤 세션을 선택해 주세요.', true);
+                return;
+            }
+            try {
+                const response = await authenticatedFetch(
+                    sessionReportUrl(backendUrl, selected.session_id), { method: 'GET' }, userId);
+                const payload = await response.json();
+                if (request !== reportRequestRevision || historyMode !== 'recorded' ||
+                    historySessionSelect.value !== selected.session_id) return;
+                renderSessionReport(sessionReportFromPayload(payload, userId, selected.session_id));
+            } catch (error) {
+                if (request !== reportRequestRevision || historyMode !== 'recorded') return;
+                resetSessionReport(sessionReportError(error), true);
+            }
+        }
+
+        function showExampleHistory() {
+            historyRequestRevision++;
+            reportRequestRevision++;
+            resetSessionReport();
+            historyMode = 'example';
+            document.getElementById('history-session-controls').hidden = true;
+            document.getElementById('history-mode-badge').innerText = '예시 데이터 · 실제 기록 아님';
+            document.getElementById('history-status').innerText =
+                '시연용 4시간 시나리오입니다. 사용자 DB 및 현재 측정과 연결되지 않습니다.';
+            const result = aggregateHistory(exampleHistoryPayload(), {
+                bucketMinutes: 20, gapLimitMs: 21 * 60_000,
+            });
+            renderHistoryData(result, '예시 데이터');
+        }
+
+        async function loadActualHistory() {
+            reportRequestRevision++;
+            resetSessionReport();
+            historyMode = 'actual';
+            const request = ++historyRequestRevision;
+            const userId = historyUserId;
+            document.getElementById('history-session-controls').hidden = true;
+            resetHistoryUI();
+            const status = document.getElementById('history-status');
+            document.getElementById('history-mode-badge').innerText = '실제 측정 기록 · 활성 session';
+            if (!runtime.hasSession()) {
+                status.innerText = '실제 측정 기록을 조회하려면 로그인해 주세요.';
+                return;
+            }
+            status.innerText = 'Backend에서 실제 측정 기록을 불러오는 중입니다...';
+            try {
+                const minutes = Number(document.getElementById('history-range').value);
+                const response = await authenticatedFetch(historyRequestUrl(backendUrl, minutes), { method: 'GET' }, userId);
+                const payload = await response.json();
+                if (request !== historyRequestRevision) return;
+                if (payload?.v !== 1 || payload?.status !== 'success' || payload.stream?.user_id !== userId || !Array.isArray(payload.states)) {
+                    throw new Error('invalid history response');
+                }
+                const result = aggregateHistory(payload);
+                renderHistoryData(result, `실제 최근 ${minutes}분`);
+                status.innerText = result.sampleCount ?
+                    `현재 활성 측정의 최근 ${minutes}분 snapshot을 measured_at 기준으로 표시합니다.` :
+                    `최근 ${minutes}분에 저장된 snapshot이 없습니다.`;
+            } catch (error) {
+                if (request !== historyRequestRevision) return;
+                const messages = {
+                    auth: '인증이 만료되었습니다. 다시 로그인해 주세요.',
+                    network: 'Backend에 연결할 수 없습니다.',
+                    backend: '현재 활성 측정 기록을 조회할 수 없습니다. 측정이 끝났다면 「저장된 세션」을 선택해 주세요.',
+                };
+                resetHistoryUI(messages[error?.kind] || '측정 기록을 불러오지 못했습니다.');
+                historyMode = 'actual';
+                document.getElementById('history-mode-badge').innerText = '실제 측정 기록 · 조회 실패';
+            }
+        }
+
+        function clearRecordedSessionOptions(message) {
+            historySessionSelect.replaceChildren();
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = message;
+            historySessionSelect.appendChild(option);
+            historySessionSelect.value = '';
+            historySessionSelect.disabled = true;
+        }
+
+        function recordedHistoryError(error) {
+            return {
+                auth: '인증이 만료되었습니다. 다시 로그인해 주세요.',
+                network: 'Backend에 연결할 수 없습니다. 연결 후 새로고침해 주세요.',
+                backend: '저장 기록을 조회할 수 없습니다. Backend/DB 상태를 확인하고 목록을 새로고침해 주세요.',
+            }[error?.kind] || '저장 기록 응답을 확인하지 못했습니다. 목록을 새로고침해 주세요.';
+        }
+
+        async function loadRecordedSessions() {
+            historyMode = 'recorded';
+            const request = ++historyRequestRevision;
+            reportRequestRevision++;
+            resetSessionReport('저장된 세션 목록을 불러오는 중입니다...', true);
+            const userId = historyUserId;
+            const previousId = historySessionSelect.value;
+            recordedSessions = [];
+            resetHistoryUI();
+            document.getElementById('history-session-controls').hidden = false;
+            clearRecordedSessionOptions('저장된 세션 조회 중...');
+            const status = document.getElementById('history-status');
+            document.getElementById('history-mode-badge').innerText = '실제 측정 기록 · 저장된 세션';
+            if (!userId || !runtime.hasSession()) {
+                clearRecordedSessionOptions('로그인이 필요합니다');
+                status.innerText = '저장된 세션을 조회하려면 로그인해 주세요.';
+                resetSessionReport('세션 보고서를 조회하려면 로그인해 주세요.', true);
+                return;
+            }
+            status.innerText = '저장된 세션 목록을 불러오는 중입니다...';
+            try {
+                const response = await authenticatedFetch(recordedSessionsUrl(backendUrl), { method: 'GET' }, userId);
+                const payload = await response.json();
+                if (request !== historyRequestRevision) return;
+                recordedSessions = recordedSessionsFromPayload(payload, userId);
+                if (!recordedSessions.length) {
+                    clearRecordedSessionOptions('저장된 세션 없음');
+                    status.innerText = '저장된 측정 기록이 없습니다. 측정 직후라면 비동기 저장이 완료된 뒤 새로고침해 주세요.';
+                    resetSessionReport('보고서를 만들 저장 세션이 없습니다.', true);
+                    return;
+                }
+                historySessionSelect.replaceChildren();
+                for (const session of recordedSessions) {
+                    const option = document.createElement('option');
+                    option.value = session.session_id;
+                    option.textContent = recordedSessionLabel(session);
+                    historySessionSelect.appendChild(option);
+                }
+                historySessionSelect.disabled = false;
+                historySessionSelect.value = recordedSessions.some(session => session.session_id === previousId) ?
+                    previousId : recordedSessions[0].session_id;
+                void loadSessionReport();
+                await loadRecordedHistory();
+            } catch (error) {
+                if (request !== historyRequestRevision) return;
+                recordedSessions = [];
+                clearRecordedSessionOptions('목록 조회 실패 · 새로고침해 주세요');
+                resetHistoryUI(recordedHistoryError(error));
+                resetSessionReport(recordedHistoryError(error), true);
+                document.getElementById('history-mode-badge').innerText = '저장된 세션 · 조회 실패';
+            }
+        }
+
+        function loadRecordedSelection() {
+            void loadSessionReport();
+            return loadRecordedHistory();
+        }
+
+        async function loadRecordedHistory() {
+            if (historyMode !== 'recorded') return;
+            const request = ++historyRequestRevision;
+            const userId = historyUserId;
+            const selected = recordedSessions.find(session => session.session_id === historySessionSelect.value);
+            resetHistoryUI();
+            const status = document.getElementById('history-status');
+            document.getElementById('history-mode-badge').innerText = '실제 측정 기록 · 저장된 세션';
+            if (!userId || !selected) {
+                status.innerText = '저장된 세션 목록을 불러온 뒤 세션을 선택해 주세요.';
+                return;
+            }
+            status.innerText = '선택한 세션의 저장된 기록을 불러오는 중입니다...';
+            try {
+                const minutes = Number(document.getElementById('history-range').value);
+                const response = await authenticatedFetch(recordedHistoryRequestUrl(backendUrl, selected, minutes), { method: 'GET' }, userId);
+                const payload = await response.json();
+                if (request !== historyRequestRevision) return;
+                if (payload?.v !== 1 || payload.status !== 'success' || payload.stream?.user_id !== userId ||
+                    payload.stream?.session_id !== selected.session_id || !Array.isArray(payload.states)) {
+                    throw new Error('invalid recorded history');
+                }
+                const result = aggregateHistory(payload);
+                renderHistoryData(result, `저장 세션 ${selected.session_id.slice(0, 8)} · 마지막 ${minutes}분`);
+                status.innerText = result.sampleCount ?
+                    `마지막 저장 시각 기준 ${minutes}분 · ${recordedSessionLabel(selected)} · measured_at 기준 표시` :
+                    '선택한 세션의 이 구간에는 저장된 snapshot이 없습니다. 목록을 새로고침하거나 다른 세션을 선택해 주세요.';
+            } catch (error) {
+                if (request !== historyRequestRevision) return;
+                resetHistoryUI(recordedHistoryError(error));
+                document.getElementById('history-mode-badge').innerText = '저장된 세션 · 조회 실패';
+            }
+        }
+
+        document.getElementById('history-example-button').addEventListener('click', showExampleHistory);
+        document.getElementById('history-actual-button').addEventListener('click', loadActualHistory);
+        document.getElementById('history-sessions-button').addEventListener('click', loadRecordedSessions);
+        historySessionSelect.addEventListener('change', loadRecordedSelection);
+        document.getElementById('history-refresh-button').addEventListener('click', () => {
+            if (historyMode === 'example') showExampleHistory();
+            else if (historyMode === 'recorded') return loadRecordedSessions();
+            else loadActualHistory();
+        });
+        document.getElementById('history-range').addEventListener('change', () => {
+            if (historyMode === 'actual') loadActualHistory();
+            else if (historyMode === 'recorded' && !historySessionSelect.disabled) return loadRecordedHistory();
+        });
+    </script>
+</body>
+
+</html>

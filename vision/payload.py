@@ -36,8 +36,14 @@ def vision_payload(*, t: float, user_name: str, face_detected: bool,
                    blink_duration_ms=None,
                    face_distance_cm=None, face_distance_baseline_cm=None,
                    blink_rate_baseline=None,
+                   ear_threshold_mode=None, open_ear_baseline=None,
+                   ear_calibration_status=None,
                    detect_rate=None, yaw_dropped_rate=None,
-                   calibrating=None) -> dict:
+                   calibrating=None,
+                   face_lateral_offset=None,
+                   head_roll_deg=None, head_roll_delta_deg=None,
+                   face_lateral_calibrated=None,
+                   face_lean_direction=None) -> dict:
     """docs/contracts/sensor_data.schema.json 을 따르는 dict 를 만듭니다."""
     v = {"blink": bool(blink), "face_detected": bool(face_detected)}
 
@@ -53,10 +59,26 @@ def vision_payload(*, t: float, user_name: str, face_detected: bool,
     if face_distance_baseline_cm is not None and face_distance_baseline_cm > 0:
         v["face_distance_baseline_cm"] = round(float(face_distance_baseline_cm), 1)
     _put(v, "blink_rate_baseline", blink_rate_baseline)
+    if ear_threshold_mode is not None:
+        if ear_threshold_mode not in ("personalized", "fallback"):
+            raise ValueError("ear_threshold_mode must be personalized or fallback")
+        v["ear_threshold_mode"] = ear_threshold_mode
+    if open_ear_baseline is not None and open_ear_baseline > 0:
+        v["open_ear_baseline"] = round(float(open_ear_baseline), 6)
+    _put(v, "ear_calibration_status", ear_calibration_status)
 
     _put(v, "detect_rate", _clamp01(detect_rate))
     _put(v, "yaw_dropped_rate", _clamp01(yaw_dropped_rate))
     _put(v, "calibrating", None if calibrating is None else bool(calibrating))
+    _put(v, "face_lateral_offset", face_lateral_offset)
+    _put(v, "head_roll_deg", head_roll_deg)
+    _put(v, "head_roll_delta_deg", head_roll_delta_deg)
+    _put(
+        v,
+        "face_lateral_calibrated",
+        None if face_lateral_calibrated is None else bool(face_lateral_calibrated),
+    )
+    _put(v, "face_lean_direction", face_lean_direction)
 
     return {"v": V, "t": round(float(t), 3), "source": "vision",
             "user_name": user_name, "vision": v}

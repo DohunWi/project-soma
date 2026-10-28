@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-feedback/policy/policy.py
+feedback/policy/policy.py — LEGACY standalone adapter
 ────────────────────────
-state → feedback. 언제·무엇을·어느 강도로 말할지 정합니다.
+이전 state → feedback 프로세스입니다. Production policy는 Backend의
+FeedbackCoordinator에 통합되어 있으며 run_all 기본 경로는 이 파일을 실행하지 않습니다.
 
     서버 'state'  →  이 프로세스  →  서버 'feedback'  →  LED / 진동 / 팝업
 

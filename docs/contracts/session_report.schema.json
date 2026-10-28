@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "session_report",
+  "description": "GET /api/state/history/sessions/<session_id>/report. state_logs snapshot 기반 세션 요약이며 실제 measurement Start/Stop을 나타내지 않습니다.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "status", "stream", "period", "summary", "quality", "timeseries"],
+  "properties": {
+    "v": { "const": 1 },
+    "status": { "const": "success" },
+    "stream": {
+      "type": "object", "additionalProperties": false,
+      "required": ["user_id", "session_id"],
+      "properties": {
+        "user_id": { "type": "string", "format": "uuid" },
+        "session_id": { "type": "string", "format": "uuid" }
+      }
+    },
+    "period": {
+      "type": "object", "additionalProperties": false,
+      "required": ["start", "end", "basis", "lifecycle_exact"],
+      "properties": {
+        "start": { "$ref": "#/$defs/utcTimestamp" },
+        "end": { "$ref": "#/$defs/utcTimestamp" },
+        "basis": { "const": "snapshot_bounds" },
+        "lifecycle_exact": { "const": false }
+      }
+    },
+    "summary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["snapshot_span_sec", "observed_coverage_sec", "seated_observed_sec", "absent_observed_sec", "unknown_gap_sec", "average_score", "minimum_score", "state_seconds", "major_reasons", "break_feedback"],
+      "properties": {
+        "snapshot_span_sec": { "$ref": "#/$defs/nonnegativeNumber" },
+        "observed_coverage_sec": { "$ref": "#/$defs/nonnegativeNumber" },
+        "seated_observed_sec": { "$ref": "#/$defs/nonnegativeNumber" },
+        "absent_observed_sec": { "$ref": "#/$defs/nonnegativeNumber" },
+        "unknown_gap_sec": { "$ref": "#/$defs/nonnegativeNumber" },
+        "average_score": { "type": ["number", "null"], "minimum": 0, "maximum": 100 },
+        "minimum_score": {
+          "type": ["integer", "null"], "minimum": 0, "maximum": 100,
+          "description": "ABSENT를 제외한 저장 snapshot의 최저 Score. 착석 snapshot이 없으면 null."
+        },
+        "state_seconds": {
+          "type": "object", "additionalProperties": false,
+          "required": ["NORMAL", "CAUTION", "DANGER", "ABSENT"],
+          "properties": {
+            "NORMAL": { "$ref": "#/$defs/nonnegativeNumber" },
+            "CAUTION": { "$ref": "#/$defs/nonnegativeNumber" },
+            "DANGER": { "$ref": "#/$defs/nonnegativeNumber" },
+            "ABSENT": { "$ref": "#/$defs/nonnegativeNumber" }
+          }
+        },
+        "major_reasons": {
+          "type": "array",
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["reason", "seconds"],
+            "properties": {
+              "reason": { "enum": ["low_blink", "close_distance", "imbalance", "static_hold", "no_backrest"] },
+              "seconds": { "$ref": "#/$defs/nonnegativeNumber" }
+            }
+          }
+        },
+        "break_feedback": {
+          "type": "object", "additionalProperties": false,
+          "required": ["supported", "occurred", "message"],
+          "properties": {
+            "supported": { "const": false },
+            "occurred": { "type": "null" },
+            "message": { "const": "현재 저장 데이터로 확인 불가" }
+          }
+        }
+      }
+    },
+    "quality": {
+      "type": "object", "additionalProperties": false,
+      "required": ["snapshot_count", "valid_interval_count", "long_gap_count", "nonpositive_interval_count", "gap_limit_sec", "single_snapshot", "score_model_versions", "legacy_unversioned", "trigger_counts"],
+      "properties": {
+        "snapshot_count": { "type": "integer", "minimum": 1 },
+        "valid_interval_count": { "type": "integer", "minimum": 0 },
+        "long_gap_count": { "type": "integer", "minimum": 0 },
+        "nonpositive_interval_count": { "type": "integer", "minimum": 0 },
+        "gap_limit_sec": { "type": "number", "exclusiveMinimum": 0 },
+        "single_snapshot": { "type": "boolean" },
+        "score_model_versions": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "legacy_unversioned": { "type": "boolean" },
+        "trigger_counts": {
+          "type": "object", "additionalProperties": false,
+          "required": ["state_change", "periodic"],
+          "properties": {
+            "state_change": { "type": "integer", "minimum": 0 },
+            "periodic": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+    "timeseries": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["measured_at", "state", "score", "gap_before"],
+        "properties": {
+          "measured_at": { "$ref": "#/$defs/utcTimestamp" },
+          "state": { "enum": ["NORMAL", "CAUTION", "DANGER", "ABSENT"] },
+          "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+          "gap_before": { "type": "boolean" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "utcTimestamp": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}T.*Z$" },
+    "nonnegativeNumber": { "type": "number", "minimum": 0 }
+  }
+}

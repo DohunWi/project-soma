@@ -19,26 +19,37 @@ fusion/state.py
 from dataclasses import dataclass, field, replace
 from typing import Optional
 
+from fusion.config import (
+    DEMO_DISTANCE_EVIDENCE_TIMING,
+    DEMO_FUSION_TIMING,
+    DEMO_SOMA_LOAD_CONFIG,
+    FusionTiming,
+    DistanceEvidenceTiming,
+    SomaLoadConfig,
+)
+from fusion.distance_temporal import DistanceTemporalResult
+from fusion.load import SomaLoadState, score_integer, update_chair_load, update_distance_load
+from fusion.static_burden import (
+    StaticBurdenConfig,
+    StaticBurdenState,
+    static_burden_level,
+)
+
 # ── 임계값 ───────────────────────────────────────────────────────────────────
 # 전부 추정치입니다. 실측 데이터로 재조정하기 전까지 확정값으로 쓰지 마세요.
 
 OCCUPANCY_MIN     = 100    # 압력 합이 이 값 미만이면 자리 비움
-BALANCE_DIFF      = 50     # 좌우 압력차가 이 값을 넘으면 편중
-BALANCE_RELEASE   = 30     # 편중 해제 임계 (히스테리시스)
+# 한 사용자/한 Chair의 실측 CENTER(-1..+65), LEFT(+415..+1562),
+# RIGHT(-618..-1045) 표본 사이의 관측 공백에 둔 provisional engineering 값입니다.
+BALANCE_DIFF      = 200    # CENTER에서 편중으로 진입하는 좌우 압력차
+BALANCE_RELEASE   = 100    # 편중 해제 임계 (히스테리시스)
 
 BLINK_RATE_LOW    = 8.0    # 분당 깜빡임이 이 값 미만이면 저깜빡임
 BLINK_RATE_OK     = 11.0   # 회복 임계 (히스테리시스)
-LOW_BLINK_CAUTION = 300.0  # 저깜빡임 연속 초 → 주의
-LOW_BLINK_RISK    = 900.0  # → 위험
-
 DISTANCE_CLOSE_CM = 45.0   # 이보다 가까우면 근접
 DISTANCE_OK_CM    = 50.0   # 회복 임계
 
 STATIC_EPS        = 25     # 압력 변화량이 이 값 이하면 "안 움직임"
-STATIC_CAUTION    = 1200.0 # 정적 유지 초 → 주의
-STATIC_RISK       = 2700.0 # → 위험
-
-MAX_GAP_SEC       = 5.0    # 샘플 간격이 이보다 크면 절전·재시작으로 보고 리셋
 
 
 @dataclass(frozen=True)
@@ -47,6 +58,10 @@ class FusionState:
     last_t:          Optional[float] = None
     session_start:   Optional[float] = None
     seated:          bool = False
+    absence_candidate_sec: float = 0.0
+    reseat_stabilizing: bool = False
+    reseat_stable_sec: float = 0.0
+    stabilization_rebaseline_pending: bool = False
 
     low_blink_sec:   float = 0.0   # 연속. 회복하면 0
     static_hold_sec: float = 0.0   # 연속. 움직이면 0
@@ -55,8 +70,11 @@ class FusionState:
 
     static_total:    float = 0.0   # 세션 누적. 리포트용, 리셋 없음
     balance:         str = "CENTER"
+    load:            SomaLoadState = field(default_factory=SomaLoadState)
+    static_burden:   StaticBurdenState = field(default_factory=StaticBurdenState)
 
     _last_pressure:  tuple = field(default=())
+    _last_distance_evidence: DistanceTemporalResult | None = None
 
 
 def _balance(pressure, prev):
@@ -81,7 +99,78 @@ def _activity(pressure, prev):
     return sum(abs(a - b) for a, b in zip(pressure, prev))
 
 
-def step(st: FusionState, s: dict, now: float):
+def _state_and_reasons(st, timing, static_burden_config=None):
+    """Return the current state without mutating any timer or load."""
+    reasons, level = [], 0
+    if st.low_blink_sec >= timing.low_blink_danger_sec:
+        reasons.append("low_blink")
+        level = max(level, 2)
+    elif st.low_blink_sec >= timing.low_blink_caution_sec:
+        reasons.append("low_blink")
+        level = max(level, 1)
+    if static_burden_config is None:
+        if st.static_hold_sec >= timing.static_danger_sec:
+            reasons.append("static_hold")
+            level = max(level, 2)
+        elif st.static_hold_sec >= timing.static_caution_sec:
+            reasons.append("static_hold")
+            level = max(level, 1)
+    else:
+        static_level = static_burden_level(
+            st.load.static_penalty,
+            static_burden_config,
+        )
+        if static_level:
+            reasons.append("static_hold")
+            level = max(level, static_level)
+    if st.close_dist_sec >= timing.close_distance_caution_sec:
+        reasons.append("close_distance")
+        level = max(level, 1)
+    if st.imbalance_sec >= timing.imbalance_caution_sec:
+        reasons.append("imbalance")
+        level = max(level, 1)
+    return ("NORMAL", "CAUTION", "DANGER")[level], reasons
+
+
+def decision_with_static_burden(
+    st,
+    decision,
+    timing,
+    config: StaticBurdenConfig,
+):
+    """Replace only static-v2 score/state/reasons in an existing decision."""
+    if not st.seated or decision["state"] == "ABSENT":
+        # Confirmed absence owns the public state lifecycle.  Static v2 may
+        # reuse the existing absence recovery result, but it must never turn
+        # ABSENT back into a seated severity solely from residual load.
+        return {
+            **decision,
+            "score": score_integer(st.load),
+        }
+    state, reasons = _state_and_reasons(
+        st,
+        timing,
+        static_burden_config=config,
+    )
+    return {
+        **decision,
+        "state": state,
+        "score": score_integer(st.load),
+        "reasons": reasons,
+    }
+
+
+def step(
+    st: FusionState,
+    s: dict,
+    now: float,
+    *,
+    timing: FusionTiming = DEMO_FUSION_TIMING,
+    load_config: SomaLoadConfig = DEMO_SOMA_LOAD_CONFIG,
+    distance_evidence: DistanceTemporalResult | None = None,
+    distance_timing: DistanceEvidenceTiming = DEMO_DISTANCE_EVIDENCE_TIMING,
+    blink_observation_reliable: bool = True,
+):
     """
     Args:
         st:  직전 FusionState
@@ -89,39 +178,163 @@ def step(st: FusionState, s: dict, now: float):
              {"pressure": [4], "ir": [1], "blink_rate": float,
               "face_distance_cm": float, "face_detected": bool}
         now: 현재 시각 (초)
+        distance_evidence: Backend-owned calibrated temporal evidence, never raw payload fields.
 
     Returns:
         (새 FusionState, decision dict)
     """
     dt = 0.0 if st.last_t is None else now - st.last_t
-    if dt < 0 or dt > MAX_GAP_SEC:
+    if dt < 0 or dt > timing.max_gap_sec:
         dt = 0.0                     # 시계 점프는 누적하지 않습니다
 
     pressure = list(s.get("pressure") or [])
-    seated   = len(pressure) == 4 and sum(pressure) >= OCCUPANCY_MIN
+    seated = len(pressure) == 4 and sum(pressure) >= OCCUPANCY_MIN
 
-    # ── 자리 비움: 연속 누적값을 전부 리셋합니다 ────────────────────────────
+    # A seated user's brief pressure dropout is sensor debounce, not a break.
+    # Freeze every timer and penalty through the dropout and a short stable-seat
+    # window.  Pressure rebound can otherwise look like an immediate balance
+    # improvement and apply the fast Demo recovery rate after one lift.
+    if st.seated and not seated:
+        candidate_sec = st.absence_candidate_sec + dt
+        if candidate_sec < timing.absence_grace_sec:
+            st2 = replace(
+                st,
+                last_t=now,
+                absence_candidate_sec=candidate_sec,
+                reseat_stabilizing=False,
+                reseat_stable_sec=0.0,
+                stabilization_rebaseline_pending=False,
+            )
+            state, reasons = _state_and_reasons(st2, timing)
+            return st2, _decision(st2, s, now, state, 1.0, reasons)
+    elif st.seated and seated and st.absence_candidate_sec > 0:
+        st2 = replace(
+            st,
+            last_t=now,
+            absence_candidate_sec=0.0,
+            reseat_stabilizing=True,
+            reseat_stable_sec=0.0,
+            stabilization_rebaseline_pending=True,
+            _last_pressure=tuple(pressure),
+        )
+        state, reasons = _state_and_reasons(st2, timing)
+        return st2, _decision(st2, s, now, state, 1.0, reasons)
+    elif st.seated and seated and st.reseat_stabilizing:
+        pressure_stable = _activity(pressure, st._last_pressure) <= STATIC_EPS
+        stable_sec = st.reseat_stable_sec + dt if pressure_stable else 0.0
+        stabilization_complete = (
+            stable_sec + 1e-9 >= timing.reseat_stable_sec
+        )
+        stabilized_balance = (
+            _balance(pressure, st.balance)
+            if stabilization_complete and st.stabilization_rebaseline_pending
+            else st.balance
+        )
+        st2 = replace(
+            st,
+            last_t=now,
+            reseat_stabilizing=not stabilization_complete,
+            reseat_stable_sec=(
+                stable_sec if not stabilization_complete else 0.0
+            ),
+            stabilization_rebaseline_pending=(
+                st.stabilization_rebaseline_pending
+                if not stabilization_complete
+                else False
+            ),
+            balance=stabilized_balance,
+            imbalance_sec=(
+                0.0
+                if stabilization_complete and stabilized_balance == "CENTER"
+                else st.imbalance_sec
+            ),
+            static_hold_sec=(
+                0.0
+                if stabilization_complete and st.stabilization_rebaseline_pending
+                else st.static_hold_sec
+            ),
+            _last_pressure=tuple(pressure),
+        )
+        state, reasons = _state_and_reasons(st2, timing)
+        return st2, _decision(st2, s, now, state, 1.0, reasons)
+
+    # A confirmed absence ends the seated interval. Residual load may recover
+    # while absent for reporting, but the next seated interval starts clean.
+    load_source = SomaLoadState() if seated and not st.seated else st.load
+    load = update_distance_load(
+        load_source,
+        previous_evidence=st._last_distance_evidence,
+        evidence=distance_evidence,
+        seated=seated,
+        dt=dt,
+        config=load_config,
+        timing=distance_timing,
+    )
+
+    # ── 자리 비움: State 연속값은 리셋하고 Load memory는 회복시킵니다 ───────
     if not seated:
+        load = update_chair_load(
+            load,
+            previous_static_sec=st.static_hold_sec,
+            static_sec=0.0,
+            previous_imbalance_sec=st.imbalance_sec,
+            imbalance_sec=0.0,
+            balance="CENTER",
+            seated=False,
+            dt=dt,
+            config=load_config,
+        )
         st2 = replace(
             st, last_t=now, seated=False,
+            absence_candidate_sec=0.0,
+            reseat_stabilizing=False, reseat_stable_sec=0.0,
+            stabilization_rebaseline_pending=False,
             low_blink_sec=0.0, static_hold_sec=0.0,
             close_dist_sec=0.0, imbalance_sec=0.0,
-            balance="CENTER", _last_pressure=(),
+            balance="CENTER", load=load, _last_pressure=(),
+            static_burden=StaticBurdenState(),
+            _last_distance_evidence=None,
         )
         return st2, _decision(st2, s, now, "ABSENT", 1.0, [])
 
     session_start = st.session_start if st.seated else now
 
+    moved = _activity(pressure, st._last_pressure) > STATIC_EPS
     balance = _balance(pressure, st.balance)
     imbalance_sec = st.imbalance_sec + dt if balance != "CENTER" else 0.0
-
-    moved = _activity(pressure, st._last_pressure) > STATIC_EPS
     static_hold = 0.0 if moved else st.static_hold_sec + dt
     static_total = st.static_total + (0.0 if moved else dt)
+    pressure_jump_would_recover = (
+        (moved and st.load.static_penalty > 0.0)
+        or (
+            balance == "CENTER"
+            and st.load.balance_penalty > 0.0
+        )
+    )
+    if st.seated and moved and pressure_jump_would_recover:
+        # At the 1 Hz firmware rate a complete sub-second lift can happen
+        # between samples.  In that case Fusion sees occupied -> occupied with
+        # a pressure jump.  Reuse the existing two-second stabilization state
+        # instead of treating that one sample as immediate recovery evidence.
+        st2 = replace(
+            st,
+            last_t=now,
+            absence_candidate_sec=0.0,
+            reseat_stabilizing=True,
+            reseat_stable_sec=0.0,
+            stabilization_rebaseline_pending=True,
+            _last_pressure=tuple(pressure),
+        )
+        state, reasons = _state_and_reasons(st2, timing)
+        return st2, _decision(st2, s, now, state, 1.0, reasons)
 
     # ── 웹캠: 값이 없으면 누적을 멈추되 리셋하지는 않습니다 ─────────────────
     rate = s.get("blink_rate")
-    if rate is None:
+    detect = s.get("detect_rate")
+    # blink_rate 는 rolling 값이므로 한 프레임의 face_detected 만으로 버리지
+    # 않습니다. 다만 최근 품질창에 얼굴 관측이 전혀 없으면 오래된 rate 가
+    # 0으로 수렴해 저깜빡임으로 오인되므로 unavailable 과 동일하게 멈춥니다.
+    if not blink_observation_reliable or rate is None or detect == 0:
         low_blink = st.low_blink_sec
     elif rate < BLINK_RATE_LOW:
         low_blink = st.low_blink_sec + dt
@@ -140,29 +353,36 @@ def step(st: FusionState, s: dict, now: float):
     else:
         close_dist = st.close_dist_sec
 
+    load = update_chair_load(
+        load,
+        previous_static_sec=st.static_hold_sec,
+        static_sec=static_hold,
+        previous_imbalance_sec=st.imbalance_sec,
+        imbalance_sec=imbalance_sec,
+        balance=balance,
+        seated=True,
+        dt=dt,
+        config=load_config,
+    )
+
     st2 = replace(
         st, last_t=now, seated=True, session_start=session_start,
+        absence_candidate_sec=0.0,
+        reseat_stabilizing=False, reseat_stable_sec=0.0,
+        stabilization_rebaseline_pending=False,
         balance=balance, imbalance_sec=imbalance_sec,
         static_hold_sec=static_hold, static_total=static_total,
-        low_blink_sec=low_blink, close_dist_sec=close_dist,
+        low_blink_sec=low_blink, close_dist_sec=close_dist, load=load,
         _last_pressure=tuple(pressure),
+        _last_distance_evidence=distance_evidence,
     )
 
     # ── 상태 판정 ──────────────────────────────────────────────────────────
-    reasons, level = [], 0
-    if low_blink >= LOW_BLINK_RISK:      reasons.append("low_blink");      level = max(level, 2)
-    elif low_blink >= LOW_BLINK_CAUTION: reasons.append("low_blink");      level = max(level, 1)
-    if static_hold >= STATIC_RISK:       reasons.append("static_hold");    level = max(level, 2)
-    elif static_hold >= STATIC_CAUTION:  reasons.append("static_hold");    level = max(level, 1)
-    if close_dist >= LOW_BLINK_CAUTION:  reasons.append("close_distance"); level = max(level, 1)
-    if imbalance_sec >= LOW_BLINK_CAUTION: reasons.append("imbalance");    level = max(level, 1)
+    state, reasons = _state_and_reasons(st2, timing)
 
-    state = ("NORMAL", "CAUTION", "DANGER")[level]
-
-    # 웹캠이 없으면 신뢰도를 낮춥니다. 서버는 confidence < 0.5 면 승격하지 않습니다.
+    # 웹캠이 없으면 신뢰도만 낮춥니다. 상태 판정과 서버 emit은 그대로 유지합니다.
     # 검출률(detect_rate)이 오면 그것을 씁니다. 프레임 하나가 우연히 잡힌 것과
     # 계속 안정적으로 잡히는 것을 불리언 하나로는 구분할 수 없었습니다.
-    detect = s.get("detect_rate")
     if detect is not None:
         confidence = round(0.45 + 0.45 * min(max(detect, 0.0), 1.0), 2)
     else:
@@ -174,7 +394,7 @@ def step(st: FusionState, s: dict, now: float):
 
 
 def _decision(st, s, now, state, confidence, reasons):
-    score = {"NORMAL": 90, "CAUTION": 60, "DANGER": 30, "ABSENT": 0}[state]
+    score = score_integer(st.load)
     metrics = {
         "balance":         st.balance,
         "seated":          st.seated,
@@ -191,6 +411,19 @@ def _decision(st, s, now, state, confidence, reasons):
         value = s.get(key)
         if value is not None:
             metrics[key] = value
+
+    # Phase B.5 Vision metrics are observational only.  Names are explicitly
+    # namespaced so they cannot be confused with Chair pressure balance.
+    for source_key, metric_key in (
+        ("face_lateral_offset", "vision_face_lateral_offset"),
+        ("head_roll_deg", "vision_head_roll_deg"),
+        ("head_roll_delta_deg", "vision_head_roll_delta_deg"),
+        ("face_lateral_calibrated", "vision_face_lateral_calibrated"),
+        ("face_lean_direction", "vision_face_lean_direction"),
+    ):
+        value = s.get(source_key)
+        if value is not None:
+            metrics[metric_key] = value
 
     return {
         "v": 1,

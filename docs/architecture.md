@@ -74,7 +74,18 @@
 | 상체 | 압력 4채널 (FSR406, A0~A3) | 좌우·전후 하중 밸런스 |
 | 허리 | 적외선 거리 (VL53L0X) | 허리가 등받이에 붙어 있는가 |
 
+Chair firmware의 VL53L0X out-of-range sentinel `8191mm`는 bridge의 raw monitor/log에는
+진단값 그대로 남기되, `sensor_data.chair.ir[0]`에는 미감지 계약값 `-1`로 정규화합니다.
+기존 raw `-1`도 그대로 유지하므로 calibration과 Fusion에서 실제 거리로 사용되지 않습니다.
+
 압력 채널 순서는 **[전좌, 전우, 후좌, 후우]** 로 고정입니다. 순서를 바꾸면 판정이 뒤집힙니다.
+
+현재 좌우 balance는 `(FL + BL) - (FR + BR)`의 raw 차이를 사용합니다. 한 사용자와
+한 Chair 설치에서 수집한 제한된 실측값은 CENTER `-1..+65`, LEFT `+415..+1562`,
+RIGHT `-618..-1045`였으며, 그 관측 공백 안의 provisional engineering calibration으로
+편중 진입 `±200`, CENTER 복귀 `±100`을 사용합니다. 이는 의학적 자세 경계나 모든
+사용자·Chair에 보편적인 값이 아니며, 더 다양한 체중·착석 위치·센서 포화 조건의 raw
+data를 모은 뒤 다시 검증해야 합니다.
 
 ### 4-2. 웹캠
 
@@ -87,6 +98,81 @@
 **외부캠을 씁니다.** 노트북 내장캠은 각도에 예민해 값이 불안정합니다.
 
 **영상은 백엔드로 보내지 않습니다.** 수치만 보냅니다.
+
+Vision은 Chair-only 핵심 경로를 막지 않는 선택적 producer입니다. Backend 연결이
+끊겨도 카메라와 수치 처리는 계속하며, 연결 중 생성된 값만 실시간 전송하고 연결이
+없는 동안의 payload는 저장하거나 재전송하지 않습니다. 카메라 읽기가 반복 실패하면
+capture를 해제하고 backoff를 두어 다시 엽니다. 시연 실행기에서도 Vision만 종료된
+경우 Chair·Backend·대시보드는 계속 실행합니다.
+
+ACTIVE measurement에서 Backend는 최신 Vision payload를 session cache에 보관하지만
+Vision event 자체로 Fusion을 실행하지 않습니다. Chair event가 authoritative tick이며,
+서버 monotonic 수신 나이가 3초 미만이고 Chair/Vision sender `t` 차이도 3초 미만인
+Vision만 Chair sample에 병합합니다. stale Vision은 병합하지 않아 Chair-only 경로를
+유지합니다. 신규 session start는 빈 cache로 시작하고 stop은 cache를 즉시 비우므로,
+OFF 중 도착한 Vision이나 이전 session 값은 다음 session에서 재사용하지 않습니다.
+
+`blink_rate`는 최대 60초 rolling metric입니다. 필드가 없거나 Vision이 stale이면
+저깜빡임 연속시간을 리셋하지 않고 freeze합니다. `detect_rate == 0`은 최근 품질창에서
+얼굴 관측이 전혀 없다는 뜻이므로, 이때 `blink_rate`가 있더라도 state 판정에는
+unavailable로 취급해 같은 방식으로 freeze합니다. 단일 frame의 `face_detected=false`만으로
+rolling metric을 무효화하지 않으며, 0보다 큰 임의의 검출률 quality threshold는 실제
+webcam E2E 이후 결정합니다. 거리 metric은 기존대로 필드 생략 시 freeze합니다.
+
+Vision startup calibration은 기존 얼굴 폭 기반 거리 보정과 OPEN EAR baseline 측정을
+함께 수행합니다. detector 초기화 시간이 측정 창을 소비하지 않도록 첫 유효 샘플에서
+3초 창을 시작하고, 얼굴 검출·정면·유한한 좌우/평균 EAR 조건을 만족하는 프레임을
+최소 20개 요구합니다. OPEN EAR baseline은 자연스러운 순간 blink의 영향을 줄이기 위해
+유효 평균 EAR의 상위 사분위수(p75)를 사용하며 `vision/baseline.json`의
+`open_ear_baseline`에 저장합니다. 안내 중 섞이는 자연 blink·cue transition의 낮은 EAR가
+OPEN 기준을 과도하게 낮추지 않도록 한 robust statistic이며, 기존 저장 파일은 호환을 위해
+계속 읽습니다. 새 방식 적용에는 명시적인 `--recalibrate`가 필요합니다.
+기존 파일에 이 필드가 없거나 calibration이 실패하면 기존 절대 임계 `0.21 / 0.25`를
+사용합니다.
+
+개인화 blink 임계는 같은 상태 기계를 유지한 채 `open_ear_baseline`에 engineering ratio를
+곱해 주입합니다. v1 후보는 `closed_ratio=0.225`, `open_ratio=0.50`이며, 한 피험자의
+조명 OFF/ON guided recording 두 건에서 확인한 넓은 후보 구간 안에서 닫힘과 재개방 사이
+hysteresis를 충분히 확보하도록 택한 provisional 설정입니다. 생리학적·의학적 기준이나
+보편 임계로 해석하지 않으며 `vision/config.py`에서 조정합니다.
+
+`open_ear_baseline`은 눈을 정상적으로 뜬 모양의 기하학 기준입니다. 최소 10초 관측이
+필요한 `blink_rate_baseline`은 깜빡임 빈도 기준으로 서로 다른 개념이며, 3초 startup
+calibration으로 해결하지 않습니다. 개인 blink-rate 기반 판정이나 penalty에는 아직
+사용하지 않습니다.
+
+#### Vision Phase B.5: 관측용 좌우 이동
+
+Vision은 개인 중립 calibration의 유효 정면 프레임에서 얼굴 경계 landmark 234/454의
+중심 X, 얼굴 폭, 바깥 눈꼬리 landmark 33/263의 image-plane roll을 수집하고 각각
+중앙값을 baseline으로 저장합니다. 얼굴 중심과 폭은 영상 폭으로 먼저 정규화하며,
+실시간 관측값은 다음과 같습니다.
+
+`face_lateral_offset = (current_center_x_ratio - neutral_center_x_ratio) / current_face_width_ratio`
+
+raw 영상 좌표에서 음수는 image-left, 양수는 image-right입니다. OpenCV preview는 현재
+flip하지 않지만, 사용자가 보는 다른 webcam 화면은 mirror될 수 있으므로 이 부호를
+사용자의 해부학적 LEFT/RIGHT로 보편적으로 해석할 수 없습니다. 현재 설치의 실제 webcam
+검증에서는 양수=사용자 LEFT, 음수=사용자 RIGHT mapping이 반복 확인되었습니다.
+
+Phase B.5의 `face_lean_direction`은 이 설치에서 검증한 provisional hysteresis를 사용합니다.
+LEFT 진입 `>= +0.20`, LEFT 해제 `<= +0.10`, RIGHT 진입 `<= -0.15`, RIGHT 해제
+`>= -0.08`입니다. 한 피험자·한 webcam 설치에서 얻은 engineering 값이며 보편적 또는
+의학적 기준이 아닙니다. 다른 mirror/camera 환경은 방향 mapping과 임계를 다시 검증해야
+합니다. 관측이 없거나 유효하지 않으면 `UNKNOWN`을 출력하고 마지막 유효 내부 상태를
+보존하며, 다시 유효해지면 그 상태에서 hysteresis를 재개합니다.
+
+`head_roll_deg`는 두 바깥 눈꼬리를 image x 순서로 놓은 선의 `atan2(dy, dx)`이며,
+image-right로 내려가는(clockwise) 선이 양수입니다. `head_roll_delta_deg`는 개인 중립
+roll과의 최단 signed angle 차이입니다. Head roll은 머리만 기울인 경우와 몸통 이동을
+구별하지 못하므로 보조 관측값일 뿐입니다.
+
+이 값들은 Chair의 `(FL + BL) - (FR + BR)` 압력 분포인 `balance`와 서로 다른 현상을
+측정합니다. Vision lateral 값과 `face_lean_direction`은 state 전이, SOMA Load,
+Chair balance, confidence, reasons, Feedback에
+사용하지 않으며 의료적 자세 평가도 아닙니다. calibration/face/frontal geometry가
+유효하지 않으면 값을 생략하고 CENTER로 대체하지 않습니다. Phase C는 아래 session working
+baseline과 sustained relative-distance evidence를 통해 단일 SOMA Load distance 슬롯에 연결합니다.
 
 ### 4-3. 왜 깜빡임인가 — 자세 각도 대신
 
@@ -104,7 +190,7 @@
 
 ```
 ┌── 수집 계층 ──────────┐
-│  의자 (아두이노)       │  압력4 + 적외선  ─┐
+│  Chair UNO             │  압력4 + ToF 입력 ─┐
 │  웹캠 (외부캠)         │  거리 + 깜빡임  ─┤
 └───────────────────────┘                   │  source 별 독립 전송
                                             │  각자 t 를 찍는다
@@ -119,9 +205,9 @@
 └───────────────────────────────────────────────────────┘
         │  state                      ▲  report
         ▼                             │
-┌── 인터페이스 계층 ─────┐   ┌── 피드백 (역방향) ──────────┐
-│  웹 대시보드           │   │  의자 진동   ← 서버         │
-│  팝업 알림             │   │  모니터 상단 LED ← 서버      │
+┌── 인터페이스 계층 ─────┐   ┌── 피드백 출력 (역방향) ──────┐
+│  웹 대시보드           │   │  Feedback Nano ← 서버       │
+│  팝업 알림             │   │  LED + 진동 모터             │
 └────────────────────────┘   └─────────────────────────────┘
 ```
 
@@ -135,6 +221,20 @@
 | `state.schema.json` | fusion → 서버 → UI·피드백 |
 | `feedback.schema.json` | **서버 → 액추에이터 (역방향)** |
 | `report.schema.json` | DB → 서버 → 프론트 |
+| `measurement_phase.schema.json` | 서버 → 인증 사용자 room (측정 실행 단계) |
+
+### Supabase Auth와 `state_logs` 저장은 별도 연결입니다
+
+Front는 Supabase Auth SDK로 로그인하고 access token을 얻습니다. Backend는
+`SUPABASE_URL`과 publishable key를 이용해 이 token을 검증한 뒤 JWT `sub`를 사용자
+소유권으로 사용합니다. publishable key는 브라우저에 제공되는 공개 client key이며
+PostgreSQL 쓰기 권한을 가진 service-role key가 아닙니다.
+
+실제 `state_logs` 저장·History·Session Report는 Backend가 `DB_HOST / DB_USER /
+DB_PASSWORD`로 연결한 PostgreSQL 앱 전용 role을 사용합니다. Front는 PostgreSQL이나
+`state_logs`를 직접 조회하지 않고 인증된 Backend API만 호출합니다. 따라서 Auth 성공과
+DB 연결 성공은 서로 다른 상태입니다. DB가 일시적으로 실패해도 realtime Fusion과
+인증 room은 계속 동작할 수 있지만 persistence/History는 실패로 보고해야 합니다.
 
 ### 왜 `t` 와 `source` 가 필수인가
 
@@ -153,6 +253,241 @@
 그래서 녹화 로그를 재생해 *"임계 A 면 하루 알림 N 회"* 같은 표를 뽑을 수 있고,
 그 표가 파라미터 결정의 근거이자 발표 자료가 됩니다.
 
+### 인증된 측정 세션
+
+현재 제품은 실제 Chair 1대를 전제로 하며 동시에 하나의 measurement session만
+`ACTIVE`가 될 수 있습니다. Backend는 Supabase access token을 검증한 뒤 JWT의
+`sub`를 `user_id`로 사용하고, start마다 별도의 `session_id`를 만듭니다. 클라이언트가
+보낸 `user_id`와 표시용 `user_name`은 데이터 소유권 판단에 사용하지 않습니다.
+
+측정이 `OFF`이면 `sensor_data`를 계약으로 검증하는 데서 멈춥니다. `ACTIVE`일 때만
+검증 → Fusion → 인증 사용자의 Socket.IO room 전송 → 비동기 DB 저장 순서로 처리합니다.
+서버 재시작 후에는 session을 복원하지 않고 `OFF`로 시작합니다. `device_id`는 Chair
+metadata로 저장하지만 사용자 데이터 격리나 history 소유권 기준으로 사용하지 않습니다.
+
+Measurement는 인증된 사용자 Socket.IO 연결을 runtime lease로 사용합니다. 같은 사용자의
+socket이 여러 개면 하나가 남아 있는 동안 ACTIVE를 유지하고, 마지막 owner socket이
+끊기면 session cache·Feedback state·persistence checkpoint를 정리해 `OFF`로 전환합니다.
+REST stop의 access token이 만료되어 401이 되더라도 이미 handshake에서 인증된 owner
+socket의 disconnect가 abandoned session을 남기지 않습니다. Socket.IO token은 handshake
+시점에 검증되며 연결 중 JWT 만료를 주기적으로 재검증하지는 않습니다. 따라서 연결이
+살아 있는 동안 measurement도 유지되고, 다른 사용자가 이를 넘겨받지 못합니다. 브라우저
+refresh나 네트워크 단절은 안전한 방향으로 측정을 종료하므로 재연결 후 새 START가 필요합니다.
+기존 ACTIVE owner의 인증 user socket이 하나도 없는 orphan 상태라면, 다음에 START를
+요청한 다른 인증 사용자가 오기 전에 기존 session을 먼저 종료하고 새 session을 만듭니다.
+Owner socket이 하나라도 살아 있으면 기존대로 `measurement_in_use`이며 소유권을 넘기지
+않습니다. 임의의 시간 timeout은 정상 장시간 측정을 자를 근거가 없어 이번 단계에서는
+도입하지 않습니다.
+
+#### Phase C 측정 calibration lifecycle
+
+인증된 measurement session의 `ACTIVE / STOPPED`와 별도로 Backend는
+`OFF → CALIBRATING → READY → MEASURING → OFF` 실행 단계를 관리합니다. 이 단계는
+Fusion의 `NORMAL / CAUTION / DANGER / ABSENT` 상태와 다른 축입니다. READY는 baseline이
+수락됐음을 알리는 일회성 Socket.IO 이벤트이며, 동일한 전이 처리 안에서 즉시
+MEASURING으로 진행합니다.
+
+START 후 CALIBRATING에서는 계약 검증과 기존 freshness 규칙에 따른 Chair-authoritative
+Vision 병합만 수행합니다. Fusion/SOMA Load, `state` emit, persistence, Feedback/Nano는
+진행하지 않습니다. Demo는 최소 5초와 유효 Vision/Chair IR 각 5개(30초 timeout),
+Normal은 최소 8초와 각 8개(45초 timeout)를 요구합니다. 착석 상태의 `IR >= 0`만 Chair
+표본으로, fresh Vision의 `face_detected=true`이면서 양의 유한 거리만 Vision 표본으로
+사용합니다. baseline은 중앙값이고 품질 평가는 unscaled MAD를 사용해 얼굴 거리 4cm,
+Chair IR 40mm 이하를 요구합니다. 이 MAD 값은 자세·피로 임계가 아니라 calibration
+안정성용 provisional engineering limit입니다.
+
+Backend의 source mode는 기본 `all`이며 `--source-mode all|chair-only` 또는
+`SOMA_SOURCE_MODE`로 명시적으로 선택합니다(CLI 우선). `run_all.py --chair-only`는
+Backend에 `--source-mode chair-only`를 전달하며, 기본 실행은 `all`을 전달합니다.
+Vision 누락/stale를 이유로 자동 전환하지 않습니다. Chair-only는 시간·Chair IR 표본 수·
+IR MAD·timeout 조건을 그대로 유지하고 Vision 요구량만 0으로 바꾸며 Vision 안정성 검사를
+생략합니다. Demo는 5초와 유효 IR 5개, Normal은 8초와 8개입니다. 착석·유효 IR 조건도
+동일합니다. 얼굴 표본은 수집하지 않고 얼굴 baseline/MAD는 내부 `None`으로 유지합니다.
+공개 phase payload는 기존 필드로 Vision 0/0과 readiness.vision=true(요구 없음)를 전달하며
+진행률은 시간·Chair IR에 따라 올라갑니다. 얼굴 baseline이 없으면 face delta를 계산하지
+않고 Phase C는 UNKNOWN으로 유지합니다. IR 이탈만으로 새로운 거리 감점을 만들지 않습니다.
+MEASURING의 기존 source 병합/Fusion/Feedback/저장 경로는 변경하지 않습니다.
+
+두 session working baseline은 `face_working_baseline_cm`과 `chair_ir_baseline_mm`이며,
+Vision의 기존 기하 거리 calibration/reference와 의미가 다릅니다. MEASURING에서는 이후
+Phase C를 위해 `face_approach_delta_cm = face working baseline - current face distance`,
+`backrest_departure_delta_mm = current Chair IR - Chair IR baseline`을 Backend 내부에서만
+준비합니다. 이 두 값을 입력으로 하는 순수 관측 분류는 `NORMAL`, `FACE_ONLY_CLOSE`,
+`BODY_FORWARD_CLOSE`, `BACKREST_AWAY`, `UNKNOWN`을 구분합니다. fresh Vision, 유효 Chair IR,
+착석이 모두 확인되지 않으면 `UNKNOWN`이며 이를 비정상으로 해석하지 않습니다.
+
+현재 engineering 후보는 얼굴 접근 `>= 8cm`, 등받이 이탈 `>= 40mm`입니다. 통제 실측의
+비접근 얼굴 변화 최대 `+4.9cm`와 최근 demo-chair FACE_ONLY 관측 `+9.5..+11.2cm` 사이에
+얼굴 경계를 두어 10cm 부근 측정 흔들림이 temporal accumulation을 반복해서 끊지 않게
+했습니다. FACE_ONLY IR `+10..+27.5mm`와 BODY_FORWARD IR `+180..+200mm` 관측은 기존
+40mm 등받이 경계를 유지할 근거가 됩니다. 한 설치·제한된 세션의 분리 확인값이므로
+보편적·의학적 자세 임계가 아니며 반복 실측으로 재검증해야 하는 engineering 후보입니다.
+순간 관측에는 hysteresis나 지속시간을 넣지 않습니다. 별도 temporal evidence 정책을 거쳐
+현재 유효한 sustained Face/Chair 관측을 **하나의** distance/forward penalty에 연결합니다. 두 센서를 각각 감점해
+이중 penalty를 만들지 않습니다. hardware 검증 완료나 의학적 유효성을 의미하지 않습니다.
+
+순간/temporal 상세 결과는 opt-in `cross_validation_observation`에서 관찰합니다. Backend가
+소유한 temporal 결과를 Fusion에 별도 keyword 인자로 전달해 score에만 연결하며, 원본
+sensor payload의 임의 distance evidence/penalty 필드는 신뢰하지 않습니다. 진단 상세는
+public state나 persistence에 추가하지 않고 기존 절대 거리 state/reasons를 유지합니다.
+
+#### R20 posture tracking 진단 경로
+
+`fusion/posture_tracking.py`는 R19에서 실측한 4채널 압력 Shadow와 압력+IR Shadow의
+anchor/candidate/confirmed/recovery 규칙을 production 계층에서 재사용할 수 있게 분리한
+순수 진단 모듈입니다. 모듈 단독 기본값은 `off`이지만 Normal의 `cumulative-v2` 정책이
+선택되면 Backend가 자동으로 `clock`을 사용합니다. 독립 진단에서는
+`--posture-tracking off|shadow|clock` 또는 `SOMA_POSTURE_TRACKING_MODE`로 선택합니다.
+`shadow`는 검출과 canonical event 병합만, `clock`은 여기에 두 가지
+`sustained_posture_sec` 후보를 병렬 계산합니다.
+
+- `freeze_no_backfill`: Candidate 동안 멈추고 취소된 구간을 소급하지 않습니다.
+- `continuous_valid_seated`: Candidate 여부와 무관하게 유효 착석 구간을 누적합니다.
+
+R20-2 진단 출력은 두 clock을 계속 제공하지만 R20-4의 선택적 누적 정책은
+`continuous_valid_seated`만 사용합니다. Confirmed 압력 변화와 압력+IR 변화가 같은 동작을
+나타내면 한 canonical event로 합쳐 clock을 한 번만 초기화합니다. Candidate 자체는 점수,
+상태, 알림에 영향을 주지 않습니다. 진단 예외도 기존 Chair → state 실시간 경로로
+전파하지 않습니다.
+
+#### R20-4 cumulative static burden (Normal 기본 정책)
+
+Normal은 별도 옵션이 없으면 `fusion/static_burden.py`의 `cumulative-v2`를 적용하며 posture
+tracker는 자동으로 `clock`이 됩니다. 이전 동작을 비교해야 할 때는
+`--static-policy legacy` 또는 `SOMA_STATIC_POLICY=legacy`로 명시합니다. Demo는 항상
+`legacy`가 profile 기본값이며 Normal 전용 `cumulative-v2` 조합을 거부해 기존 축소
+시간축을 바꾸지 않습니다. 설정 우선순위는 CLI → 환경변수 → profile 기본값입니다.
+
+- 각 posture episode의 첫 300초는 신규 eligible time에 포함하지 않습니다.
+- 매 sample에서 `max(episode_sec - 300, 0)`의 증가분만 전역
+  `static_eligible_total_sec`에 한 번 더합니다.
+- 기존 Normal 곡선에는 `300 + static_eligible_total_sec`를 입력합니다. 따라서 같은 자세를
+  계속 유지하면 기존 300/600/1200/1800/2700/3600초 곡선과 정확히 일치하고, episode마다
+  기존 300초 grace를 이중 적용하지 않습니다.
+- Confirmed change는 `posture_episode_sec`만 0으로 만들며 이미 누적된 eligible time이나
+  static penalty를 감소시키지 않습니다. Candidate 취소 구간은 유효 착석시간으로 계속
+  계산합니다. 착석 중 자세 변경 자체는 recovery가 아닙니다.
+- static penalty 10점 이상은 CAUTION, 20점 이상은 DANGER의 실험 기준으로 사용하며 기존
+  `static_hold` reason 이름을 유지합니다. 이 모드에서 `static_hold`는 연속 원시 타이머가
+  아니라 누적 static burden이 상태 경계를 넘었다는 뜻입니다.
+- ABSENT, 재착석, Start/Stop, 센서 공백의 기존 lifecycle과 absence recovery는 유지합니다.
+  IR이 무효여도 pressure-only Confirmed를 사용할 수 있습니다. balance/blink/distance 슬롯은
+  독립적으로 기존 계산을 유지합니다.
+
+public `state`와 DB schema에는 새 필드를 추가하지 않습니다. 인증된 opt-in
+`cross_validation_observation`만 기존 `posture_tracking`과 함께 `static_burden` 비교값
+(`legacy_static_hold_sec`, legacy/v2 penalty·score, episode/eligible time, update reason)을
+전달합니다. 따라서 이 모드로 실행한 세션의 public score/state/reasons와 기존 필드의 DB
+snapshot은 선택한 실험 정책 결과를 담지만 계약 모양은 변하지 않습니다.
+
+#### R21-3 Blink Score (Normal 기본 정책)
+
+Normal은 별도 옵션이 없으면 `fusion/blink_load.py`의 `score-v1`을 적용합니다. 이전
+`low_blink` state/reason과 0점 blink penalty를 비교해야 할 때는
+`--blink-policy legacy` 또는 `SOMA_BLINK_POLICY=legacy`를 명시합니다. Demo는 항상
+`legacy`가 profile 기본값이며 Normal 전용 `score-v1` 조합을 거부합니다. 설정 우선순위는
+CLI → 환경변수 → profile 기본값입니다.
+
+- Vision은 내부 `sensor_data.vision`에 `ear_threshold_mode`, 실제
+  `open_ear_baseline`, credential-free `ear_calibration_status`를 선택적으로 보냅니다.
+- 개인화 baseline이 유효한 `personalized` mode만 새 low-blink timer/감점의 신뢰 가능한
+  입력으로 사용합니다. fallback `0.21/0.25`, baseline 누락·무효, stale/missing Vision,
+  `detect_rate=0`은 timer와 penalty를 동결합니다. 플래그가 꺼진 legacy 동작은 바뀌지
+  않습니다.
+- `blink_rate_baseline=0`은 개인 Blink Rate 기준으로 사용하지 않습니다. 부분 검출은
+  `partial_detection`으로 진단하지만 새 detect-rate 임계값을 임의로 만들지 않습니다.
+- 정책 B는 `low_blink_sec <= 300`에서 0점, 300~900초에서 0~10점을 선형 누적하고,
+  900초 이후 10점으로 제한합니다. `8 <= blink_rate < 11`에서는 유지하고, 신뢰 가능한
+  `blink_rate >= 11`에서는 300초에 걸쳐 선형 회복합니다.
+- 기존 `low_blink` state/reason 경계(300초 CAUTION, 900초 DANGER)는 유지합니다. 따라서
+  300초 진입 tick은 CAUTION이면서 blink penalty 0일 수 있으며 State와 Score가 반드시
+  같은 순간 변하지는 않습니다.
+- blink/static/balance/Phase C distance는 각각 독립적인 Load slot으로 합산합니다.
+  Front, Feedback policy, public state shape 및 DB schema는 변경하지 않습니다.
+
+상세 신뢰성·품질·감점 진단은 인증된 observer의
+`cross_validation_observation.blink_policy`에만 포함됩니다. 이 정책의 수치와 개인화 비율은
+한 사용자 자료에서 좁힌 engineering candidate입니다. Normal 기본 정책으로 채택했지만
+의학적 기준이나 보편적인 사용자 임계값으로 해석하지 않습니다.
+
+#### Phase C temporal evidence (관측 전용)
+
+`fusion/distance_temporal.py`의 순수 `step(state, evidence, now, *, timing)`은 immutable
+`DistanceTemporalState`와 진단 결과를 반환합니다. 순간 classifier와 분리하며 센서/Socket/DB에
+의존하지 않습니다. `fusion/config.py`의 `DistanceEvidenceTiming`을 RuntimeProfile에서 선택해
+Backend의 session calibration coordinator와 Fusion에 주입합니다. `fusion.step()`은 선택적
+`distance_evidence`/`distance_timing` keyword를 추가하며 기존 positional 호출은 그대로 동작합니다.
+
+| 설정 | Demo | Normal |
+|---|---:|---:|
+| BODY_FORWARD_CLOSE 진입 | 10초 | 300초 |
+| FACE_ONLY_CLOSE 진입 | 20초 | 600초 |
+| 알려진 비접근 관측에서 복귀 | 5초 | 30초 |
+| 누적 가능한 최대 sample gap | 5초 | 5초 |
+
+모두 **provisional engineering 후보**입니다. BODY 진입은 기존 절대 근접 판정의 시간축과
+맞추고, 얼굴만 접근한 더 약한 증거는 두 배의 관측 시간을 요구합니다. Normal의 5/10분은
+순간 움직임과 장시간 컴퓨터 사용 중 지속 관측을 구분하기 위한 후보이며 검증된 권고 시간이
+아닙니다. 복귀는 진입보다 짧게 하되 한 sample의 흔들림으로 해제되지 않도록 Demo 5초,
+Normal 30초로 두었습니다. Demo는 수 분 안에 진입/복귀를 시연하기 위한 시간축 축소입니다.
+
+- 첫 분류 sample은 0초에서 시작합니다. 같은 forward 분류로 양 끝이 확인된 구간만 누적하며
+  설정 시간 `>=`에서 sustained가 됩니다. BODY/FACE_ONLY 전환 시 새 유형의 후보 시간은
+  0초부터 시작하고 서로 합산하지 않습니다. 기존 sustained 유형은 새 유형이 자체 진입 시간을
+  채우거나 복귀가 완료될 때까지 유지됩니다. 따라서 active가 현재 강한 증거를 뜻하지는 않습니다.
+- NORMAL에서는 미활성 후보 시간을 즉시 초기화합니다. 이미 sustained인 경우 알려진 비접근
+  관측이 복귀 시간을 채우면 해제합니다. 복귀 중 다시 접근하면 복귀 시간은 0이 됩니다.
+- BACKREST_AWAY는 등받이 이탈의 관찰일 뿐 독립적으로 sustained forward 증거를 만들지 않습니다.
+  얼굴 비접근이 확인된 값이므로 NORMAL과 같은 복귀 그룹으로 처리합니다. 이 두 분류 사이의
+  전환은 복귀를 끊지 않습니다. 등받이 이탈 자체를 나쁜 자세로 규정하지 않습니다.
+- UNKNOWN은 후보/활성/복귀 값을 모두 동결합니다. UNKNOWN 진입 구간과 첫 복귀 sample까지의
+  구간은 누적하지 않습니다. 장기 unavailable도 현재는 같은 동결 정책이며 별도 만료 정책은
+  보류합니다. penalty는 `active`만 보고 missing 구간을 감점하지 않습니다.
+- 5초 초과 gap은 누적/복귀하지 않습니다. 중복·역행 timestamp는 상태를 바꾸지 않고 무시하며,
+  non-finite timestamp는 거부합니다. 시간은 기존 Fusion과 동일하게 Chair payload의 `t`를 씁니다.
+- ABSENT(동일 occupancy 기준)는 UNKNOWN 동결보다 우선하여 모든 temporal 증거를 즉시 reset합니다.
+  OFF/CALIBRATING/READY에서는 누적하지 않습니다. READY→MEASURING, STOP, 새 session에서 새
+  temporal state로 시작하며, Vision 입력만으로는 진전하지 않고 MEASURING의 Chair tick만 사용합니다.
+
+진단 `distance_temporal`에는 `instantaneous_classification`, 선택적 `candidate_classification`과
+`sustained_classification`, `accumulated_sec`(현재 후보 유형의 관측 시간), `recovery_sec`,
+`active`, `reasons`를 담습니다. 없는 분류는 생략합니다. `distance_evidence` 순간 결과와 함께
+opt-in recorder JSONL에 보존하지만 public `state`/persistence에는 추가하지 않습니다.
+현재 distance 슬롯은 아래 보수적 engineering 정책으로 활성화합니다. 실제 장시간 dropout,
+분류 경계 chatter, 유형 전환, clock skew와 장기 unavailable 만료 정책은 추가 실측이 필요합니다.
+
+READY 수락 직전에 Fusion/cache/Feedback/persistence checkpoint를 다시 초기화하여
+calibration 시간이 실제 측정 누적에 섞이지 않게 합니다. timeout이면 CALIBRATING에서
+`FAILED / calibration_timeout`을 알리고 자동으로 MEASURING에 진입하지 않습니다.
+STOP 또는 마지막 owner socket disconnect는 accumulator/baseline을 폐기하고 Nano를 OFF로
+만듭니다. 세부 event 형식은 `docs/contracts/measurement_phase.schema.json`을 따릅니다.
+
+`GET /api/state/history`는 Supabase Bearer access token 인증이 필수입니다. Backend는
+token의 `sub`와 현재 ACTIVE measurement의 `session_id`를 결합해 `state_logs`를
+조회하며, 클라이언트가 보낸 `user_id`, `user_name`, `device_id` 또는 `session_id`로
+현재-session의 소유권을 정하지 않습니다. 기본 조회 범위는 최근 5분이고 최대 60분이며,
+baseline도 동일한 `user_id + session_id` 안에서만 선택합니다.
+
+저장된 session은 `GET /api/state/history/sessions`와
+`GET /api/state/history/sessions/<session_id>`에서 조회합니다. 두 API는 JWT sub 기반이며
+runtime session registry를 사용하지 않고 DB의 동일 `user_id + session_id`로 소유권을
+확인합니다. 따라서 Stop 또는 Backend 재시작 후에도 기록이 남아 있으면 조회할 수 있습니다.
+목록은 마지막 snapshot 최신순이고 첫/마지막 시각은 실제 Start/Stop 시각이 아닙니다.
+NULL session_id인 legacy row는 제외합니다. 상세 기본 구간은 마지막 snapshot 직전 5분,
+명시 구간은 최대 60분이며 baseline도 선택 session 내부로 제한합니다. 없는/타인 session은
+동일 404, DB 장애는 503입니다. 조회는 measurement lock, Fusion, Socket.IO, persistence write
+경로와 분리된 HTTP 읽기 작업입니다. 비동기 저장이 아직 완료되지 않으면 새로고침이 필요할 수 있습니다.
+
+저장 session의 v1 요약은
+`GET /api/state/history/sessions/<session_id>/report`에서 제공합니다. 첫/마지막 snapshot
+시각과 그 사이의 span은 실제 measurement Start/Stop이 아닙니다. 인접 snapshot 간격이
+0초 초과 60초 이하인 구간만 상태 체류·시간 가중 Score에 사용하며, 더 긴 구간은 미확인
+공백으로 분리합니다. ABSENT 시간은 별도 표시하고 착석 평균 Score에서는 제외하며 마지막
+snapshot 뒤의 시간을 임의로 더하지 않습니다. 최저 Score도 ABSENT를 제외한 저장 snapshot
+기준이며 착석 snapshot이 없으면 평균과 최저값은 null입니다. Feedback Policy의 BREAK는 state_logs에
+없으므로 보고서에서 발생 여부를 추정하지 않습니다. 이 조회도 Fusion/Feedback/persistence
+실시간 경로와 분리된 인증 HTTP 읽기 작업입니다.
+
 ---
 
 ## 6. 상태
@@ -161,20 +496,120 @@
 NORMAL → CAUTION → DANGER        (+ ABSENT: 자리 비움)
 ```
 
-| 판정 근거 | 주의 | 위험 |
-|---|---|---|
-| `low_blink_sec` 저깜빡임 지속 | 300초 | 900초 |
-| `static_hold_sec` 정적 유지 | 1200초 | 2700초 |
-| `close_distance_sec` 근접 지속 | 300초 | — |
-| `imbalance_sec` 좌우 편중 지속 | 300초 | — |
+실행 profile은 `.env`의 `SOMA_MODE=demo|normal`로 선택합니다. 환경변수가 없으면
+졸업작품 내부 시연을 위한 `demo`가 기본입니다. 두 profile은 같은 Fusion 알고리즘과
+센서 임계값을 사용하며, 아래 시간 임계값과 DB periodic snapshot 주기만 다릅니다.
 
-**전부 추정치입니다.** 실측 데이터로 재조정하기 전까지 확정값으로 취급하지 않습니다.
+| 판정 근거 | Demo 주의 | Demo 위험 | Normal 주의 | Normal 위험 |
+|---|---:|---:|---:|---:|
+| `low_blink_sec` 저깜빡임 지속 | 10초 | 20초 | 300초 | 900초 |
+| `static_hold_sec` 정적 유지 | 10초 | 20초 | 1200초 | 2700초 |
+| `close_distance_sec` 근접 지속 | 10초 | — | 300초 | — |
+| `imbalance_sec` 좌우 편중 지속 | 10초 | — | 300초 | — |
+
+DB periodic snapshot 주기는 Demo 5초, Normal 30초입니다. state 변경은 즉시,
+동일 state는 이 주기로 bounded queue의 DBWriter에 비동기 저장합니다. 저장 기능은
+실시간 상태 계산 경로와 분리하며 DB 장애가 Fusion 또는 UI 전송을 막아서는 안 됩니다.
+
+**Demo 값은 기능 시연을 위해 시간축만 축소한 설정입니다. 생리학적·의학적 기준이나
+실사용 권고 시간으로 해석하거나 표현하지 않습니다.** Normal 값도 실측 데이터로
+재조정하기 전까지 확정값으로 취급하지 않습니다.
 
 **히스테리시스**: 승격 임계와 강등 임계를 다르게 둡니다 (예: 깜빡임 8 미만 승격 / 11 이상 회복).
 단일 임계는 경계에서 반드시 채터링을 만들고, 표시가 초당 몇 번 깜빡이면 사용자는 그 자리에서 끕니다.
 
-**`ABSENT` 는 불량이 아닙니다.** 자리 비움 시 연속 누적값을 전부 리셋합니다.
-그렇지 않으면 점심 후 복귀 시 알림이 떠 있습니다.
+### SOMA Load Model v1
+
+`score`는 `100 - (static + balance + blink + distance penalty)`를 0~100으로
+제한하고 half-up 방식으로 정수화한 **관측 부하 인지용 점수**입니다. 상태 전이와
+독립적이며 의료·질병 위험·자세 정답 점수가 아닙니다. static과 balance에 더해 session
+calibration이 완료된 relative distance evidence만 단일 distance 슬롯을 갱신합니다. blink는
+계속 0으로 예약합니다. calibration/temporal evidence가 없는 기존 Chair-only 호출은 distance를
+새로 만들지 않습니다. missing sensor를 정상으로 추정하거나 임의 감점하지 않습니다.
+penalty 내부값은 state 계약에 추가하지 않습니다. model version은 기존 `soma_load_v1`을 유지합니다.
+
+static/balance는 현재 연속시간 곡선의 양의 변화량만 잔여값에 더합니다. 움직임 또는 CENTER
+복귀 시 선형 회복하고, 반복 episode의 잔여 부하는 의도적으로 누적합니다. profile은
+알고리즘을 나누지 않고 곡선 시간축과 회복시간만 선택합니다.
+
+| 항목 | Demo | Normal |
+|---|---|---|
+| static 곡선 `(초, penalty)` | `(0,0) (5,0) (10,5) (20,10) (30,15) (45,20) (60,25)` | `(0,0) (300,0) (600,5) (1200,10) (1800,15) (2700,20) (3600,25)` |
+| static 완전 회복시간 | 10초 | 600초 |
+| balance 곡선 `(초, penalty)` | `(0,0) (2,0) (5,5) (10,10) (20,15) (30,20) (45,25)` | `(0,0) (5,0) (15,5) (30,10) (60,15) (120,20) (180,25)` |
+| balance 완전 회복시간 | 6초 | 180초 |
+
+Demo balance 값 역시 졸업작품에서 누적과 회복을 짧게 확인하기 위한 시간축 축소값이며
+생리학적 기준이 아닙니다. 모든 parameter는 향후 사용자 실험 결과에 따라 조정할 수
+있는 engineering 설정입니다. 샘플 간격이 profile의 `max_gap_sec`를 넘거나 시간이 역행하면
+상태 누적과 마찬가지로 load의 증가·회복도 그 구간에서는 진행하지 않습니다.
+
+**`ABSENT` 는 불량이 아닙니다.** 이미 착석 중인 사용자의 압력이 잠깐 사라진 경우에는
+5초의 sensor/session debounce 동안 현재 상태·timer·SOMA Load를 그대로 동결합니다.
+이 유예 중 압력이 돌아오면 이탈 샘플과 첫 복귀 샘플을 회복 근거로 사용하지 않으며,
+이후 2초간 착석 압력을 새 기준으로 흡수하는 안정화 구간에도 timer와 SOMA Load를 동결합니다.
+따라서 재착석 압력 반동이 즉시 `LEFT/RIGHT → CENTER` 개선으로 해석되어 Demo balance
+회복률을 적용하지 않습니다. 안정화 완료 뒤의 지속적인 실제 자세 개선은 기존 회복 계산을 재개합니다.
+Chair firmware는 1Hz이므로 1초보다 짧은 이석은 두 raw sample 사이에서 완전히 누락될 수
+있습니다. 이 경우 Fusion에는 occupied→occupied 압력 급변만 보입니다. 잔여 Chair penalty가
+있는 상태에서 이런 변화가 포착되면 동일한 2초 안정화 상태로 진입하고, 연속으로 안정된
+압력이 확인된 다음 tick부터 기존 Demo/Normal 회복률을 적용합니다. 안정화 시간은 회복량에
+소급하지 않습니다. 이는 firmware 주기나 `STATIC_EPS`, penalty curve/rate를 바꾸지 않고
+누락된 순간 이석을 회복 보상으로 오인하지 않기 위한 sensor stabilization입니다.
+5초 이상 연속으로 비착석이 확인된 뒤에는 자리 비움으로 확정하고 상태 판정용 연속 누적값은 전부
+리셋합니다. 자리 비움 중에는 SOMA Load의 잔여 penalty를 보존하며 회복시키고, 확정된
+자리 비움 뒤 재착석하면 새 seated interval을 100점에서 시작합니다. 이는 인증된 measurement나
+DB session_id를 새로 만드는 동작이 아닙니다. 자리 비움 60초 미만은
+1배, 60초 이상 180초 미만은 1.5배, 180초 이상은 2배 회복속도를 적용하고 경계를
+가로지른 시간은 구간별로 정확히 나눕니다.
+
+### Phase C 단일 distance penalty
+
+`session baseline → relative Face + Chair IR → instantaneous classification → temporal sustained
+evidence → distance_penalty → SOMA Load` 흐름을 사용합니다. 순수 `update_distance_load()`는
+기존 Chair load 갱신 직전에 실행하여 동일한 직전 ABSENT 시간을 이용합니다.
+`SomaLoadConfig.distance`의 immutable 설정은 아래 provisional engineering 값입니다.
+
+| 설정 | Demo | Normal |
+|---|---:|---:|
+| BODY_FORWARD_CLOSE 누적률 | 0.5점/초 | 0.01점/초 |
+| BODY 누적 상한 / 전체 distance 슬롯 상한 | 15점 | 15점 |
+| FACE_ONLY_CLOSE 누적률 | 0.2점/초 | 0.004점/초 |
+| FACE_ONLY 누적 상한 | 8점 | 8점 |
+| 15점에서 0점까지 선형 회복 시간 | 20초 | 300초 |
+| 선형 회복률 | 0.75점/초 | 0.05점/초 |
+
+BODY cap은 기존 static/balance 각각 25점보다 작습니다. Demo는 진입 10초 이후 30초의
+유효 관측으로 BODY 15점에 도달하고, FACE_ONLY는 진입 20초 이후 40초로 8점에 도달합니다.
+Normal BODY는 진입 300초 이후 1500초(전체 30분), FACE_ONLY는 진입 600초 이후 2000초
+(전체 43분 20초)입니다. Normal BODY 누적률은 초기 static의 5점/300초보다 낮고,
+Demo도 두 기존 penalty를 즉시 압도하지 않습니다. 의료·생리학적 기준으로 해석하지 않습니다.
+
+- 현재 순간 유형과 sustained 유형이 일치하고 양 끝이 같은 유효 forward 관측인 구간만
+  누적합니다. 후보 시간 중 entry 이후의 증가량만 사용하므로 정확히 entry에 도달한 sample은
+  0점이고 다음 유효 구간부터 증가합니다. 예를 들어 Demo BODY 9→11초는 10→11초의 0.5점만
+  더합니다. sample 개수가 아니라 elapsed time을 사용합니다.
+- BODY/FACE_ONLY 시간과 rate를 합산하지 않습니다. 유형 전환 중 기억된 BODY active만으로
+  BODY rate를 계속 적용하지 않으며 현재 유형이 자기 진입 시간을 채워야 합니다.
+  이전 BODY residual이 FACE_ONLY cap 8점보다 크면 그대로 보존하되 추가 누적하지 않습니다.
+  약한 관측이 기존 부하를 갑자기 지우거나 그 부하를 더 크게 만들지 않습니다.
+- NORMAL/BACKREST_AWAY에서는 temporal active가 해제된 뒤, 양 끝이 알려진 비접근 관측이고
+  inactive인 구간부터 선형 회복합니다. 해제 경계 sample은 회복하지 않습니다. BACKREST_AWAY는
+  독립적으로 누적하지 않으며 등받이 이탈을 나쁜 자세로 단정하지 않습니다.
+- UNKNOWN은 distance residual을 동결합니다. 누적도 회복도 하지 않으며 첫 복귀 sample까지의
+  구간도 사용하지 않습니다. remembered active와 현재 유효한 관측을 구분합니다. 5초 초과 gap,
+  역행/중복 또는 evidence 미제공 역시 새 distance 증가/회복의 근거로 사용하지 않습니다.
+- ABSENT는 temporal을 reset하되 자리 비움 동안 기존 numeric residual은 유지하면서 위 선형 회복률에 기존
+  60/180초의 1/1.5/2배 ABSENT 가중치를 적용합니다. absence 시간은 Chair load에서 한 번만
+  증가합니다. 확정 이탈 후 재착석, READY→MEASURING과 새 measurement는 FusionState의
+  numeric load를 0으로 초기화합니다.
+- 기존 절대 얼굴 거리 45/50cm hysteresis와 close-distance state/reasons는 변경하지 않습니다.
+  이 로직은 numeric distance 슬롯에 기여하지 않으므로 relative penalty와 수치 이중 감점이
+  없습니다. Phase C가 state/reasons/confidence에 새 판정 규칙을 추가하지 않습니다.
+- public contract, DB schema/persistence mapping, Feedback 설정을 변경하지 않습니다. 기존
+  score 필드에 합성 결과를 emit/store하므로 score <= 60을 사용하는 Feedback의 LOW_SCORE
+  조건은 더 빨리 충족될 수 있습니다(Demo hold 10초, Normal hold 120초). 이는 변경된 score의
+  의도된 downstream 효과입니다. 상세 distance evidence는 public state에 추가하지 않습니다.
 
 ---
 
@@ -188,29 +623,31 @@ NORMAL → CAUTION → DANGER        (+ ABSENT: 자리 비움)
 | **의자 진동** | 의자 (부착 위치 미정) | 햅틱은 **몸에 닿아야** 함 |
 | **화면 팝업 / 대시보드** | 노트북 | 숫자·표는 **사용자가 볼 준비가 된 때** 본다 |
 
-### 7-2. 배선 — LED 는 아두이노를 거치지 않습니다
+### 7-2. 배선 — 센서 UNO와 Feedback Nano는 분리합니다
 
-노트북이 허브입니다. 의자 아두이노와 LED 유닛은 **각자 USB 로 노트북에 붙는
-독립 장치**입니다.
+노트북이 허브입니다. Chair UNO와 Feedback Nano는 **서로 다른 COM device**입니다.
+Chair UNO는 압력 센서 4개와 ToF를 읽는 input producer이고, Feedback Nano는 LED와
+진동 모터만 구동하는 output device입니다.
 
 ```
-[의자 아두이노] --USB-- [노트북] --USB-- [모니터 상단 LED]
-  압력·ToF in            분석·백엔드        pos/width/sat
-  진동 out
+[Chair UNO] ------USB------ [노트북 Backend] ------USB------ [Feedback Nano]
+ 압력4 + ToF                 Fusion / Policy                    LED + 진동
+ sensor_data producer       session / routing                  physical pattern
 ```
 
-진동만 아두이노를 거칩니다 — 모터가 의자에 물려 있기 때문입니다.
+Fusion은 관측 상태를, SOMA Load는 누적 부하 점수를 계산합니다. Feedback Policy는
+그 결과로 사용자에게 줄 logical feedback을 결정하고, Server는 measurement session과
+사용자·장치 routing을 담당합니다. Nano는 semantic command를 실제 LED/진동 pattern으로
+표현할 뿐 Fusion state, score, BREAK 조건을 계산하지 않습니다. Front는 인증된 logical
+feedback event를 UI와 popup으로 표현합니다.
 
-이 분리로 "아두이노 과부하" 우려가 무선까지 가지 않고 해소됩니다.
-실체는 CPU 가 아니라 **전원과 배선**이었습니다 — WS2812 32개면 최대 1.9A 로
-Uno 의 레귤레이터를 넘고, 의자에서 모니터 위까지 2m 를 끌어야 했습니다.
-USB LED 는 전원을 USB 에서 받고 배선이 케이블 하나입니다.
+Nano 연결이나 출력 실패는 선택 출력 계층의 장애입니다. Fusion, state/score emit,
+DB 저장, Front 실시간 경로를 중단시키면 안 됩니다. 기존 `feedback/ambient_led/driver.py`와
+Chair UNO 진동 경로는 이전 구현으로만 보존합니다. `tools/demo/run_all.py`의
+production/default 경로에서는 실행하지 않으며, Chair bridge의 이전 진동 수신도
+`--legacy-vibration`을 명시한 경우에만 활성화합니다.
 
-계약(`pos`/`width`/`sat`)은 장치와 무관하므로 **드라이버만 갈아끼우면 됩니다.**
-`feedback/ambient_led/driver.py` 에 어댑터 3종(console / blinkstick / openrgb)이
-있고 `.env` 의 `LED_BACKEND` 로 고릅니다. 부품이 늦어져도 시연할 수 있습니다.
-
-### 7-3. 모니터 상단 LED — 인형은 껍데기, LED 가 신호
+### 7-3. Feedback Nano LED — 인형은 껍데기, LED가 신호
 
 ```
     [ 인 형 ]      ← 껍데기. 정체성·시선 유도. 신호를 지지 않는다
@@ -221,17 +658,14 @@ USB LED 는 전원을 USB 에서 받고 배선이 케이블 하나입니다.
 
 > **주변시는 형태 분해능이 낮고 밝기·위치·움직임에 민감합니다.**
 
-그래서 앰비언트 층에 **실루엣·아이콘·텍스트를 넣지 않습니다.** 읽으려면 고개를 돌려야 하고,
-그 순간 앰비언트가 아니라 토스트가 됩니다.
+그래서 출력에 **실루엣·아이콘·텍스트를 넣지 않습니다.** 읽어야 하는 정보는 Front가
+담고, Nano LED는 `NORMAL / NOTICE / WARNING / BREAK` semantic level을 주변시로
+표현합니다. 구체적인 색·밝기·점멸 pattern은 F3 hardware E2E 전에는 확정하지 않습니다.
+기존 `pos / width / sat` ambient encoding과 driver는 이전 구현의 console/mock 자산으로
+보존하며, Nano cutover 때 유지할지 대체할지 결정합니다.
 
-| 신호 | 부호화 |
-|---|---|
-| 좌우 균형 | 켜진 **위치**가 좌우로 이동 |
-| 전후 (근접) | 켜진 **폭** |
-| 정적 유지 · 피로 누적 | **채도·밝기** — 오래 굳어 있을수록 빠지고, 움직이면 돌아옴 |
-
-인형을 반투명으로 하면 채도가 인형 전체에 실립니다. 인형에 별도 LED 를 넣지 않고
-**받침 바의 빛으로 밝힙니다** — 그래야 값 하나가 둘을 동시에 결정하고 어긋날 수 없습니다.
+인형을 반투명으로 사용하는 경우에도 별도 판정 로직을 넣지 않고 받침 LED의 출력만
+확산합니다. Nano는 Backend가 보낸 level을 표현할 뿐 센서값을 해석하지 않습니다.
 
 ### 7-4. 진동과 LED 의 분업
 
@@ -240,7 +674,90 @@ USB LED 는 전원을 USB 에서 받고 배선이 케이블 하나입니다.
 
 진동 패턴을 늘려 의미를 싣지 않습니다. 패턴 학습을 요구하는 설계는 습관화 전에 버려집니다.
 
-### 7-5. 개입 원칙
+### 7-5. Logical Feedback와 Break Recommendation
+
+Fusion state(`NORMAL / CAUTION / DANGER / ABSENT`)와 Feedback level
+(`NORMAL / NOTICE / WARNING / BREAK`)은 별개입니다. 기본 mapping은 NORMAL→NORMAL,
+CAUTION→NOTICE, DANGER→WARNING입니다. ABSENT의 물리적 OFF/RESTING 표현은 향후 Nano
+adapter 책임이며 logical level에 OFF를 추가하지 않습니다. BREAK는 Feedback Policy가
+low score 지속, DANGER 지속, 연속 작업시간 중 하나로 승격시키며 Fusion state에는
+추가하지 않습니다. 여러 trigger가 동시에 성립하면 `SUSTAINED_DANGER`, `LOW_SCORE`,
+`CONTINUOUS_WORK` 순서로 reason을 선택합니다.
+
+Policy는 measurement session마다 새 immutable state로 시작합니다. `session_sec` 대신
+별도 `work_period_sec`를 착석 중에만 누적합니다. Fusion이 5초 debounce 뒤 `ABSENT`를
+발행한 시점은 seated interval의 확정 종료이므로, 같은 DB measurement session 안에서도
+기존 작업시간과 BREAK latch를 즉시 지웁니다. Fusion의
+debounce 중에는 Policy에 ABSENT가 전달되지 않으므로 짧은 압력 dropout은 기존 작업시간과
+BREAK latch를 유지합니다. 확정 ABSENT가 기존 effective break 시간까지 이어지면 재착석 후의
+seated-time cooldown을 시작하며, recommended break 시간도 이후 ABSENT 관측에서 계속 추적합니다.
+동일 level 유지 중에는 `transition=false`이므로 향후 popup/진동을 반복하지 않습니다.
+
+Normal의 초기 engineering parameter는 score 60 이하 120초, DANGER 60초, 연속 작업
+3000초, effective break 180초, 권장 휴식 300초, cooldown 900초입니다. Demo는 동일한
+정책의 시간축만 각각 10초, 10초, 60초, 10초, 20초, 30초로 줄입니다. 이 값들은
+의학적·생리학적 기준이 아니며 실제 사용 및 hardware E2E 결과로 조정합니다.
+
+Backend F2 경로는 유효한 Chair tick마다 `Fusion → state 계약 검증 → user room state
+emit → Feedback Coordinator → Feedback Policy → feedback_decision 계약 검증 → 동일 user
+room feedback emit → persistence` 순서로 실행합니다. Feedback의 timestamp는 wall clock이
+아니라 같은 Fusion tick의 Chair `t`입니다. Vision event는 session cache만 갱신하며 Fusion
+또는 Feedback tick을 만들지 않습니다.
+
+현재 feedback decision은 level 변화 때뿐 아니라 매 유효 Chair tick마다 발행합니다. 따라서
+재연결한 consumer도 현재 level을 다시 받을 수 있고, popup과 단발성 개입은 `level=BREAK`
+이면서 `transition=true`일 때만 실행해야 합니다. Feedback Policy·계약 검증·feedback emit의
+실패는 이미 발행된 state나 이후 persistence를 막지 않습니다. Session START는 새 policy
+state를 만들고 duplicate START는 유지하며, STOP은 즉시 폐기합니다. Backend 재시작 뒤
+policy state 복구는 아직 하지 않습니다.
+
+F3에서 logical feedback은 user room의 `feedback`과 별도로 인증된
+`feedback_devices` room의 `feedback_device` event에도 전달됩니다. Nano bridge는 사용자
+access token이 아니라 sensor/device shared token과 `feedback_device` role로 연결하며,
+sensor producer 권한과 room을 구분합니다. Session STOP과 새 START의 출력 초기화는
+`feedback_device_off` event로 전달합니다. 전체 broadcast는 사용하지 않습니다.
+
+Bridge는 logical decision을 다음 serial protocol로 변환합니다.
+
+- `LEVEL,NORMAL|NOTICE|WARNING|BREAK|OFF`: stateful, 중복 허용, idempotent
+- `ALERT,WARNING|BREAK`: transition-only 진동 trigger, at-most-once 우선
+
+logical `NORMAL`의 reason이 `ABSENT`이면 물리 출력은 `LEVEL,OFF`입니다.
+Fusion state가 `ABSENT`이면 Backend는 Nano cache를 비우고 `feedback_device_off`를 보냅니다.
+Feedback Policy도 확정 ABSENT에서 이전 seated interval의 BREAK latch를 해제하므로 자리 비움의
+물리 출력은 항상 OFF이고, 재착석한 새 seated interval은 현재 Fusion 상태에 맞는 LEVEL로 시작합니다.
+
+Logical BREAK latch와 Front 휴식 권고는 기존 session policy대로 유지하지만 Nano의 steady LED는
+device-only projection을 사용합니다. 최초 `BREAK transition=true`는 최소 3초간 `LEVEL,BREAK`와
+단 한 번의 `ALERT,BREAK`로 파란 LED/2회 진동을 표시합니다. 그 뒤 logical BREAK가 계속
+latch되어도 Nano LEVEL은 현재 Fusion state를 `NORMAL / NOTICE / WARNING`으로 투영하며
+`transition=false`로 보내므로 새 진동을 만들지 않습니다. `ABSENT`, measurement Stop 및 마지막
+owner disconnect의 `LEVEL,OFF`는 이 최소 표시시간보다 항상 우선합니다. 재연결은 마지막 투영
+LEVEL만 복원하고 과거 ALERT는 replay하지 않습니다.
+
+측정 OFF 상태의 수동 시연은 인증된 `POST /api/feedback/demo`와 별도
+`feedback_device_demo` event만 사용합니다. 이 경로는 Fusion, measurement state, score,
+feedback policy 및 DB persistence를 호출하지 않으며 ACTIVE measurement가 있으면 409로 거부합니다.
+Bridge는 마지막 LEVEL만 캐시하고 Nano의 `READY` 또는 serial 재연결 뒤 LEVEL만 재동기화합니다. ALERT는
+큐에 저장하거나 재연결 후 replay하지 않습니다. Backend 재연결 때도 server가 현재 physical
+projection decision 또는 OFF를 device 전용 socket에 다시 보내므로 현재 LEVEL을 복원할 수 있습니다.
+
+Nano bridge는 별도 optional process이며 serial/Socket.IO 연결 실패로 종료되지 않고
+backoff 후 재시도합니다. `tools/demo/run_all.py --nano`로 명시적으로 포함할 수 있고 Nano
+process가 종료되어도 core demo는 계속됩니다. Firmware는 `millis()` 기반 LED/진동 pattern,
+15초 command timeout OFF, 유한 진동을 담당합니다.
+
+최종 실물 설정은 NeoPixel data D13, 6-pixel strip, vibration input D9입니다. Firmware의
+`LED_BRIGHTNESS=96`을 사용하고, 실제 시연에서는 사람이 세는 2·3번 LED만 점등합니다
+(zero-based pixel index 1·2). 진동은 D9에 `analogWrite(..., 200)`을 사용합니다. WARNING은
+180ms 1회, BREAK는 180ms 진동 → 140ms OFF → 180ms 진동입니다. `.env`의 legacy
+`LED_COUNT=32`는 이전 console/USB LED driver 설정이며 Feedback Nano의 pixel 수와 무관합니다.
+
+2026-10-03 production firmware/bridge E2E와 2026-10-28 R24-3 전체 Normal 통합 검증에서
+logical feedback에 따른 LED/진동 전환, BREAK 2회 진동, ABSENT/measurement STOP의 물리 OFF를
+확인했습니다. R24-3 세부 결과는 `docs/validation/r24-3-normal-hardware.md`에 기록합니다.
+
+### 7-6. 개입 원칙
 
 1. **정보량 없는 메시지는 무시됩니다.** "자세가 안 좋아요" 는 정보량 0입니다.
    사용자가 모르는 숫자를 줍니다 — "23분째 분당 6회예요"
@@ -306,8 +823,8 @@ USB LED 는 전원을 USB 에서 받고 배선이 케이블 하나입니다.
 | **의자가 1대이고 공용공간에 고정** | 3일 연속 실사용 테스트 불가. 세션 단위로 측정. `tools/mock` 없이는 대부분이 하드웨어를 기다림 |
 | **팝업은 브라우저 실행 중에만** | 탭이 백그라운드여도 되지만 브라우저를 완전히 종료하면 안 뜸 |
 | **안경** | 렌즈 반사가 EAR 신뢰도를 떨어뜨림. 표본 집단의 착용률이 높음 |
-| **진동 지각** | 쿠션·의복을 통과해 실제로 느껴지는지 미검증. 강하게 올리면 소리가 나 공용공간에서 못 씀 |
-| **LED 배치** | 사용자가 자기 노트북만 보면 모니터 위는 시야 밖. 부품 주문 전 5분 배치 테스트 필요 |
+| **진동 지각 일반화** | 현재 의자·부착 위치에서 PWM 200을 실물 검증했지만 쿠션·의복·다른 장착 위치에서는 체감이 달라질 수 있음 |
+| **LED 배치 일반화** | 현재 시연 배치와 2·3번 LED 점등은 검증했지만 다른 케이스·주변광에서는 시인성을 다시 확인해야 함 |
 | **CDN 의존** | 대시보드가 CDN 4종에 의존. 발표장 네트워크가 막히면 화면이 통째로 깨짐. 로컬 번들 필요 |
 
 ---
@@ -319,6 +836,7 @@ USB LED 는 전원을 USB 에서 받고 배선이 케이블 하나입니다.
 | `docs/architecture.md` | **이 문서.** 기획·아키텍처·범위 |
 | `docs/contracts/` | 계층 간 계약. 코드보다 먼저 |
 | `docs/decisions/` | 개별 결정 기록 (왜 그렇게 했는지) |
+| `docs/validation/` | 자동·실물 검증 체크포인트 기록 |
 | `docs/reference/ui-prototype/` | 이전 대시보드 시안. 참고용, 실행 불가 |
 | `CONVENTIONS.md` | 브랜치·커밋·PR·코드 스타일 |
 | `README.md` | 설치·실행 |
