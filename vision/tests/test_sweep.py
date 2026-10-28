@@ -113,6 +113,40 @@ def test_absolute_threshold_can_remain_stuck_when_open_ear_never_exceeds_open():
     assert result.longest_candidate_ms == pytest.approx(2000)
 
 
+def test_replay_uses_production_overlong_wait_and_stable_recovery():
+    sample = recording([
+        frame(0.0, 0.30),
+        frame(0.1, 0.05, "CLOSED_HOLD"),
+        frame(0.7, 0.05, "CLOSED_HOLD"),  # timeout -> WAIT_FOR_RECOVERY
+        frame(0.8, 0.30),
+        frame(0.85, 0.30),
+        frame(0.91, 0.30),                # stable recovery, never a blink
+        frame(1.2, 0.05, "BLINK"),
+        frame(1.4, 0.30, "BLINK"),
+    ], cues=(1.1,))
+
+    result = sweep.evaluate(sample, 0.20, 0.25, transition_margin_sec=0.0)
+
+    assert (result.tp, result.fp, result.fn) == (1, 0, 0)
+    assert result.overlong_candidates == 1
+    assert result.candidate_stuck_at_end is False
+
+
+def test_face_loss_cancels_candidate_before_later_open_frame():
+    lost = sweep.Frame(0.2, None, None, None, "BLINK", False, None)
+    sample = recording([
+        frame(0.0, 0.30),
+        frame(0.1, 0.05, "BLINK"),
+        lost,
+        frame(0.3, 0.30, "BLINK"),
+    ], cues=(0.0,))
+
+    result = sweep.evaluate(sample, 0.20, 0.25, transition_margin_sec=0.0)
+
+    assert (result.tp, result.fp, result.fn) == (0, 0, 1)
+    assert result.candidate_stuck_at_end is False
+
+
 def test_closed_hold_event_is_reported_separately_from_cue_metrics():
     sample = recording([
         frame(0.0, 0.30),

@@ -13,8 +13,19 @@ import argparse
 import glob
 import json
 import statistics
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from vision.blink.ear import (  # noqa: E402
+    BlinkCounter,
+    PHASE_CLOSED_CANDIDATE,
+    PHASE_OPEN,
+)
 
 ABSOLUTE_CLOSED = 0.21
 ABSOLUTE_OPEN = 0.25
@@ -231,33 +242,50 @@ def baseline_values(frames):
 
 
 def simulate(frames, closed_threshold, open_threshold):
-    """Replay the production two-threshold state machine without changing it."""
+    """Replay the current production three-state BlinkCounter unchanged."""
+    counter = BlinkCounter(
+        closed_threshold=closed_threshold,
+        open_threshold=open_threshold,
+    )
     events = []
-    closed_since = None
+    candidate_started_at = None
     longest_ms = 0.0
     overlong = 0
     last_t = None
     for frame in frames:
         last_t = frame.t
         ear = frame.combined_ear
-        if ear is None:
+        if not frame.face_detected or ear is None:
+            counter.on_face_lost()
+            candidate_started_at = None
             continue
-        if closed_since is None:
-            if ear < closed_threshold:
-                closed_since = frame.t
-        elif ear > open_threshold:
-            duration_ms = (frame.t - closed_since) * 1000.0
-            longest_ms = max(longest_ms, duration_ms)
-            if MIN_CLOSED_MS <= duration_ms <= MAX_CLOSED_MS:
-                events.append(BlinkEvent(closed_since, frame.t, duration_ms))
-            elif duration_ms > MAX_CLOSED_MS:
-                overlong += 1
-            closed_since = None
-    if closed_since is not None and last_t is not None:
-        longest_ms = max(longest_ms, (last_t - closed_since) * 1000.0)
-        if last_t - closed_since > MAX_CLOSED_MS / 1000.0:
+        phase_before = counter.phase
+        blinked = counter.update(float(ear), frame.t)
+        if (
+            phase_before == PHASE_OPEN
+            and counter.phase == PHASE_CLOSED_CANDIDATE
+        ):
+            candidate_started_at = frame.t
+        if candidate_started_at is not None:
+            longest_ms = max(
+                longest_ms,
+                (frame.t - candidate_started_at) * 1000.0,
+            )
+        if counter.last_transition_reason == "timeout":
             overlong += 1
-    return Simulation(tuple(events), closed_since, longest_ms, overlong)
+        if blinked:
+            duration_ms = float(counter.last_duration_ms)
+            events.append(BlinkEvent(
+                frame.t - duration_ms / 1000.0,
+                frame.t,
+                duration_ms,
+            ))
+        if counter.phase == PHASE_OPEN:
+            candidate_started_at = None
+    final_candidate = (
+        candidate_started_at if counter.phase != PHASE_OPEN else None
+    )
+    return Simulation(tuple(events), final_candidate, longest_ms, overlong)
 
 
 def match_events(cues, events, early_sec=DEFAULT_MATCH_EARLY_SEC,
