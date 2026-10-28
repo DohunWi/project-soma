@@ -223,6 +223,19 @@ baseline과 sustained relative-distance evidence를 통해 단일 SOMA Load dist
 | `report.schema.json` | DB → 서버 → 프론트 |
 | `measurement_phase.schema.json` | 서버 → 인증 사용자 room (측정 실행 단계) |
 
+### Supabase Auth와 `state_logs` 저장은 별도 연결입니다
+
+Front는 Supabase Auth SDK로 로그인하고 access token을 얻습니다. Backend는
+`SUPABASE_URL`과 publishable key를 이용해 이 token을 검증한 뒤 JWT `sub`를 사용자
+소유권으로 사용합니다. publishable key는 브라우저에 제공되는 공개 client key이며
+PostgreSQL 쓰기 권한을 가진 service-role key가 아닙니다.
+
+실제 `state_logs` 저장·History·Session Report는 Backend가 `DB_HOST / DB_USER /
+DB_PASSWORD`로 연결한 PostgreSQL 앱 전용 role을 사용합니다. Front는 PostgreSQL이나
+`state_logs`를 직접 조회하지 않고 인증된 Backend API만 호출합니다. 따라서 Auth 성공과
+DB 연결 성공은 서로 다른 상태입니다. DB가 일시적으로 실패해도 realtime Fusion과
+인증 room은 계속 동작할 수 있지만 persistence/History는 실패로 보고해야 합니다.
+
 ### 왜 `t` 와 `source` 가 필수인가
 
 의자와 웹캠은 **서로 다른 프로세스**입니다. 각자 보내고 서버가 `t` 로 병합합니다.
@@ -317,6 +330,85 @@ Phase C를 위해 `face_approach_delta_cm = face working baseline - current face
 소유한 temporal 결과를 Fusion에 별도 keyword 인자로 전달해 score에만 연결하며, 원본
 sensor payload의 임의 distance evidence/penalty 필드는 신뢰하지 않습니다. 진단 상세는
 public state나 persistence에 추가하지 않고 기존 절대 거리 state/reasons를 유지합니다.
+
+#### R20 posture tracking 진단 경로
+
+`fusion/posture_tracking.py`는 R19에서 실측한 4채널 압력 Shadow와 압력+IR Shadow의
+anchor/candidate/confirmed/recovery 규칙을 production 계층에서 재사용할 수 있게 분리한
+순수 진단 모듈입니다. 모듈 단독 기본값은 `off`이지만 Normal의 `cumulative-v2` 정책이
+선택되면 Backend가 자동으로 `clock`을 사용합니다. 독립 진단에서는
+`--posture-tracking off|shadow|clock` 또는 `SOMA_POSTURE_TRACKING_MODE`로 선택합니다.
+`shadow`는 검출과 canonical event 병합만, `clock`은 여기에 두 가지
+`sustained_posture_sec` 후보를 병렬 계산합니다.
+
+- `freeze_no_backfill`: Candidate 동안 멈추고 취소된 구간을 소급하지 않습니다.
+- `continuous_valid_seated`: Candidate 여부와 무관하게 유효 착석 구간을 누적합니다.
+
+R20-2 진단 출력은 두 clock을 계속 제공하지만 R20-4의 선택적 누적 정책은
+`continuous_valid_seated`만 사용합니다. Confirmed 압력 변화와 압력+IR 변화가 같은 동작을
+나타내면 한 canonical event로 합쳐 clock을 한 번만 초기화합니다. Candidate 자체는 점수,
+상태, 알림에 영향을 주지 않습니다. 진단 예외도 기존 Chair → state 실시간 경로로
+전파하지 않습니다.
+
+#### R20-4 cumulative static burden (Normal 기본 정책)
+
+Normal은 별도 옵션이 없으면 `fusion/static_burden.py`의 `cumulative-v2`를 적용하며 posture
+tracker는 자동으로 `clock`이 됩니다. 이전 동작을 비교해야 할 때는
+`--static-policy legacy` 또는 `SOMA_STATIC_POLICY=legacy`로 명시합니다. Demo는 항상
+`legacy`가 profile 기본값이며 Normal 전용 `cumulative-v2` 조합을 거부해 기존 축소
+시간축을 바꾸지 않습니다. 설정 우선순위는 CLI → 환경변수 → profile 기본값입니다.
+
+- 각 posture episode의 첫 300초는 신규 eligible time에 포함하지 않습니다.
+- 매 sample에서 `max(episode_sec - 300, 0)`의 증가분만 전역
+  `static_eligible_total_sec`에 한 번 더합니다.
+- 기존 Normal 곡선에는 `300 + static_eligible_total_sec`를 입력합니다. 따라서 같은 자세를
+  계속 유지하면 기존 300/600/1200/1800/2700/3600초 곡선과 정확히 일치하고, episode마다
+  기존 300초 grace를 이중 적용하지 않습니다.
+- Confirmed change는 `posture_episode_sec`만 0으로 만들며 이미 누적된 eligible time이나
+  static penalty를 감소시키지 않습니다. Candidate 취소 구간은 유효 착석시간으로 계속
+  계산합니다. 착석 중 자세 변경 자체는 recovery가 아닙니다.
+- static penalty 10점 이상은 CAUTION, 20점 이상은 DANGER의 실험 기준으로 사용하며 기존
+  `static_hold` reason 이름을 유지합니다. 이 모드에서 `static_hold`는 연속 원시 타이머가
+  아니라 누적 static burden이 상태 경계를 넘었다는 뜻입니다.
+- ABSENT, 재착석, Start/Stop, 센서 공백의 기존 lifecycle과 absence recovery는 유지합니다.
+  IR이 무효여도 pressure-only Confirmed를 사용할 수 있습니다. balance/blink/distance 슬롯은
+  독립적으로 기존 계산을 유지합니다.
+
+public `state`와 DB schema에는 새 필드를 추가하지 않습니다. 인증된 opt-in
+`cross_validation_observation`만 기존 `posture_tracking`과 함께 `static_burden` 비교값
+(`legacy_static_hold_sec`, legacy/v2 penalty·score, episode/eligible time, update reason)을
+전달합니다. 따라서 이 모드로 실행한 세션의 public score/state/reasons와 기존 필드의 DB
+snapshot은 선택한 실험 정책 결과를 담지만 계약 모양은 변하지 않습니다.
+
+#### R21-3 Blink Score (Normal 기본 정책)
+
+Normal은 별도 옵션이 없으면 `fusion/blink_load.py`의 `score-v1`을 적용합니다. 이전
+`low_blink` state/reason과 0점 blink penalty를 비교해야 할 때는
+`--blink-policy legacy` 또는 `SOMA_BLINK_POLICY=legacy`를 명시합니다. Demo는 항상
+`legacy`가 profile 기본값이며 Normal 전용 `score-v1` 조합을 거부합니다. 설정 우선순위는
+CLI → 환경변수 → profile 기본값입니다.
+
+- Vision은 내부 `sensor_data.vision`에 `ear_threshold_mode`, 실제
+  `open_ear_baseline`, credential-free `ear_calibration_status`를 선택적으로 보냅니다.
+- 개인화 baseline이 유효한 `personalized` mode만 새 low-blink timer/감점의 신뢰 가능한
+  입력으로 사용합니다. fallback `0.21/0.25`, baseline 누락·무효, stale/missing Vision,
+  `detect_rate=0`은 timer와 penalty를 동결합니다. 플래그가 꺼진 legacy 동작은 바뀌지
+  않습니다.
+- `blink_rate_baseline=0`은 개인 Blink Rate 기준으로 사용하지 않습니다. 부분 검출은
+  `partial_detection`으로 진단하지만 새 detect-rate 임계값을 임의로 만들지 않습니다.
+- 정책 B는 `low_blink_sec <= 300`에서 0점, 300~900초에서 0~10점을 선형 누적하고,
+  900초 이후 10점으로 제한합니다. `8 <= blink_rate < 11`에서는 유지하고, 신뢰 가능한
+  `blink_rate >= 11`에서는 300초에 걸쳐 선형 회복합니다.
+- 기존 `low_blink` state/reason 경계(300초 CAUTION, 900초 DANGER)는 유지합니다. 따라서
+  300초 진입 tick은 CAUTION이면서 blink penalty 0일 수 있으며 State와 Score가 반드시
+  같은 순간 변하지는 않습니다.
+- blink/static/balance/Phase C distance는 각각 독립적인 Load slot으로 합산합니다.
+  Front, Feedback policy, public state shape 및 DB schema는 변경하지 않습니다.
+
+상세 신뢰성·품질·감점 진단은 인증된 observer의
+`cross_validation_observation.blink_policy`에만 포함됩니다. 이 정책의 수치와 개인화 비율은
+한 사용자 자료에서 좁힌 engineering candidate입니다. Normal 기본 정책으로 채택했지만
+의학적 기준이나 보편적인 사용자 임계값으로 해석하지 않습니다.
 
 #### Phase C temporal evidence (관측 전용)
 
@@ -653,11 +745,17 @@ projection decision 또는 OFF를 device 전용 socket에 다시 보내므로 �
 Nano bridge는 별도 optional process이며 serial/Socket.IO 연결 실패로 종료되지 않고
 backoff 후 재시도합니다. `tools/demo/run_all.py --nano`로 명시적으로 포함할 수 있고 Nano
 process가 종료되어도 core demo는 계속됩니다. Firmware는 `millis()` 기반 LED/진동 pattern,
-15초 command timeout OFF, 유한 진동을 담당합니다. 2026-10-03 physical validation 기준
-Nano 배선은 NeoPixel data D13, LED 6개, vibration input D9입니다. 색·밝기, 점멸 주기와
-진동 길이·체감 강도는 별도의 hardware UX 검증 대상으로 유지합니다. 같은 날 production
-firmware/bridge와 Backend·Front·mock Chair를 연결한 E2E에서 logical feedback에 따른 Nano
-출력 전환 및 measurement STOP 시 물리 출력 OFF를 확인했습니다.
+15초 command timeout OFF, 유한 진동을 담당합니다.
+
+최종 실물 설정은 NeoPixel data D13, 6-pixel strip, vibration input D9입니다. Firmware의
+`LED_BRIGHTNESS=96`을 사용하고, 실제 시연에서는 사람이 세는 2·3번 LED만 점등합니다
+(zero-based pixel index 1·2). 진동은 D9에 `analogWrite(..., 200)`을 사용합니다. WARNING은
+180ms 1회, BREAK는 180ms 진동 → 140ms OFF → 180ms 진동입니다. `.env`의 legacy
+`LED_COUNT=32`는 이전 console/USB LED driver 설정이며 Feedback Nano의 pixel 수와 무관합니다.
+
+2026-10-03 production firmware/bridge E2E와 2026-10-28 R24-3 전체 Normal 통합 검증에서
+logical feedback에 따른 LED/진동 전환, BREAK 2회 진동, ABSENT/measurement STOP의 물리 OFF를
+확인했습니다. R24-3 세부 결과는 `docs/validation/r24-3-normal-hardware.md`에 기록합니다.
 
 ### 7-6. 개입 원칙
 
@@ -725,8 +823,8 @@ firmware/bridge와 Backend·Front·mock Chair를 연결한 E2E에서 logical fee
 | **의자가 1대이고 공용공간에 고정** | 3일 연속 실사용 테스트 불가. 세션 단위로 측정. `tools/mock` 없이는 대부분이 하드웨어를 기다림 |
 | **팝업은 브라우저 실행 중에만** | 탭이 백그라운드여도 되지만 브라우저를 완전히 종료하면 안 뜸 |
 | **안경** | 렌즈 반사가 EAR 신뢰도를 떨어뜨림. 표본 집단의 착용률이 높음 |
-| **진동 지각** | 쿠션·의복을 통과해 실제로 느껴지는지 미검증. 강하게 올리면 소리가 나 공용공간에서 못 씀 |
-| **LED 배치** | 사용자가 자기 노트북만 보면 모니터 위는 시야 밖. 부품 주문 전 5분 배치 테스트 필요 |
+| **진동 지각 일반화** | 현재 의자·부착 위치에서 PWM 200을 실물 검증했지만 쿠션·의복·다른 장착 위치에서는 체감이 달라질 수 있음 |
+| **LED 배치 일반화** | 현재 시연 배치와 2·3번 LED 점등은 검증했지만 다른 케이스·주변광에서는 시인성을 다시 확인해야 함 |
 | **CDN 의존** | 대시보드가 CDN 4종에 의존. 발표장 네트워크가 막히면 화면이 통째로 깨짐. 로컬 번들 필요 |
 
 ---
@@ -738,6 +836,7 @@ firmware/bridge와 Backend·Front·mock Chair를 연결한 E2E에서 logical fee
 | `docs/architecture.md` | **이 문서.** 기획·아키텍처·범위 |
 | `docs/contracts/` | 계층 간 계약. 코드보다 먼저 |
 | `docs/decisions/` | 개별 결정 기록 (왜 그렇게 했는지) |
+| `docs/validation/` | 자동·실물 검증 체크포인트 기록 |
 | `docs/reference/ui-prototype/` | 이전 대시보드 시안. 참고용, 실행 불가 |
 | `CONVENTIONS.md` | 브랜치·커밋·PR·코드 스타일 |
 | `README.md` | 설치·실행 |

@@ -34,6 +34,18 @@ def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("demo", "normal"), default=None,
                         help="override SOMA_MODE (.env or demo)")
+    parser.add_argument(
+        "--static-policy",
+        choices=("legacy", "cumulative-v2"),
+        default=None,
+        help="override SOMA_STATIC_POLICY (Normal default: cumulative-v2)",
+    )
+    parser.add_argument(
+        "--blink-policy",
+        choices=("legacy", "score-v1"),
+        default=None,
+        help="override SOMA_BLINK_POLICY (Normal default: score-v1)",
+    )
     sources = parser.add_mutually_exclusive_group()
     sources.add_argument("--source-mode", choices=("all", "chair-only"), default=None)
     sources.add_argument("--chair-only", dest="source_mode", action="store_const",
@@ -72,10 +84,14 @@ def child_environment(args):
 
 def process_specs(*, real=False, chair_only=False, nano=False, chair_raw_log=None,
                   mock=False, chair=False, vision=False, chair_port=None, nano_port=None,
-                  mock_scenario="normal"):
+                  mock_scenario="normal", static_policy=None, blink_policy=None):
     """Reuse production producers and integrated Backend feedback."""
     specs = [("server", [PY, "server/app.py", "--source-mode",
                          "chair-only" if chair_only else "all"])]
+    if static_policy is not None:
+        specs[0][1].extend(["--static-policy", static_policy])
+    if blink_policy is not None:
+        specs[0][1].extend(["--blink-policy", blink_policy])
     if mock:
         specs.append(("mock", [PY, "tools/mock/stream.py", "--scenario", mock_scenario,
                                "--speed", "1", "--hz", "1", "--source",
@@ -104,6 +120,26 @@ def prepare(args):
                         else os.getenv("SOMA_SOURCE_MODE", "all"))
     if args.mode not in ("demo", "normal") or args.source_mode not in ("all", "chair-only"):
         raise LaunchError("SOMA_MODE 또는 SOMA_SOURCE_MODE 설정을 확인하세요.")
+    profile_static_default = "cumulative-v2" if args.mode == "normal" else "legacy"
+    profile_blink_default = "score-v1" if args.mode == "normal" else "legacy"
+    args.static_policy = (
+        args.static_policy
+        or os.getenv("SOMA_STATIC_POLICY")
+        or profile_static_default
+    )
+    args.blink_policy = (
+        args.blink_policy
+        or os.getenv("SOMA_BLINK_POLICY")
+        or profile_blink_default
+    )
+    if args.static_policy not in ("legacy", "cumulative-v2"):
+        raise LaunchError("SOMA_STATIC_POLICY 설정을 확인하세요.")
+    if args.blink_policy not in ("legacy", "score-v1"):
+        raise LaunchError("SOMA_BLINK_POLICY 설정을 확인하세요.")
+    if args.mode == "demo" and (
+        args.static_policy != "legacy" or args.blink_policy != "legacy"
+    ):
+        raise LaunchError("Demo는 static/blink legacy 정책만 지원합니다.")
     if not 1 <= args.web_port <= 65535 or args.web_port == BACKEND_PORT:
         raise LaunchError("Front port는 1..65535이며 Backend 5000과 달라야 합니다.")
     if args.mock and (args.chair or args.vision):
@@ -138,7 +174,9 @@ def prepare(args):
     return process_specs(real=args.real, chair_only=args.source_mode == "chair-only",
                          nano=args.nano, chair_raw_log=args.chair_raw_log, mock=args.mock,
                          chair=args.chair, vision=args.vision, chair_port=chair_port,
-                         nano_port=nano_port, mock_scenario=args.mock_scenario)
+                          nano_port=nano_port, mock_scenario=args.mock_scenario,
+                          static_policy=args.static_policy,
+                          blink_policy=args.blink_policy)
 
 
 def check_port(port):
@@ -231,8 +269,14 @@ def main(argv=None):
         if not args.no_web:
             check_port(args.web_port)
         print(f"SOMA local demo: mode={args.mode}, source-mode={args.source_mode}")
+        print(
+            "적용 정책: "
+            f"static={args.static_policy}, blink={args.blink_policy}"
+        )
         print("구성: " + ", ".join(name for name, _ in specs)
               + ("" if args.no_web else ", front"))
+        if not args.nano:
+            print("Feedback Nano: 미실행 (--nano와 별도 --nano-port가 필요합니다.)")
         print("로그인 → Start → CALIBRATING → READY → MEASURING. 자동 Start는 하지 않습니다.")
         if args.check_only:
             print("사전 점검 통과. 프로세스/장치/측정은 시작하지 않았습니다.")
@@ -253,7 +297,10 @@ def main(argv=None):
             print(f"로그인: {front_url}/view/login.html", flush=True)
         for name, command in specs[1:]:
             spawn(name, command, processes, env)
-        print("종료: Front에서 Stop → Nano OFF 확인 → 이 터미널에서 Ctrl+C", flush=True)
+        stop_steps = "Front에서 Stop"
+        if args.nano:
+            stop_steps += " → Nano OFF 확인"
+        print(f"종료: {stop_steps} → 이 터미널에서 Ctrl+C", flush=True)
         handled_optional = set()
         while True:
             exited = find_core_exit(processes, handled_optional)

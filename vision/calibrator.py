@@ -139,6 +139,7 @@ class Calibrator:
         self._start: Optional[float] = None
         self._samples: list = []
         self._baseline: dict = {}
+        self._ear_calibration_status = "missing"
         self._load()
 
     # ── 조회 ─────────────────────────────────────────────────────────
@@ -188,6 +189,11 @@ class Calibrator:
             return None
         return value if math.isfinite(value) and value > 0 else None
 
+    def ear_calibration_status(self):
+        """Return a credential-free status for runtime reliability diagnostics."""
+        with self._lock:
+            return self._ear_calibration_status
+
     def lateral_baseline(self):
         """Return personalized neutral image geometry, or None for legacy files."""
         with self._lock:
@@ -210,6 +216,7 @@ class Calibrator:
         with self._lock:
             self._calibrating = True
             self._done = False
+            self._ear_calibration_status = "calibrating"
             # Detector/camera startup must not consume the calibration window.
             # The first complete, valid sample starts the timer in add_sample().
             self._start = None
@@ -282,6 +289,16 @@ class Calibrator:
             )
             self._calibrating = False
             self._done = bool(self._baseline)
+            value = self._baseline.get("open_ear_baseline")
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                value = math.nan
+            self._ear_calibration_status = (
+                "calibration_failed_using_previous"
+                if math.isfinite(value) and value > 0
+                else "calibration_failed_fallback"
+            )
             return False
         b = {}
         for k in _AVERAGE_METRIC_KEYS:
@@ -302,6 +319,7 @@ class Calibrator:
         self._baseline = b
         self._calibrating = False
         self._done = True
+        self._ear_calibration_status = "calibrated_personalized"
         _calib_log(
             f"[calib] 완료 ({sample_count} 샘플)  "
             f"face_width={b['face_width_px']:.1f}px  "
@@ -332,20 +350,28 @@ class Calibrator:
 
     def _load(self) -> None:
         if not self._path.exists():
+            self._ear_calibration_status = "missing"
             _calib_log("[calib] 저장된 baseline 없음 — 캘리브레이션이 필요합니다")
             return
         try:
             data = json.loads(self._path.read_text(encoding="utf-8"))
             missing = [k for k in _AVERAGE_METRIC_KEYS if k not in data]
             if missing:
+                self._ear_calibration_status = "invalid_baseline"
                 _calib_log(f"[calib] 키 누락 {missing} — 재캘리브레이션 필요")
                 return
             self._baseline = data
             self._done = True
+            self._ear_calibration_status = (
+                "loaded_personalized"
+                if self.open_ear_baseline() is not None
+                else "loaded_legacy_fallback"
+            )
             _calib_log(
                 f"[calib] baseline 로드: face_width={data['face_width_px']:.1f}px "
                 f"@ {data.get('calib_distance_cm', DEFAULT_CALIB_CM):.0f}cm "
                 f"open_ear={data.get('open_ear_baseline', 'legacy/fallback')}"
             )
         except (OSError, json.JSONDecodeError) as e:
+            self._ear_calibration_status = "invalid_baseline"
             _calib_log(f"[calib] 로드 실패: {e}")

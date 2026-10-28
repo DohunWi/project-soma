@@ -123,6 +123,9 @@ def test_receipt_age_below_three_seconds_merges_vision(age):
             face_distance_cm=55.0,
             detect_rate=0.9,
             blink_rate_baseline=15.0,
+            ear_threshold_mode="personalized",
+            open_ear_baseline=0.244899,
+            ear_calibration_status="loaded_personalized",
             face_distance_baseline_cm=60.0,
         ),
         received_at=10.0,
@@ -135,6 +138,9 @@ def test_receipt_age_below_three_seconds_merges_vision(age):
     assert sample["face_detected"] is True
     assert sample["detect_rate"] == 0.9
     assert sample["blink_rate_baseline"] == 15.0
+    assert sample["ear_threshold_mode"] == "personalized"
+    assert sample["open_ear_baseline"] == pytest.approx(0.244899)
+    assert sample["ear_calibration_status"] == "loaded_personalized"
     assert sample["face_distance_baseline_cm"] == 60.0
 
 

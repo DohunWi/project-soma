@@ -741,6 +741,210 @@ def test_cross_validation_observation_is_opt_in_and_owner_scoped():
     assert observed[0]["vision_receipt_age_sec"] == pytest.approx(0.5)
     assert observed[0]["chair_vision_sender_delta_sec"] == pytest.approx(0.1)
     assert observed[0]["state"]["metrics"]["balance"] == "LEFT"
+    assert "posture_tracking" not in observed[0]
+    assert observed[0]["penalties"] == {
+        "static": 0.0,
+        "balance": 0.0,
+        "blink": 0.0,
+        "distance": 0.0,
+        "total": 0.0,
+    }
+    assert "penalties" not in observed[0]["state"]["metrics"]
+
+
+def test_clock_mode_adds_internal_posture_diagnostics_without_changing_state():
+    def run(mode):
+        app, socketio = make_app(posture_tracking_mode=mode)
+        measurement, _created = app.extensions["measurement_sessions"].start(USER_ID)
+        app.extensions["measurement_calibration"].force_measuring_for_test(
+            measurement.session_id
+        )
+        app.extensions["chair_pipeline"].reset()
+        producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
+        observer = socketio.test_client(
+            app,
+            auth={"token": USER_TOKEN, "observe_sensor_data": True},
+        )
+        for offset in range(3):
+            producer.emit(
+                "sensor_data",
+                chair_payload(t=1000.0 + offset, pressure=[900, 900, 900, 900]),
+            )
+        events = observer.get_received()
+        states = [event["args"][0] for event in events if event["name"] == "state"]
+        observations = [
+            event["args"][0]
+            for event in events
+            if event["name"] == "cross_validation_observation"
+        ]
+        producer.disconnect()
+        observer.disconnect()
+        return states, observations
+
+    off_states, off_observations = run("off")
+    clock_states, clock_observations = run("clock")
+
+    assert clock_states == off_states
+    assert all("posture_tracking" not in row for row in off_observations)
+    diagnostic = clock_observations[-1]["posture_tracking"]
+    assert diagnostic["mode"] == "clock"
+    assert diagnostic["sustained_posture_sec"] == {
+        "freeze_no_backfill": 2.0,
+        "continuous_valid_seated": 2.0,
+    }
+    assert diagnostic["legacy_static_hold_sec"] == 2.0
+    assert diagnostic["production_behavior_changed"] is False
+
+
+def test_cumulative_static_policy_is_normal_only_and_forces_clock_tracking():
+    app, _socketio = make_app(
+        runtime_profile=NORMAL_PROFILE,
+        static_policy_mode="cumulative-v2",
+        posture_tracking_mode="off",
+    )
+    assert app.extensions["static_policy_mode"] == "cumulative-v2"
+    assert app.extensions["posture_tracking_mode"] == "clock"
+
+    with pytest.raises(ValueError, match="Normal-only"):
+        make_app(
+            runtime_profile=DEMO_PROFILE,
+            static_policy_mode="cumulative-v2",
+        )
+
+
+def test_blink_score_policy_is_normal_default_with_explicit_legacy_override():
+    default, _socketio = make_app(runtime_profile=NORMAL_PROFILE)
+    legacy, _socketio = make_app(
+        runtime_profile=NORMAL_PROFILE,
+        blink_policy_mode="legacy",
+    )
+
+    assert default.extensions["blink_policy_mode"] == "score-v1"
+    assert legacy.extensions["blink_policy_mode"] == "legacy"
+    with pytest.raises(ValueError, match="Normal-only"):
+        make_app(
+            runtime_profile=DEMO_PROFILE,
+            blink_policy_mode="score-v1",
+        )
+
+
+def test_blink_policy_diagnostic_is_observer_only_not_public_state_contract():
+    app, socketio = make_app(
+        runtime_profile=NORMAL_PROFILE,
+        blink_policy_mode="score-v1",
+    )
+    measurement, _created = app.extensions["measurement_sessions"].start(USER_ID)
+    app.extensions["measurement_calibration"].force_measuring_for_test(
+        measurement.session_id
+    )
+    app.extensions["chair_pipeline"].reset(measurement.session_id)
+    producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
+    observer = socketio.test_client(
+        app,
+        auth={"token": USER_TOKEN, "observe_sensor_data": True},
+    )
+    producer.emit("sensor_data", {
+        "v": 1,
+        "t": 1000.0,
+        "source": "vision",
+        "user_name": "vision-test",
+        "vision": {
+            "face_detected": True,
+            "blink_rate": 7.0,
+            "detect_rate": 0.5,
+            "ear_threshold_mode": "personalized",
+            "open_ear_baseline": 0.244899,
+            "ear_calibration_status": "loaded_personalized",
+        },
+    })
+    producer.emit(
+        "sensor_data",
+        chair_payload(t=1000.0, pressure=[900, 900, 900, 900]),
+    )
+    events = observer.get_received()
+    states = [event["args"][0] for event in events if event["name"] == "state"]
+    observations = [
+        event["args"][0]
+        for event in events
+        if event["name"] == "cross_validation_observation"
+    ]
+
+    assert len(states) == 1
+    assert set(states[0]) == {
+        "v", "t", "user_name", "state", "confidence", "score", "reasons", "metrics"
+    }
+    assert "blink_policy" not in states[0]["metrics"]
+    diagnostic = observations[0]["blink_policy"]
+    assert diagnostic["mode"] == "score-v1"
+    assert diagnostic["personalized_ear"] is True
+    assert diagnostic["observation_quality"] == "partial_detection"
+
+
+def test_cumulative_static_diagnostics_are_opt_in_without_public_contract_change():
+    app, socketio = make_app(
+        runtime_profile=NORMAL_PROFILE,
+        static_policy_mode="cumulative-v2",
+    )
+    measurement, _created = app.extensions["measurement_sessions"].start(USER_ID)
+    app.extensions["measurement_calibration"].force_measuring_for_test(
+        measurement.session_id
+    )
+    app.extensions["chair_pipeline"].reset(measurement.session_id)
+    producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
+    observer = socketio.test_client(
+        app,
+        auth={"token": USER_TOKEN, "observe_sensor_data": True},
+    )
+    producer.emit(
+        "sensor_data",
+        chair_payload(t=1000.0, pressure=[900, 900, 900, 900]),
+    )
+    events = observer.get_received()
+    states = [event["args"][0] for event in events if event["name"] == "state"]
+    observations = [
+        event["args"][0]
+        for event in events
+        if event["name"] == "cross_validation_observation"
+    ]
+    assert len(states) == 1
+    assert set(states[0]) == {
+        "v", "t", "user_name", "state", "confidence", "score", "reasons", "metrics"
+    }
+    assert "static_burden" not in states[0]["metrics"]
+    assert observations[0]["posture_tracking"]["mode"] == "clock"
+    assert observations[0]["static_burden"]["policy"] == "cumulative-v2"
+    assert observations[0]["static_burden"]["legacy_score"] == 100
+    assert observations[0]["static_burden"]["v2_score"] == 100
+
+
+def test_posture_diagnostic_failure_does_not_interrupt_realtime_state(caplog):
+    app, socketio = make_app(posture_tracking_mode="clock")
+    measurement, _created = app.extensions["measurement_sessions"].start(USER_ID)
+    app.extensions["measurement_calibration"].force_measuring_for_test(
+        measurement.session_id
+    )
+    app.extensions["chair_pipeline"].reset()
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("diagnostic only")
+
+    app.extensions["posture_tracking"].observe = fail
+    producer = socketio.test_client(app, auth={"token": SENSOR_TOKEN})
+    observer = socketio.test_client(
+        app,
+        auth={"token": USER_TOKEN, "observe_sensor_data": True},
+    )
+    producer.emit("sensor_data", chair_payload())
+    events = observer.get_received()
+    assert [event for event in events if event["name"] == "state"]
+    observations = [
+        event["args"][0]
+        for event in events
+        if event["name"] == "cross_validation_observation"
+    ]
+    assert len(observations) == 1
+    assert "posture_tracking" not in observations[0]
+    assert "posture tracking 진단 실패 (RuntimeError)" in caplog.text
 
 
 def test_real_chair_identity_fields_do_not_block_authenticated_session_routing():

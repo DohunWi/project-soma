@@ -29,6 +29,11 @@ from fusion.config import (
 )
 from fusion.distance_temporal import DistanceTemporalResult
 from fusion.load import SomaLoadState, score_integer, update_chair_load, update_distance_load
+from fusion.static_burden import (
+    StaticBurdenConfig,
+    StaticBurdenState,
+    static_burden_level,
+)
 
 # ── 임계값 ───────────────────────────────────────────────────────────────────
 # 전부 추정치입니다. 실측 데이터로 재조정하기 전까지 확정값으로 쓰지 마세요.
@@ -66,6 +71,7 @@ class FusionState:
     static_total:    float = 0.0   # 세션 누적. 리포트용, 리셋 없음
     balance:         str = "CENTER"
     load:            SomaLoadState = field(default_factory=SomaLoadState)
+    static_burden:   StaticBurdenState = field(default_factory=StaticBurdenState)
 
     _last_pressure:  tuple = field(default=())
     _last_distance_evidence: DistanceTemporalResult | None = None
@@ -93,7 +99,7 @@ def _activity(pressure, prev):
     return sum(abs(a - b) for a, b in zip(pressure, prev))
 
 
-def _state_and_reasons(st, timing):
+def _state_and_reasons(st, timing, static_burden_config=None):
     """Return the current state without mutating any timer or load."""
     reasons, level = [], 0
     if st.low_blink_sec >= timing.low_blink_danger_sec:
@@ -102,12 +108,21 @@ def _state_and_reasons(st, timing):
     elif st.low_blink_sec >= timing.low_blink_caution_sec:
         reasons.append("low_blink")
         level = max(level, 1)
-    if st.static_hold_sec >= timing.static_danger_sec:
-        reasons.append("static_hold")
-        level = max(level, 2)
-    elif st.static_hold_sec >= timing.static_caution_sec:
-        reasons.append("static_hold")
-        level = max(level, 1)
+    if static_burden_config is None:
+        if st.static_hold_sec >= timing.static_danger_sec:
+            reasons.append("static_hold")
+            level = max(level, 2)
+        elif st.static_hold_sec >= timing.static_caution_sec:
+            reasons.append("static_hold")
+            level = max(level, 1)
+    else:
+        static_level = static_burden_level(
+            st.load.static_penalty,
+            static_burden_config,
+        )
+        if static_level:
+            reasons.append("static_hold")
+            level = max(level, static_level)
     if st.close_dist_sec >= timing.close_distance_caution_sec:
         reasons.append("close_distance")
         level = max(level, 1)
@@ -115,6 +130,34 @@ def _state_and_reasons(st, timing):
         reasons.append("imbalance")
         level = max(level, 1)
     return ("NORMAL", "CAUTION", "DANGER")[level], reasons
+
+
+def decision_with_static_burden(
+    st,
+    decision,
+    timing,
+    config: StaticBurdenConfig,
+):
+    """Replace only static-v2 score/state/reasons in an existing decision."""
+    if not st.seated or decision["state"] == "ABSENT":
+        # Confirmed absence owns the public state lifecycle.  Static v2 may
+        # reuse the existing absence recovery result, but it must never turn
+        # ABSENT back into a seated severity solely from residual load.
+        return {
+            **decision,
+            "score": score_integer(st.load),
+        }
+    state, reasons = _state_and_reasons(
+        st,
+        timing,
+        static_burden_config=config,
+    )
+    return {
+        **decision,
+        "state": state,
+        "score": score_integer(st.load),
+        "reasons": reasons,
+    }
 
 
 def step(
@@ -126,6 +169,7 @@ def step(
     load_config: SomaLoadConfig = DEMO_SOMA_LOAD_CONFIG,
     distance_evidence: DistanceTemporalResult | None = None,
     distance_timing: DistanceEvidenceTiming = DEMO_DISTANCE_EVIDENCE_TIMING,
+    blink_observation_reliable: bool = True,
 ):
     """
     Args:
@@ -248,6 +292,7 @@ def step(
             low_blink_sec=0.0, static_hold_sec=0.0,
             close_dist_sec=0.0, imbalance_sec=0.0,
             balance="CENTER", load=load, _last_pressure=(),
+            static_burden=StaticBurdenState(),
             _last_distance_evidence=None,
         )
         return st2, _decision(st2, s, now, "ABSENT", 1.0, [])
@@ -289,7 +334,7 @@ def step(
     # blink_rate 는 rolling 값이므로 한 프레임의 face_detected 만으로 버리지
     # 않습니다. 다만 최근 품질창에 얼굴 관측이 전혀 없으면 오래된 rate 가
     # 0으로 수렴해 저깜빡임으로 오인되므로 unavailable 과 동일하게 멈춥니다.
-    if rate is None or detect == 0:
+    if not blink_observation_reliable or rate is None or detect == 0:
         low_blink = st.low_blink_sec
     elif rate < BLINK_RATE_LOW:
         low_blink = st.low_blink_sec + dt

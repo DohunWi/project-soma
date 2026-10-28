@@ -17,6 +17,7 @@ import os
 import sys
 import threading
 import time
+from dataclasses import replace
 from functools import wraps
 from datetime import datetime
 from pathlib import Path
@@ -30,8 +31,29 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from fusion.state import OCCUPANCY_MIN, FusionState, step  # noqa: E402
+from fusion.state import (  # noqa: E402
+    OCCUPANCY_MIN,
+    FusionState,
+    decision_with_static_burden,
+    step,
+)
 from fusion.load import score_integer  # noqa: E402
+from fusion.blink_load import (  # noqa: E402
+    NORMAL_BLINK_PENALTY_CONFIG,
+    BlinkPolicyMode,
+    assess_blink_reliability,
+    update_blink_load,
+)
+from fusion.posture_tracking import (  # noqa: E402
+    PostureTrackingConfig,
+    PostureTrackingCoordinator,
+    PostureTrackingMode,
+)
+from fusion.static_burden import (  # noqa: E402
+    NORMAL_STATIC_BURDEN_CONFIG,
+    StaticPolicyMode,
+    update_cumulative_static_burden,
+)
 from feedback.config import feedback_config_for_mode  # noqa: E402
 from server.auth import (  # noqa: E402
     AuthenticationError,
@@ -131,6 +153,10 @@ def _cross_validation_observation(
     decision,
     distance_evidence=None,
     distance_temporal=None,
+    posture_tracking=None,
+    static_burden=None,
+    blink_policy=None,
+    penalties=None,
 ):
     """Build opt-in eval instrumentation without changing production contracts."""
     latest_chair = sensor_cache.latest_chair
@@ -161,7 +187,29 @@ def _cross_validation_observation(
         observation["distance_evidence"] = distance_evidence.as_dict()
     if distance_temporal is not None:
         observation["distance_temporal"] = distance_temporal.as_dict()
+    if posture_tracking is not None:
+        observation["posture_tracking"] = posture_tracking
+    if static_burden is not None:
+        observation["static_burden"] = static_burden
+    if blink_policy is not None:
+        observation["blink_policy"] = blink_policy
+    if penalties is not None:
+        observation["penalties"] = penalties
     return observation
+
+
+def _load_penalty_observation(load):
+    """Expose read-only Load slots to authenticated diagnostic observers."""
+    slots = {
+        "static": load.static_penalty,
+        "balance": load.balance_penalty,
+        "blink": load.blink_penalty,
+        "distance": load.distance_penalty,
+    }
+    return {
+        **{name: round(value, 6) for name, value in slots.items()},
+        "total": round(sum(slots.values()), 6),
+    }
 
 
 def _load_validator(path):
@@ -204,18 +252,50 @@ class ChairPipeline:
         merge_policy=DEFAULT_SENSOR_MERGE_POLICY,
         monotonic=None,
         distance_timing=DEMO_PROFILE.distance_evidence_timing,
+        posture_tracking_config=None,
+        static_policy_mode=StaticPolicyMode.LEGACY,
+        static_burden_config=NORMAL_STATIC_BURDEN_CONFIG,
+        blink_policy_mode=BlinkPolicyMode.LEGACY,
+        blink_penalty_config=NORMAL_BLINK_PENALTY_CONFIG,
     ):
         self._state = FusionState()
         self._lock = threading.RLock()
         self._timing = timing
         self._load_config = load_config
         self._distance_timing = distance_timing
+        self._posture_tracking = PostureTrackingCoordinator(
+            posture_tracking_config or PostureTrackingConfig()
+        )
+        self._static_policy_mode = StaticPolicyMode(static_policy_mode)
+        self._static_burden_config = static_burden_config
+        self._blink_policy_mode = BlinkPolicyMode(blink_policy_mode)
+        self._blink_penalty_config = blink_penalty_config
+        self._latest_posture_diagnostic = None
+        self._latest_static_burden_diagnostic = None
+        self._latest_blink_diagnostic = None
+        self._session_id = None
         cache_kwargs = {} if monotonic is None else {"monotonic": monotonic}
         self._sensor_cache = SessionSensorCache(merge_policy, **cache_kwargs)
 
     @property
     def sensor_cache(self):
         return self._sensor_cache
+
+    @property
+    def posture_tracking(self):
+        return self._posture_tracking
+
+    @property
+    def latest_posture_diagnostic(self):
+        return self._latest_posture_diagnostic
+
+    @property
+    def latest_static_burden_diagnostic(self):
+        return self._latest_static_burden_diagnostic
+
+    @property
+    def latest_blink_diagnostic(self):
+        return self._latest_blink_diagnostic
 
     def debug_state(self):
         """Return the immutable Fusion checkpoint for opt-in diagnostics."""
@@ -257,27 +337,140 @@ class ChairPipeline:
     def process_prepared(self, payload, sample, *, distance_evidence=None):
         """Run Fusion for a previously prepared Chair sample."""
         with self._lock:
+            previous = self._state
+            blink_reliability = assess_blink_reliability(sample)
+            blink_score_enabled = (
+                self._blink_policy_mode is BlinkPolicyMode.SCORE_V1
+            )
             current, decision = step(
-                self._state,
+                previous,
                 sample,
                 payload["t"],
                 timing=self._timing,
                 load_config=self._load_config,
                 distance_evidence=distance_evidence,
                 distance_timing=self._distance_timing,
+                blink_observation_reliable=(
+                    not blink_score_enabled
+                    or blink_reliability.personalized_ear
+                ),
             )
+            blink_diagnostic = None
+            if blink_score_enabled:
+                elapsed = (
+                    0.0
+                    if previous.last_t is None
+                    else payload["t"] - previous.last_t
+                )
+                if elapsed < 0 or elapsed > self._timing.max_gap_sec:
+                    elapsed = 0.0
+                lifecycle_paused = (
+                    previous.absence_candidate_sec > 0.0
+                    or previous.reseat_stabilizing
+                    or current.absence_candidate_sec > 0.0
+                    or current.reseat_stabilizing
+                )
+                blink_load, blink_diagnostic = update_blink_load(
+                    current.load,
+                    previous_low_blink_sec=previous.low_blink_sec,
+                    low_blink_sec=current.low_blink_sec,
+                    blink_rate=sample.get("blink_rate"),
+                    detect_rate=sample.get("detect_rate"),
+                    reliability=blink_reliability,
+                    seated=current.seated,
+                    lifecycle_paused=lifecycle_paused,
+                    elapsed_sec=elapsed,
+                    config=self._blink_penalty_config,
+                )
+                current = replace(current, load=blink_load)
+                decision = {
+                    **decision,
+                    "score": score_integer(current.load),
+                }
+                blink_diagnostic = {
+                    **blink_diagnostic,
+                    "mode": self._blink_policy_mode.value,
+                }
+            posture_diagnostic = None
+            if self._posture_tracking.config.mode is not PostureTrackingMode.OFF:
+                try:
+                    chair_ir = sample.get("ir") or []
+                    posture_diagnostic = self._posture_tracking.observe(
+                        payload["t"],
+                        sample.get("pressure"),
+                        chair_ir[0] if chair_ir else None,
+                        seated=current.seated,
+                        session_id=self._session_id,
+                        static_hold_sec=current.static_hold_sec,
+                        lifecycle_paused=(
+                            previous.absence_candidate_sec > 0.0
+                            or previous.reseat_stabilizing
+                            or current.absence_candidate_sec > 0.0
+                            or current.reseat_stabilizing
+                        ),
+                    )
+                except Exception as error:  # noqa: BLE001
+                    # Experimental diagnostics/policy must not stop realtime state.
+                    log.warning(
+                        "posture tracking 진단 실패 (%s)",
+                        type(error).__name__,
+                    )
+            static_diagnostic = None
+            if self._static_policy_mode is StaticPolicyMode.CUMULATIVE_V2:
+                burden, static_penalty, static_diagnostic = (
+                    update_cumulative_static_burden(
+                        previous.static_burden,
+                        previous_penalty=previous.load.static_penalty,
+                        legacy_penalty=current.load.static_penalty,
+                        posture_tracking=posture_diagnostic,
+                        previous_seated=previous.seated,
+                        seated=current.seated,
+                        load_config=self._load_config,
+                        config=self._static_burden_config,
+                    )
+                )
+                legacy_static_penalty = current.load.static_penalty
+                legacy_score = decision["score"]
+                current = replace(
+                    current,
+                    load=replace(current.load, static_penalty=static_penalty),
+                    static_burden=burden,
+                )
+                decision = decision_with_static_burden(
+                    current,
+                    decision,
+                    self._timing,
+                    self._static_burden_config,
+                )
+                static_diagnostic = {
+                    **static_diagnostic,
+                    "legacy_static_hold_sec": current.static_hold_sec,
+                    "legacy_static_penalty": round(legacy_static_penalty, 6),
+                    "legacy_score": legacy_score,
+                    "v2_score": decision["score"],
+                    "v2_state": decision["state"],
+                    "v2_reasons": list(decision["reasons"]),
+                }
             message = _validation_message(STATE_VALIDATOR, decision)
             if message:
                 raise PayloadError(f"state 계약 위반: {message}")
             self._state = current
+            self._latest_posture_diagnostic = posture_diagnostic
+            self._latest_static_burden_diagnostic = static_diagnostic
+            self._latest_blink_diagnostic = blink_diagnostic
             self._sensor_cache.mark_chair_processed(payload)
         return decision
 
-    def reset(self):
+    def reset(self, session_id=None):
         """Start a measurement session with no prior accumulated Fusion state."""
         with self._lock:
             self._state = FusionState()
             self._sensor_cache.reset()
+            self._session_id = None if session_id is None else str(session_id)
+            self._posture_tracking.reset(session_id)
+            self._latest_posture_diagnostic = None
+            self._latest_static_burden_diagnostic = None
+            self._latest_blink_diagnostic = None
 
     def clear_cache(self):
         """Forget source samples immediately when an ACTIVE session stops."""
@@ -329,6 +522,9 @@ def create_app(
     calibration_timer_factory=None,
     source_mode=None,
     debug_fusion=False,
+    posture_tracking_mode=None,
+    static_policy_mode=None,
+    blink_policy_mode=None,
     feedback_device_monotonic=None,
     _skip_calibration_for_testing=False,
 ):
@@ -336,6 +532,39 @@ def create_app(
         _enable_fusion_debug_logging()
     profile = runtime_profile or load_runtime_profile()
     selected_source_mode = load_source_mode(source_mode)
+    selected_posture_tracking_mode = PostureTrackingMode(
+        posture_tracking_mode
+        or os.getenv("SOMA_POSTURE_TRACKING_MODE", PostureTrackingMode.OFF.value)
+    )
+    default_static_policy_mode = (
+        StaticPolicyMode.CUMULATIVE_V2
+        if profile.name == "normal"
+        else StaticPolicyMode.LEGACY
+    )
+    default_blink_policy_mode = (
+        BlinkPolicyMode.SCORE_V1
+        if profile.name == "normal"
+        else BlinkPolicyMode.LEGACY
+    )
+    selected_static_policy_mode = StaticPolicyMode(
+        static_policy_mode
+        or os.getenv("SOMA_STATIC_POLICY")
+        or default_static_policy_mode.value
+    )
+    selected_blink_policy_mode = BlinkPolicyMode(
+        blink_policy_mode
+        or os.getenv("SOMA_BLINK_POLICY")
+        or default_blink_policy_mode.value
+    )
+    if selected_static_policy_mode is StaticPolicyMode.CUMULATIVE_V2:
+        if profile.name != "normal":
+            raise ValueError("cumulative-v2 static policy is Normal-only")
+        selected_posture_tracking_mode = PostureTrackingMode.CLOCK
+    if (
+        selected_blink_policy_mode is BlinkPolicyMode.SCORE_V1
+        and profile.name != "normal"
+    ):
+        raise ValueError("score-v1 blink policy is Normal-only")
     calibration_config = calibration_for_source_mode(profile, selected_source_mode)
     app = Flask(__name__)
     app.config["TESTING"] = testing
@@ -353,6 +582,11 @@ def create_app(
         merge_policy=sensor_merge_policy,
         monotonic=sensor_monotonic,
         distance_timing=profile.distance_evidence_timing,
+        posture_tracking_config=PostureTrackingConfig(
+            mode=selected_posture_tracking_mode
+        ),
+        static_policy_mode=selected_static_policy_mode,
+        blink_policy_mode=selected_blink_policy_mode,
     )
     verifier = auth_verifier or SupabaseAuthVerifier()
     sessions = session_registry or MeasurementSessionRegistry()
@@ -407,6 +641,10 @@ def create_app(
     app.extensions["measurement_calibration"] = calibration
     app.extensions["latest_device_feedback"] = latest_device_feedback
     app.extensions["debug_fusion"] = bool(debug_fusion)
+    app.extensions["posture_tracking"] = pipeline.posture_tracking
+    app.extensions["posture_tracking_mode"] = selected_posture_tracking_mode.value
+    app.extensions["static_policy_mode"] = selected_static_policy_mode.value
+    app.extensions["blink_policy_mode"] = selected_blink_policy_mode.value
     if history_reader is _AUTO_HISTORY_READER:
         history_reader = StateHistoryReader()
     app.extensions["state_history_reader"] = history_reader
@@ -475,7 +713,7 @@ def create_app(
 
     def reset_measurement_engines(measurement):
         """Ensure calibration observations cannot leak into measurement state."""
-        pipeline.reset()
+        pipeline.reset(measurement.session_id)
         feedback.stop_session(measurement.session_id)
         feedback.start_session(measurement.session_id)
         reset_device_feedback()
@@ -734,7 +972,7 @@ def create_app(
                         )
                 measurement, created = sessions.start(user_id)
                 if created:
-                    pipeline.reset()
+                    pipeline.reset(measurement.session_id)
                     feedback.start_session(measurement.session_id)
                     reset_device_feedback()
                     if _skip_calibration_for_testing:
@@ -1035,6 +1273,11 @@ def create_app(
                     decision,
                     to=f"user:{measurement.user_id}",
                 )
+                posture_diagnostic = pipeline.latest_posture_diagnostic
+                static_burden_diagnostic = (
+                    pipeline.latest_static_burden_diagnostic
+                )
+                blink_diagnostic = pipeline.latest_blink_diagnostic
                 if debug_before is not None:
                     debug_after = pipeline.debug_state()
                     pressure = list(sample.get("pressure") or [])
@@ -1082,6 +1325,9 @@ def create_app(
                     )
                 if has_cross_validation_observer(measurement.user_id):
                     try:
+                        penalty_diagnostic = _load_penalty_observation(
+                            pipeline.debug_state().load
+                        )
                         socketio.emit(
                             CROSS_VALIDATION_EVENT,
                             _cross_validation_observation(
@@ -1090,6 +1336,10 @@ def create_app(
                                 decision,
                                 calibration.latest_distance_evidence,
                                 calibration.latest_distance_temporal,
+                                posture_diagnostic,
+                                static_burden_diagnostic,
+                                blink_diagnostic,
+                                penalty_diagnostic,
                             ),
                             to=_cross_validation_room(measurement.user_id),
                         )
@@ -1179,16 +1429,49 @@ if __name__ == "__main__":
         action="store_true",
         help="Chair/Fusion score transitions without credentials",
     )
+    parser.add_argument(
+        "--posture-tracking",
+        choices=[mode.value for mode in PostureTrackingMode],
+        default=None,
+        help="diagnostic posture tracker (default: off or SOMA_POSTURE_TRACKING_MODE)",
+    )
+    parser.add_argument(
+        "--static-policy",
+        choices=[mode.value for mode in StaticPolicyMode],
+        default=None,
+        help=(
+            "static policy (CLI > SOMA_STATIC_POLICY > profile default: "
+            "Normal cumulative-v2, Demo legacy)"
+        ),
+    )
+    parser.add_argument(
+        "--blink-policy",
+        choices=[mode.value for mode in BlinkPolicyMode],
+        default=None,
+        help=(
+            "blink policy (CLI > SOMA_BLINK_POLICY > profile default: "
+            "Normal score-v1, Demo legacy)"
+        ),
+    )
     _args = parser.parse_args()
     _source_mode = _args.source_mode
     _debug_fusion = _args.debug_fusion
+    _posture_tracking_mode = _args.posture_tracking
+    _static_policy_mode = _args.static_policy
+    _blink_policy_mode = _args.blink_policy
 else:
     _source_mode = None
     _debug_fusion = False
+    _posture_tracking_mode = None
+    _static_policy_mode = None
+    _blink_policy_mode = None
 
 app, socketio = create_app(
     source_mode=_source_mode,
     debug_fusion=_debug_fusion,
+    posture_tracking_mode=_posture_tracking_mode,
+    static_policy_mode=_static_policy_mode,
+    blink_policy_mode=_blink_policy_mode,
 )
 
 
@@ -1197,6 +1480,9 @@ if __name__ == "__main__":
     port = int(os.getenv("SERVER_PORT", "5000"))
     print(f"Project Soma backend: http://{host}:{port}")
     print(f"Measurement source mode: {app.extensions['source_mode']}")
+    print(f"Posture tracking mode: {app.extensions['posture_tracking_mode']}")
+    print(f"Static policy mode: {app.extensions['static_policy_mode']}")
+    print(f"Blink policy mode: {app.extensions['blink_policy_mode']}")
     try:
         socketio.run(app, host=host, port=port, allow_unsafe_werkzeug=True)
     finally:

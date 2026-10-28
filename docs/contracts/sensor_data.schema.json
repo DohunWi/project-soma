@@ -49,6 +49,12 @@
                               "description": "캘리브레이션 때의 평소 거리. '평소보다 N cm 가까워짐' 을 만들 수 있게 함께 보냅니다" },
         "blink_rate_baseline": { "type": "number", "minimum": 0,
                               "description": "캘리브레이션 때의 평소 분당 깜빡임 수. 자각 문구는 절대값이 아니라 이 값과의 차이로 만듭니다" },
+        "ear_threshold_mode": { "enum": ["personalized", "fallback"],
+                              "description": "BlinkCounter EAR 임계가 개인 OPEN baseline 기반인지 기존 0.21/0.25 fallback인지 나타내는 내부 신뢰성 진단값" },
+        "open_ear_baseline": { "type": "number", "exclusiveMinimum": 0,
+                              "description": "개인화 EAR 임계 계산에 실제 사용한 OPEN EAR baseline. fallback이면 생략합니다" },
+        "ear_calibration_status": { "enum": ["missing", "invalid_baseline", "loaded_personalized", "loaded_legacy_fallback", "calibrating", "calibrated_personalized", "calibration_failed_using_previous", "calibration_failed_fallback"],
+                              "description": "자격정보를 포함하지 않는 Vision EAR calibration 진단 상태" },
 
         "detect_rate":      { "type": "number", "minimum": 0, "maximum": 1,
                               "description": "최근 창에서 얼굴이 검출된 프레임 비율. confidence 의 입력입니다" },

@@ -39,6 +39,7 @@ def test_sufficient_valid_open_samples_create_upper_quartile_baseline(tmp_path):
     assert calibrator.is_calibrating() is False
     assert calibrator.open_ear_baseline() == pytest.approx(0.82)
     assert calibrator.get_baseline()["open_ear_sample_count"] == 5
+    assert calibrator.ear_calibration_status() == "calibrated_personalized"
     assert path.exists()
 
 
@@ -133,6 +134,7 @@ def test_insufficient_valid_samples_do_not_succeed_or_save(tmp_path):
     assert calibrator.is_calibrating() is False
     assert calibrator.is_done() is False
     assert calibrator.open_ear_baseline() is None
+    assert calibrator.ear_calibration_status() == "calibration_failed_fallback"
     assert path.exists() is False
 
 
@@ -149,6 +151,7 @@ def test_baseline_json_save_and_load(tmp_path):
     assert saved["open_ear_statistic"] == "p75"
     assert saved["open_ear_sample_count"] == 3
     assert loaded.open_ear_baseline() == pytest.approx(0.825)
+    assert loaded.ear_calibration_status() == "loaded_personalized"
 
 
 def test_open_ear_upper_quartile_resists_blink_and_transition_contamination(tmp_path):
@@ -182,6 +185,7 @@ def test_legacy_baseline_without_open_ear_remains_usable_for_distance(tmp_path):
 
     assert calibrator.is_done() is True
     assert calibrator.open_ear_baseline() is None
+    assert calibrator.ear_calibration_status() == "loaded_legacy_fallback"
     assert calibrator.distance_cm(240.0) == pytest.approx(50.0)
 
 
@@ -203,7 +207,18 @@ def test_failed_recalibration_keeps_existing_baseline(tmp_path):
 
     assert calibrator.is_done() is True
     assert calibrator.open_ear_baseline() == pytest.approx(0.80)
+    assert calibrator.ear_calibration_status() == "calibration_failed_using_previous"
     assert json.loads(path.read_text(encoding="utf-8")) == original
+
+
+def test_missing_and_invalid_baselines_have_distinct_diagnostic_status(tmp_path):
+    missing = Calibrator(tmp_path / "missing.json")
+    invalid_path = tmp_path / "invalid.json"
+    invalid_path.write_text("not-json", encoding="utf-8")
+    invalid = Calibrator(invalid_path)
+
+    assert missing.ear_calibration_status() == "missing"
+    assert invalid.ear_calibration_status() == "invalid_baseline"
 
 
 def test_distance_calibration_regression(tmp_path):

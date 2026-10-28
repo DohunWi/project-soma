@@ -74,6 +74,11 @@ Set-Location C:\project-soma
 & .\.venv-clean\Scripts\python.exe tools\demo\run_all.py `
   --front-root C:\project-soma-front --mode demo --source-mode all `
   --real --chair-port COM3 --nano --nano-port COM4
+
+# 실제 Normal 통합 측정: cumulative-v2 + score-v1이 자동 적용됨
+& .\.venv-clean\Scripts\python.exe tools\demo\run_all.py `
+  --front-root C:\project-soma-front --mode normal --source-mode all `
+  --real --chair-port COM3 --nano --nano-port COM4
 ```
 
 로그인 `http://127.0.0.1:5500/view/login.html`, 회원가입 `/view/signup.html`,
@@ -86,6 +91,9 @@ Calibration 중에는 일반 state/score/Feedback/저장을 시작하지 않습�
 `--mode demo|normal`은 자식 프로세스의 `SOMA_MODE`를 선택합니다. 생략하면 기존 환경/.env,
 없으면 demo입니다. `--source-mode all|chair-only`도 환경/.env를 따르고 없으면 all입니다.
 `--chair-only`는 같은 옵션의 별칭입니다. Normal 시연은 위 명령의 `--mode normal`로 바꿉니다.
+Normal의 정책 기본값은 `cumulative-v2`/`score-v1`, Demo는 `legacy`/`legacy`입니다.
+필요하면 `--static-policy legacy --blink-policy legacy`로 Normal을 이전 정책으로 실행할 수
+있습니다. 우선순위는 CLI → `SOMA_STATIC_POLICY`/`SOMA_BLINK_POLICY` → profile 기본값입니다.
 Demo Calibration은 최소 5초/유효 표본 5개, Normal은 8초/8개입니다. all은 Chair IR과
 Vision을 모두 요구하고 chair-only는 Vision을 요구하지 않습니다. 잘못된 IR/미착석/불안정,
 센서 누락 시 자동으로 다른 source mode로 전환하지 않습니다.
@@ -122,6 +130,14 @@ Front는 그 작업본의 `tools/serve_front.py`를 실행해 **web 디렉터리
 | `CHAIR_SERIAL_PORT`, `FEEDBACK_SERIAL_PORT` | 선택한 실제 bridge의 서로 다른 포트 |
 | `CHAIR_BAUD_RATE`, `FEEDBACK_BAUD_RATE` | 설치된 firmware와 동일 baud (기본 9600) |
 | `WEBCAM_INDEX`, 선택적 `VISION_MODEL_PATH` | 실제 Vision 실행 시 카메라와 기존 모델 파일 |
+| `SOMA_STATIC_POLICY`, `SOMA_BLINK_POLICY` | Normal을 legacy로 비교할 때만 쓰는 선택 override |
+| `SOMA_POSTURE_TRACKING_MODE` | 자세 변화 진단용 선택 override (`off/shadow/clock`) |
+
+Supabase Auth와 `state_logs` 저장은 같은 서비스 안에서도 별도 연결입니다.
+`SUPABASE_URL`/publishable key는 Front 로그인과 Backend JWT 검증에 사용하고,
+`DB_*`는 Backend의 PostgreSQL 앱 전용 role이 `state_logs`를 저장·조회할 때만 사용합니다.
+로그인이 성공해도 DB 연결 실패 시 실시간 측정은 계속될 수 있으며, Front는 DB를 직접
+조회하지 않고 인증된 Backend History/Report API만 사용합니다.
 
 이 실행기로 생성한 자식에 한해 `SERVER_HOST=127.0.0.1`, `SERVER_PORT=5000`,
 `CORS_ALLOWED_ORIGINS=http://127.0.0.1:5500`을 사용합니다. Front의 기존 Backend URL과
@@ -132,6 +148,10 @@ Front는 그 작업본의 `tools/serve_front.py`를 실행해 **web 디렉터리
 
 현재 노트북에서는 검증된 `.venv-clean`을 명시적으로 사용합니다. 기존 `.venv`는 보존하며
 이 실행기는 환경 생성·패키지 설치·설정 수정을 수행하지 않습니다.
+
+R24-3 실제 Chair/Vision/Nano 통합 검증 기록은
+[`docs/validation/r24-3-normal-hardware.md`](docs/validation/r24-3-normal-hardware.md)에
+보존합니다.
 
 ### 종료 및 실패 복구
 
@@ -172,6 +192,40 @@ C:\project-soma\.venv-clean\Scripts\python.exe C:\project-soma-front\tools\serve
 python chair/bridge/bridge.py                     # 의자
 python vision/run.py --preview                    # 웹캠
 ```
+
+R20-4 누적 static burden은 Normal의 기본 Static 정책입니다. Normal에서 별도 옵션이
+없으면 `cumulative-v2`와 posture tracker `clock`이 적용됩니다. 이전 정책과 비교해야 할
+때만 명시적으로 legacy를 선택합니다.
+
+```bash
+python server/app.py --static-policy legacy
+```
+
+이때 `.env` 또는 실행 환경의 `SOMA_MODE=normal`이 필요합니다. 현재 프로젝트 `.env`가
+`SOMA_MODE=demo`라면 단독 `server/app.py` 실행은 Demo가 되므로, 공식 실행기의
+`--mode normal`을 사용하는 것이 안전합니다.
+비교 진단은 인증된 `cross_validation_observation.static_burden`에서만 볼 수 있고 public
+state/DB schema는 바뀌지 않습니다. 기존 로그의 A/B/C 오프라인 비교는 Backend나 장치를
+실행하지 않고 `python tools/static_policy_compare.py <log.jsonl>`로 수행합니다.
+
+R21-3 Blink Score `score-v1`도 Normal의 기본 Blink 정책입니다.
+개인화 OPEN EAR baseline이 실제 Vision payload에 있을 때만 5분 grace 뒤 감점을 누적하고,
+fallback `0.21/0.25`, stale/missing Vision, `detect_rate=0`에서는 timer와 감점을 동결합니다.
+
+```bash
+python server/app.py --blink-policy legacy
+```
+
+Normal의 두 legacy 정책을 동시에 비교할 때는 다음처럼 명시합니다.
+
+```bash
+python server/app.py --static-policy legacy --blink-policy legacy
+```
+
+부분 얼굴 검출에는 새 임계값을 적용하지 않습니다. 인증된 opt-in
+`cross_validation_observation.blink_policy`에서 품질과 fallback/calibration 상태를 확인할 수
+있으며 public state, DB schema, Front 계약은 추가되지 않습니다. Demo는 두 정책 모두
+legacy로 고정하며 Normal 전용 조합을 거부합니다.
 
 웹캠은 mediapipe 모델 파일(3.7MB)을 씁니다. 없으면 처음 실행할 때 내려받아
 `vision/models/` 에 캐시합니다. **발표 전에 미리 한 번 실행해 두세요** —

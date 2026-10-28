@@ -55,12 +55,17 @@ uint8_t serialLength = 0;
 bool serialOverflow = false;
 
 
+
 void setAllPixels(uint8_t red, uint8_t green, uint8_t blue) {
-  for (uint16_t i = 0; i < LED_COUNT; ++i) {
-    strip.setPixelColor(i, strip.Color(red, green, blue));
-  }
+  strip.clear();
+
+  // 사람이 세는 2번, 3번 LED만 점등
+  strip.setPixelColor(1, strip.Color(red, green, blue));
+  strip.setPixelColor(2, strip.Color(red, green, blue));
+
   strip.show();
 }
+
 
 
 uint8_t triangleWave(unsigned long now, unsigned long periodMs) {
@@ -114,9 +119,10 @@ void updateVibration(unsigned long now) {
   }
 
   unsigned long elapsed = now - alertStartedAt;
+
   if (currentAlert == ALERT_WARNING) {
     if (elapsed < 180) {
-      digitalWrite(PIN_VIBRATION, HIGH);
+      analogWrite(PIN_VIBRATION, 200);
     } else {
       stopVibration();
     }
@@ -124,7 +130,7 @@ void updateVibration(unsigned long now) {
   }
 
   if (elapsed < 180 || (elapsed >= 320 && elapsed < 500)) {
-    digitalWrite(PIN_VIBRATION, HIGH);
+    analogWrite(PIN_VIBRATION, 200);
   } else if (elapsed < 320) {
     digitalWrite(PIN_VIBRATION, LOW);
   } else {

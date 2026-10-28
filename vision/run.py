@@ -161,18 +161,21 @@ def main():
                     file=sys.stderr,
                     flush=True,
                 )
-            return BlinkCounter(
-                closed_threshold=selection.closed_threshold,
-                open_threshold=selection.open_threshold,
+            return (
+                BlinkCounter(
+                    closed_threshold=selection.closed_threshold,
+                    open_threshold=selection.open_threshold,
+                ),
+                selection,
             )
 
-        counter = make_blink_counter()
+        counter, threshold_selection = make_blink_counter()
         lean_classifier = FaceLeanClassifier()
         quality = FrameQuality()
         last_send = 0.0
 
         def process_frame(frame, now):
-            nonlocal counter, last_send
+            nonlocal counter, threshold_selection, last_send
 
             # 카메라가 실제로 열린 뒤에 캘리브레이션을 시작합니다.
             # 열기 전에 시작하면 3초 창이 준비 대기에 소모됩니다.
@@ -243,7 +246,7 @@ def main():
             if was_calibrating and not calib.is_calibrating():
                 # Startup samples must not leak into the measured blink window.
                 # A failed calibration resolves to the prior baseline or fallback.
-                counter = make_blink_counter()
+                counter, threshold_selection = make_blink_counter()
                 lean_classifier.reset()
                 blinked = False
                 blink_phase_before = counter.phase
@@ -298,6 +301,13 @@ def main():
                     face_distance_cm=dist_cm,
                     face_distance_baseline_cm=calib.baseline_distance_cm(),
                     blink_rate_baseline=calib.baseline_blink_rate(),
+                    ear_threshold_mode=(
+                        "personalized"
+                        if threshold_selection.personalized
+                        else "fallback"
+                    ),
+                    open_ear_baseline=threshold_selection.open_ear_baseline,
+                    ear_calibration_status=calib.ear_calibration_status(),
                     detect_rate=quality.detect_rate(now),
                     yaw_dropped_rate=quality.yaw_dropped_rate(now),
                     calibrating=calib.is_calibrating(),

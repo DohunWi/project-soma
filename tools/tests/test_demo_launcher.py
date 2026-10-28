@@ -11,8 +11,10 @@ from tools.demo import run_all as launcher
 
 @pytest.fixture
 def configured(monkeypatch, tmp_path):
-    for name in ("SOMA_MODE", "SOMA_SOURCE_MODE", "CHAIR_SERIAL_PORT", "FEEDBACK_SERIAL_PORT",
-                 "SUPABASE_KEY"):
+    for name in (
+        "SOMA_MODE", "SOMA_SOURCE_MODE", "SOMA_STATIC_POLICY", "SOMA_BLINK_POLICY",
+        "CHAIR_SERIAL_PORT", "FEEDBACK_SERIAL_PORT", "SUPABASE_KEY",
+    ):
         monkeypatch.delenv(name, raising=False)
     for name in ("SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY", "SOCKET_AUTH_TOKEN"):
         monkeypatch.setenv(name, "sensitive-test-value")
@@ -40,7 +42,12 @@ def test_modes_and_wall_clock_mock(configured, mode, source):
     assert env["CORS_ALLOWED_ORIGINS"] == (
         "http://127.0.0.1:5500,http://127.0.0.1:5000"
     )
-    assert specs[0][1][-2:] == ["--source-mode", source]
+    server_command = specs[0][1]
+    assert server_command[server_command.index("--source-mode") + 1] == source
+    expected_static = "cumulative-v2" if mode == "normal" else "legacy"
+    expected_blink = "score-v1" if mode == "normal" else "legacy"
+    assert server_command[server_command.index("--static-policy") + 1] == expected_static
+    assert server_command[server_command.index("--blink-policy") + 1] == expected_blink
     assert specs[1][1][-6:] == ["--speed", "1", "--hz", "1", "--source",
                               "chair" if source == "chair-only" else "all"]
     assert specs[1][1][specs[1][1].index("--scenario") + 1] == "normal"
@@ -54,6 +61,60 @@ def test_default_no_producer_or_measurement_request(configured, monkeypatch):
     # Neither CLI runner that owns start/stop is part of the command plan.
     assert not any("chair_e2e" in part or "cross_validation" in part
                    for _, command in launcher.prepare(args) for part in command)
+
+
+def test_normal_legacy_environment_override_is_forwarded(configured, monkeypatch):
+    monkeypatch.setenv("SOMA_STATIC_POLICY", "legacy")
+    monkeypatch.setenv("SOMA_BLINK_POLICY", "legacy")
+    args = launcher.build_parser().parse_args(configured + ["--mode", "normal"])
+
+    server_command = launcher.prepare(args)[0][1]
+
+    assert args.static_policy == "legacy"
+    assert args.blink_policy == "legacy"
+    assert server_command[-4:] == [
+        "--static-policy", "legacy", "--blink-policy", "legacy",
+    ]
+
+
+def test_cli_policy_overrides_environment_and_is_reported(
+    configured,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setenv("SOMA_STATIC_POLICY", "legacy")
+    monkeypatch.setenv("SOMA_BLINK_POLICY", "legacy")
+    monkeypatch.setattr(launcher, "check_port", lambda _port: None)
+    monkeypatch.setattr(launcher, "spawn", lambda *a, **k: pytest.fail("spawned"))
+
+    assert launcher.main(configured + [
+        "--mode", "normal",
+        "--static-policy", "cumulative-v2",
+        "--blink-policy", "score-v1",
+        "--check-only",
+    ]) == 0
+
+    output = capsys.readouterr().out
+    assert "적용 정책: static=cumulative-v2, blink=score-v1" in output
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        ["--mode", "demo", "--static-policy", "cumulative-v2"],
+        ["--mode", "demo", "--blink-policy", "score-v1"],
+    ],
+)
+def test_demo_rejects_normal_only_policy_options(
+    configured,
+    options,
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setattr(launcher, "spawn", lambda *a, **k: pytest.fail("spawned"))
+
+    assert launcher.main(configured + options) == 1
+    assert "Demo" in capsys.readouterr().err
 
 
 def test_real_and_explicit_hardware_selection(configured):
@@ -111,7 +172,19 @@ def test_check_only_starts_nothing(configured, monkeypatch, capsys):
     assert launcher.main(configured + ["--mock", "--check-only"]) == 0
     output = capsys.readouterr().out
     assert "자동 Start는 하지 않습니다" in output
+    assert "Feedback Nano: 미실행" in output
     assert "sensitive-test-value" not in output
+
+
+def test_nano_enabled_does_not_report_it_as_omitted(configured, monkeypatch, capsys):
+    monkeypatch.setattr(launcher, "check_port", lambda p: None)
+    monkeypatch.setattr(launcher, "spawn", lambda *a, **k: pytest.fail("spawned"))
+    assert launcher.main(configured + [
+        "--nano", "--nano-port", "COM4", "--check-only",
+    ]) == 0
+    output = capsys.readouterr().out
+    assert "구성: server, nano, front" in output
+    assert "Feedback Nano: 미실행" not in output
 
 
 class Process:
