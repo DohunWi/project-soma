@@ -20,8 +20,10 @@ function page({ mediaDevices } = {}) {
     const eventHandlers = new Map();
     const makeNode = () => ({
         style: {}, innerText: '', textContent: '', hidden: false, disabled: false, value: '',
-        children: [], classList: { add() {}, remove() {}, toggle() {} },
-        getContext: () => ({}), setAttribute() {},
+        children: [], attributes: {}, classList: { add() {}, remove() {}, toggle() {} },
+        getContext: () => ({}),
+        setAttribute(name, value) { this.attributes[name] = value; },
+        focus() { this.focused = true; },
         addEventListener(name, handler) { eventHandlers.set(name, handler); },
         appendChild(child) { this.children.push(child); },
         replaceChildren(...children) { this.children = children; },
@@ -108,6 +110,62 @@ test('syntax: inline classic/module scripts and auth/runtime modules', () => {
         const result = spawnSync(process.execPath, ['--input-type=module', '--check'], { input: source, encoding: 'utf8' });
         assert.equal(result.status, 0, result.stderr);
     }
+});
+
+test('DEMO/NORMAL manual tabs switch presentation only and keep both panels available', () => {
+    const { context, nodes } = page();
+    assert.equal(nodes.get('manual-panel-demo').hidden, false);
+    assert.equal(nodes.get('manual-panel-real').hidden, false); // The tiny DOM does not parse boolean attrs.
+
+    context.switchManual('real');
+    assert.equal(nodes.get('manual-panel-demo').hidden, true);
+    assert.equal(nodes.get('manual-panel-real').hidden, false);
+    assert.equal(nodes.get('manual-tab-demo').attributes['aria-selected'], 'false');
+    assert.equal(nodes.get('manual-tab-real').attributes['aria-selected'], 'true');
+
+    context.switchManual('demo');
+    assert.equal(nodes.get('manual-panel-demo').hidden, false);
+    assert.equal(nodes.get('manual-panel-real').hidden, true);
+    assert.equal(nodes.get('manual-tab-demo').attributes['aria-selected'], 'true');
+    assert.equal(nodes.get('manual-tab-real').attributes['aria-selected'], 'false');
+});
+
+test('technical term dialog opens accessibly and closes by button, Escape, or backdrop without touching measurement', () => {
+    assert.match(html, /<button[^>]+class="technical-term-button"[\s\S]*?>cumulative-v2<\/button>/);
+    assert.match(html, /<button[^>]+class="technical-term-button"[\s\S]*?>score-v1<\/button>/);
+    const { context, nodes } = page();
+    const model = { phase: 'MEASURING', sessionId: SID, pendingAction: null };
+    context.window.measurementRuntime = { model };
+    const overlay = nodes.get('technical-term-overlay');
+    overlay.hidden = true;
+    const staticTrigger = nodes.get('manual-tab-real');
+
+    assert.equal(context.openTechnicalTerm('cumulative-v2', staticTrigger), true);
+    assert.equal(overlay.hidden, false);
+    assert.equal(nodes.get('technical-term-title').innerText, 'cumulative-v2');
+    assert.equal(nodes.get('technical-term-cumulative-v2').hidden, false);
+    assert.equal(nodes.get('technical-term-score-v1').hidden, true);
+    assert.equal(nodes.get('technical-term-close').focused, true);
+    assert.equal(model.phase, 'MEASURING');
+
+    let prevented = false;
+    context.handleTechnicalTermKeydown({ key: 'Escape', preventDefault: () => { prevented = true; } });
+    assert.equal(prevented, true);
+    assert.equal(overlay.hidden, true);
+    assert.equal(staticTrigger.focused, true);
+    assert.equal(model.phase, 'MEASURING');
+
+    const blinkTrigger = nodes.get('feedback-test-normal');
+    context.openTechnicalTerm('score-v1', blinkTrigger);
+    assert.equal(nodes.get('technical-term-score-v1').hidden, false);
+    context.handleTechnicalTermBackdrop({ target: overlay, currentTarget: overlay });
+    assert.equal(overlay.hidden, true);
+    assert.equal(blinkTrigger.focused, true);
+
+    context.openTechnicalTerm('score-v1', blinkTrigger);
+    assert.equal(context.closeTechnicalTerm(), true);
+    assert.equal(overlay.hidden, true);
+    assert.equal(model.phase, 'MEASURING');
 });
 
 test('ABSENT hides score and instantaneous metrics, adds no chart point, then recovers', () => {

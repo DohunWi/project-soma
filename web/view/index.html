@@ -339,6 +339,109 @@
             background: #f9fafb;
         }
 
+        /* Information > user manual. Restore headings, lists and tables hidden by Tailwind's reset. */
+        .manual-content h3 { font-size: 1.15rem; font-weight: 700; color: #111827; margin: 0 0 4px; }
+        .manual-content h4 { font-size: 1.02rem; font-weight: 700; color: #1f2937; margin: 0 0 8px; }
+        .manual-content h5 { font-weight: 700; color: #374151; margin: 16px 0 4px; }
+        .manual-content section { margin-top: 22px; }
+        .manual-content p { margin: 6px 0; }
+        .manual-content ul { list-style: disc; padding-left: 1.3rem; margin: 4px 0; }
+        .manual-content ol { list-style: decimal; padding-left: 1.3rem; margin: 4px 0; }
+        .manual-content li { margin: 2px 0; }
+        .manual-content code { background: #eef2ff; color: #3730a3; padding: 1px 6px; border-radius: 4px; font-size: 0.9em; }
+        .manual-content .manual-flow,
+        .manual-content .manual-formula {
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            padding: 10px 12px;
+            font-weight: 700;
+            color: #1f2937;
+            overflow-x: auto;
+        }
+        .manual-content .manual-table { overflow-x: auto; margin: 8px 0; }
+        .manual-content table { width: 100%; border-collapse: collapse; background: #fff; font-size: 14px; }
+        .manual-content th,
+        .manual-content td { border: 1px solid #e5e7eb; padding: 8px 10px; text-align: left; vertical-align: top; }
+        .manual-content th { background: #f3f4f6; font-weight: 600; color: #374151; }
+
+        .technical-term-button {
+            appearance: none;
+            border: 0;
+            background: transparent;
+            color: #2563eb;
+            padding: 0;
+            font: inherit;
+            font-weight: 700;
+            text-decoration: underline;
+            text-decoration-style: dotted;
+            text-underline-offset: 3px;
+            cursor: pointer;
+        }
+
+        .technical-term-button:hover { color: #1d4ed8; }
+        .technical-term-button:focus-visible {
+            outline: 3px solid rgba(37, 99, 235, 0.3);
+            outline-offset: 3px;
+            border-radius: 3px;
+        }
+
+        .technical-term-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 80;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(17, 24, 39, 0.48);
+            overflow-y: auto;
+        }
+
+        .technical-term-overlay[hidden] { display: none; }
+
+        .technical-term-dialog {
+            width: min(680px, 100%);
+            max-height: calc(100vh - 40px);
+            overflow-y: auto;
+            background: #fff;
+            border: 1px solid #e5e7eb;
+            border-radius: 14px;
+            box-shadow: 0 24px 60px rgba(17, 24, 39, 0.24);
+        }
+
+        .technical-term-dialog header {
+            position: sticky;
+            top: 0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 18px 20px;
+            background: #fff;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .technical-term-dialog-body { padding: 20px; }
+        .technical-term-dialog-body h4 { margin: 18px 0 6px; font-weight: 700; color: #1f2937; }
+        .technical-term-dialog-body p { margin: 6px 0; color: #4b5563; }
+        .technical-term-dialog-body ul { list-style: disc; padding-left: 1.35rem; margin: 8px 0; color: #374151; }
+        .technical-term-dialog-body li { margin: 5px 0; }
+        .technical-term-summary {
+            padding: 12px 14px;
+            border: 1px solid #bfdbfe;
+            border-radius: 8px;
+            background: #eff6ff;
+            color: #1e3a8a;
+        }
+
+        @media (max-width: 640px) {
+            .technical-term-overlay { align-items: flex-start; padding: 12px; }
+            .technical-term-dialog { max-height: calc(100vh - 24px); border-radius: 10px; }
+            .technical-term-dialog header,
+            .technical-term-dialog-body { padding: 16px; }
+        }
+
         .error-text {
             color: #e74c3c;
             font-size: 0.85rem;
@@ -622,9 +725,207 @@
                     <p class="text-gray-600 mb-1" data-i18n="version">버전: 1.0.0</p>
                     <p class="text-gray-600" data-i18n="info_desc">스마트 피로도 자각 솔루션 시스템입니다.</p>
                 </div>
+                <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-100 mb-6">
+                    <h3 class="text-lg font-bold mb-4">사용 매뉴얼</h3>
+                    <div class="flex gap-2 mb-4" role="tablist" aria-label="실행 모드별 사용 매뉴얼">
+                        <button id="manual-tab-demo" type="button" role="tab" aria-selected="true"
+                            aria-controls="manual-panel-demo" onclick="switchManual('demo')"
+                            class="manual-tab px-4 py-2 rounded-md text-sm font-medium bg-blue-600 text-white transition-colors">
+                            시연 모드
+                        </button>
+                        <button id="manual-tab-real" type="button" role="tab" aria-selected="false"
+                            aria-controls="manual-panel-real" onclick="switchManual('real')"
+                            class="manual-tab px-4 py-2 rounded-md text-sm font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 transition-colors">
+                            실제 모드
+                        </button>
+                    </div>
+                    <div id="manual-panel-demo" role="tabpanel" aria-labelledby="manual-tab-demo"
+                        class="manual-content bg-gray-50 border border-gray-200 rounded-md p-5 text-[15px] text-gray-700 leading-relaxed">
+                        <h3>시연 모드 (DEMO)</h3>
+
+                        <section>
+                            <h4>1. 모드 개요</h4>
+                            <p>시연 모드는 Project SOMA의 자세 및 시각 활동 모니터링 기능을 짧은 시간 안에 확인하기 위한 모드입니다.</p>
+                            <p>일반 모드와 같은 센서 수집 구조를 사용하지만, 상태 변화와 피드백을 빠르게 확인할 수 있도록 시연용 시간 조건과 분석 정책을 적용합니다.</p>
+                            <p>실제 센서와 Mock 센서를 모두 사용할 수 있으며, <strong>DEMO/NORMAL 선택과 Mock 사용 여부는 서로 독립적입니다.</strong></p>
+                        </section>
+
+                        <section>
+                            <h4>2. 측정 진행 과정</h4>
+                            <p class="manual-flow">로그인 → 측정 시작 → CALIBRATING → READY → MEASURING → 측정 종료</p>
+                            <ol>
+                                <li><strong>측정 시작:</strong> 측정 시작 버튼으로 인증된 세션을 시작합니다.</li>
+                                <li><strong>CALIBRATING:</strong> 사용자 기준 자세와 유효 센서 표본을 수집합니다.</li>
+                                <li><strong>READY:</strong> 보정이 완료됐음을 알리는 전환 단계입니다.</li>
+                                <li><strong>MEASURING:</strong> Backend가 자동으로 실시간 측정 단계로 전환합니다.</li>
+                                <li><strong>측정 종료:</strong> 측정 중지 버튼으로 세션을 종료합니다.</li>
+                            </ol>
+                        </section>
+
+                        <section>
+                            <h4>3. 데이터 수집 및 분석</h4>
+                            <div class="manual-table">
+                                <table>
+                                    <thead><tr><th>항목</th><th>분석 내용</th></tr></thead>
+                                    <tbody>
+                                        <tr><td>Static</td><td>유사한 착석 자세의 지속 시간과 자세 변화</td></tr>
+                                        <tr><td>Balance</td><td>FSR 4개 센서의 착석 압력 분포</td></tr>
+                                        <tr><td>Blink</td><td>EAR 기반 눈 깜빡임 횟수와 빈도</td></tr>
+                                        <tr><td>Distance</td><td>보정 기준 대비 얼굴 및 등받이 거리 변화</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p>Blink Rate는 최근 60초 동안 검출된 눈 깜빡임을 기준으로 계산합니다.</p>
+                        </section>
+
+                        <section>
+                            <h4>4. Score와 상태</h4>
+                            <p class="manual-formula">SOMA Score = 100 − (Static + Balance + Blink + Distance 감점)</p>
+                            <p>최종 점수는 0~100 범위로 제한됩니다. State는 Score 구간만으로 정하지 않고 각 정책의 조건과 지속시간을 함께 반영합니다.</p>
+                            <div class="manual-table">
+                                <table>
+                                    <thead><tr><th>구분</th><th>의미</th><th>주요 피드백</th></tr></thead>
+                                    <tbody>
+                                        <tr><td>NORMAL</td><td>정상 관측 상태</td><td>녹색 LED</td></tr>
+                                        <tr><td>CAUTION</td><td>주의 조건 충족</td><td>NOTICE 피드백</td></tr>
+                                        <tr><td>DANGER</td><td>경고 조건 충족</td><td>WARNING 피드백</td></tr>
+                                        <tr><td>ABSENT</td><td>사용자 이석 감지</td><td>LED OFF</td></tr>
+                                        <tr><td>BREAK</td><td>별도 휴식 권고</td><td>파란 LED 및 진동</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p>DEMO의 시간 조건은 기능 검증과 발표를 위한 설정이므로 실제 피로 누적 속도로 해석하지 않습니다.</p>
+                        </section>
+                    </div>
+
+                    <div id="manual-panel-real" role="tabpanel" aria-labelledby="manual-tab-real" hidden
+                        class="manual-content bg-gray-50 border border-gray-200 rounded-md p-5 text-[15px] text-gray-700 leading-relaxed">
+                        <h3>실제 모드 (NORMAL)</h3>
+
+                        <section>
+                            <h4>1. 모드 개요</h4>
+                            <p>실제 모드는 Chair의 FSR 압력 센서 4개와 IR 거리 센서, Webcam 기반 Vision 데이터를 종합하여 장시간 착석 부담을 분석합니다.</p>
+                            <p>측정 결과는 Backend가 계산한 Score·State·Reasons를 그대로 표시하며, Front가 별도의 판정을 만들지 않습니다.</p>
+                        </section>
+
+                        <section>
+                            <h4>2. 측정 진행 과정</h4>
+                            <p class="manual-flow">로그인 → 측정 시작 → CALIBRATING → READY → MEASURING → 측정 종료</p>
+                            <p>측정 시작 후 Front는 Backend의 실제 유효 표본 진행률을 표시하며, READY 이후 MEASURING으로 자동 전환합니다. Stop은 보정 중에도 사용할 수 있습니다.</p>
+                        </section>
+
+                        <section>
+                            <h4>3. 데이터 수집</h4>
+                            <div class="manual-table">
+                                <table>
+                                    <thead><tr><th>데이터</th><th>수집·분석 기준</th></tr></thead>
+                                    <tbody>
+                                        <tr><td>Chair 압력</td><td>FSR 4개 채널, 약 1초 간격</td></tr>
+                                        <tr><td>Chair IR</td><td>등받이 방향 거리값(mm)</td></tr>
+                                        <tr><td>Vision</td><td>얼굴·눈 특징, Blink Rate, 얼굴 거리</td></tr>
+                                        <tr><td>Sensor Fusion</td><td>최신 유효 센서 데이터 통합</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <p>Vision 신뢰도가 충분하지 않은 구간은 무조건 감점하지 않고 정책에 따라 판단을 보류하거나 기존 값을 동결합니다.</p>
+                        </section>
+
+                        <section>
+                            <h4>4. SOMA Score</h4>
+                            <p class="manual-formula">SOMA Score = max(0, min(100, round(100 − Static − Balance − Blink − Distance)))</p>
+                            <h5>Static</h5>
+                            <ul>
+                                <li>Normal 기본 정책은
+                                    <button type="button" class="technical-term-button"
+                                        aria-haspopup="dialog" aria-controls="technical-term-overlay"
+                                        onclick="openTechnicalTerm('cumulative-v2', this)">cumulative-v2</button>입니다.
+                                </li>
+                                <li>작은 순간 움직임만으로 누적 부담을 전부 초기화하지 않습니다.</li>
+                            </ul>
+                            <h5>Balance</h5>
+                            <ul><li>유효한 착석 압력 분포와 지속 조건을 평가합니다.</li></ul>
+                            <h5>Blink</h5>
+                            <ul>
+                                <li>사용자별 EAR 기준과 최근 60초 Blink Rate를 사용합니다.</li>
+                                <li>Normal 기본 정책은
+                                    <button type="button" class="technical-term-button"
+                                        aria-haspopup="dialog" aria-controls="technical-term-overlay"
+                                        onclick="openTechnicalTerm('score-v1', this)">score-v1</button>이며,
+                                    유효하지 않은 Vision 구간은 누적하지 않습니다.
+                                </li>
+                            </ul>
+                            <h5>Distance</h5>
+                            <ul><li>보정 기준 대비 얼굴 거리와 Chair IR 변화의 유효한 증거를 함께 사용합니다.</li></ul>
+                        </section>
+
+                        <section>
+                            <h4>5. 상태와 피드백</h4>
+                            <p>State는 Score의 단순 구간 분류가 아닙니다. 각 부담 요소의 조건과 지속시간에 따라 NORMAL, CAUTION, DANGER, ABSENT가 결정됩니다.</p>
+                            <p>BREAK는 Fusion State가 아니라 별도의 휴식 권고 피드백이며 Front 팝업과 Nano LED·진동으로 전달될 수 있습니다.</p>
+                        </section>
+
+                        <section>
+                            <h4>6. 기록 확인</h4>
+                            <p>Dashboard에서 현재 ACTIVE 기록과 저장된 종료 세션을 선택할 수 있습니다. 종료 세션의 History와 Session Report는 저장된 snapshot을 기반으로 표시됩니다.</p>
+                            <p><strong>SOMA는 의학적 진단 도구가 아니며</strong>, 측정 결과는 휴식과 자세 변화를 안내하기 위한 참고 정보입니다.</p>
+                        </section>
+                    </div>
+                </div>
             </section>
 
         </main>
+    </div>
+
+    <div id="technical-term-overlay" class="technical-term-overlay" hidden
+        onclick="handleTechnicalTermBackdrop(event)" onkeydown="handleTechnicalTermKeydown(event)">
+        <section class="technical-term-dialog" role="dialog" aria-modal="true"
+            aria-labelledby="technical-term-title" aria-describedby="technical-term-description">
+            <header>
+                <div>
+                    <p class="text-xs font-semibold text-blue-600 mb-1">NORMAL 기술 용어</p>
+                    <h3 id="technical-term-title" class="text-xl font-bold text-gray-900"></h3>
+                </div>
+                <button id="technical-term-close" type="button" onclick="closeTechnicalTerm()"
+                    class="shrink-0 border border-gray-300 rounded-md px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                    aria-label="기술 용어 설명 닫기">닫기</button>
+            </header>
+            <div id="technical-term-description" class="technical-term-dialog-body">
+                <div id="technical-term-cumulative-v2" hidden>
+                    <p class="technical-term-summary">장시간 같은 자세에서 생기는 Static 부담을, 짧은 움직임에 쉽게 지워지지 않도록 누적해서 평가하는 정책입니다.</p>
+                    <h4>작동 방식</h4>
+                    <ul>
+                        <li>확정된 각 자세 에피소드의 처음 300초(5분)는 신규 Static 감점 시간에 포함하지 않습니다.</li>
+                        <li>300초를 넘긴 유효 착석 시간만 전체 누적 시간에 한 번씩 더합니다.</li>
+                        <li>확정된 자세 변경은 새 자세 에피소드 시간을 0초부터 시작하지만, 이미 쌓인 Static 감점은 줄이거나 초기화하지 않습니다.</li>
+                        <li>센서가 무효이거나 5초를 넘는 데이터 공백에서는 누적 시간을 진행하지 않습니다.</li>
+                    </ul>
+                    <h4>주요 기준</h4>
+                    <ul>
+                        <li>Static 감점 곡선의 상한은 25점입니다.</li>
+                        <li>누적 Static 감점이 10점 이상이면 Static 사유의 CAUTION, 20점 이상이면 DANGER 조건이 됩니다.</li>
+                        <li>SOMA Score 자체는 모든 상태 전환에 공통으로 적용되는 단일 임계값이 아닙니다. State는 각 부담 요소의 조건과 지속시간을 함께 평가합니다.</li>
+                    </ul>
+                </div>
+
+                <div id="technical-term-score-v1" hidden>
+                    <p class="technical-term-summary">사용자별 EAR 보정이 유효할 때, 최근 Blink Rate가 낮은 상태의 지속시간을 Score 감점으로 반영하는 정책입니다.</p>
+                    <h4>관측 신뢰성</h4>
+                    <ul>
+                        <li>사용자별 OPEN EAR baseline과 개인화 threshold가 유효해야 합니다.</li>
+                        <li>fallback threshold, 누락된 baseline, Blink Rate 누락 또는 최근 품질창의 얼굴 검출률 0에서는 타이머와 감점을 동결합니다.</li>
+                        <li>Blink Rate는 최근 60초 동안 검출된 눈 깜빡임을 분당 횟수로 환산한 값입니다.</li>
+                    </ul>
+                    <h4>시간·감점 기준</h4>
+                    <ul>
+                        <li>분당 8회 미만이면 low-blink 시간을 누적합니다.</li>
+                        <li>300초까지는 Blink 감점 0점이며, 300초 초과부터 900초까지 0점에서 최대 10점으로 선형 증가합니다.</li>
+                        <li>분당 8회 이상 11회 미만에서는 low-blink 시간과 기존 감점을 유지합니다.</li>
+                        <li>분당 11회 이상이면 low-blink 시간은 초기화되고, 기존 Blink 감점은 최대 300초에 걸쳐 선형 회복합니다.</li>
+                        <li>low-blink 시간이 300초 이상이면 CAUTION, 900초 이상이면 DANGER 조건이 될 수 있습니다. State와 Score는 독립 슬롯이므로 정확히 같은 순간에 변하지 않을 수 있습니다.</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
     </div>
 
     <script>
@@ -700,6 +1001,63 @@
             if (viewId === 'settings') refreshCameraList().catch(() => {
                 showCameraMessage("카메라 목록을 확인할 수 없습니다");
             });
+        }
+
+        function switchManual(mode) {
+            if (!['demo', 'real'].includes(mode)) return;
+            for (const key of ['demo', 'real']) {
+                const selected = key === mode;
+                const tab = document.getElementById(`manual-tab-${key}`);
+                const panel = document.getElementById(`manual-panel-${key}`);
+                tab.setAttribute('aria-selected', String(selected));
+                tab.classList.toggle('bg-blue-600', selected);
+                tab.classList.toggle('text-white', selected);
+                tab.classList.toggle('bg-gray-100', !selected);
+                tab.classList.toggle('text-gray-700', !selected);
+                tab.classList.toggle('hover:bg-gray-200', !selected);
+                panel.hidden = !selected;
+            }
+        }
+
+        let technicalTermTrigger = null;
+
+        function openTechnicalTerm(term, trigger) {
+            if (!['cumulative-v2', 'score-v1'].includes(term)) return false;
+            const overlay = document.getElementById('technical-term-overlay');
+            const title = document.getElementById('technical-term-title');
+            const cumulativePanel = document.getElementById('technical-term-cumulative-v2');
+            const blinkPanel = document.getElementById('technical-term-score-v1');
+            technicalTermTrigger = trigger || document.activeElement || null;
+            title.innerText = term;
+            cumulativePanel.hidden = term !== 'cumulative-v2';
+            blinkPanel.hidden = term !== 'score-v1';
+            overlay.hidden = false;
+            overlay.setAttribute('aria-hidden', 'false');
+            document.body?.classList.add('overflow-hidden');
+            document.getElementById('technical-term-close').focus?.();
+            return true;
+        }
+
+        function closeTechnicalTerm() {
+            const overlay = document.getElementById('technical-term-overlay');
+            if (overlay.hidden) return false;
+            overlay.hidden = true;
+            overlay.setAttribute('aria-hidden', 'true');
+            document.body?.classList.remove('overflow-hidden');
+            const trigger = technicalTermTrigger;
+            technicalTermTrigger = null;
+            trigger?.focus?.();
+            return true;
+        }
+
+        function handleTechnicalTermBackdrop(event) {
+            if (event.target === event.currentTarget) closeTechnicalTerm();
+        }
+
+        function handleTechnicalTermKeydown(event) {
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            closeTechnicalTerm();
         }
 
         function openSystemSettings(type) {
