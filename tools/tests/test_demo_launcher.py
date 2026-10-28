@@ -119,10 +119,12 @@ def test_demo_rejects_normal_only_policy_options(
 
 def test_real_and_explicit_hardware_selection(configured):
     args = launcher.build_parser().parse_args(configured + ["--real", "--nano",
-        "--chair-port", "COM3", "--nano-port", "COM4", "--chair-raw-log", "logs/new.jsonl"])
+        "--chair-port", "COM3", "--nano-port", "COM4", "--camera-index", "2",
+        "--chair-raw-log", "logs/new.jsonl"])
     specs = launcher.prepare(args)
     assert [name for name, _ in specs] == ["server", "chair", "vision", "nano"]
     assert specs[1][1][-4:] == ["--port", "COM3", "--raw-log", "logs/new.jsonl"]
+    assert specs[2][1][-2:] == ["--cam", "2"]
     assert specs[-1][1][-2:] == ["--port", "COM4"]
     args = launcher.build_parser().parse_args(configured + ["--chair-only", "--chair"])
     assert [name for name, _ in launcher.prepare(args)] == ["server", "chair"]
@@ -131,7 +133,8 @@ def test_real_and_explicit_hardware_selection(configured):
 @pytest.mark.parametrize("options", [
     ["--mock", "--chair"], ["--mock", "--vision"], ["--chair-only", "--vision"],
     ["--chair-port", "COM3"], ["--chair-raw-log", "logs/raw.jsonl"],
-    ["--nano-port", "COM4"], ["--nano"], ["--web-port", "5000"],
+    ["--nano-port", "COM4"], ["--nano"], ["--camera-index", "0"],
+    ["--vision", "--camera-index", "-1"], ["--web-port", "5000"],
     ["--web-port", "0"], ["--real", "--nano", "--nano-port", "COM4"],
     ["--chair", "--nano", "--chair-port", "COM4", "--nano-port", "com4"],
 ])
@@ -249,6 +252,26 @@ def test_partial_startup_failure_also_cleans_up(configured, monkeypatch):
     monkeypatch.setattr(launcher, "wait_http", fail)
     assert launcher.main(configured) == 1
     assert child.actions == ["terminate", "wait", "kill", "wait"]
+
+
+def test_shutdown_file_requests_owned_child_cleanup(configured, monkeypatch, tmp_path):
+    monkeypatch.setattr(launcher.sys, "platform", "linux")
+    children = []
+
+    def popen(*_args, **_kwargs):
+        child = Process()
+        children.append(child)
+        return child
+
+    shutdown_file = tmp_path / "shutdown.flag"
+    shutdown_file.touch()
+    monkeypatch.setattr(launcher, "check_port", lambda _port: None)
+    monkeypatch.setattr(launcher.subprocess, "Popen", popen)
+    monkeypatch.setattr(launcher, "wait_http", lambda *_args, **_kwargs: None)
+
+    assert launcher.main(configured + ["--shutdown-file", str(shutdown_file)]) == 0
+    assert len(children) == 2
+    assert all(child.actions == ["terminate", "wait"] for child in children)
 
 
 def test_optional_chair_exit_does_not_stop_front():

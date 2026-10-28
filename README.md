@@ -55,6 +55,36 @@ OpenCV는 `opencv-contrib-python` 하나로 통일합니다. `opencv-python`,
 기본 실행은 Backend와 **실제 Front 작업본**의 MIME-safe 서버만 시작하며,
 Mock/Chair/Vision/Nano 및 measurement Start는 자동 실행하지 않습니다.
 
+#### Windows 더블클릭 GUI 실행기
+
+PowerShell이나 VS Code 없이 실행하려면 저장소 루트의 `SOMA_Launcher.bat`를
+더블클릭합니다. `.venv-clean`을 우선 사용하고, 없으면 `.venv`의 `pythonw.exe`를
+사용합니다. GUI에서 다음 항목을 선택할 수 있습니다.
+
+- DEMO/NORMAL 모드. 기존 `run_all.py`의 정책 기본값을 그대로 사용합니다.
+- 실제 Chair/Nano COM 포트와 Vision 카메라 번호, 또는 하드웨어 없는 Mock.
+- Python 실행 파일과 실제 Front 작업본 경로.
+
+`장치 새로고침`은 선택한 Python 환경의 pyserial/OpenCV로 현재 COM 포트와 열 수 있는
+카메라 번호를 확인합니다. `사전 점검`은 경로, Python 3.10~3.12, 필수 환경변수,
+Front 파일, 5000/5500 포트를 검사하되 프로세스·장치·측정을 시작하지 않습니다.
+`SOMA 시작`도 같은 점검을 통과한 뒤 기존 `tools/demo/run_all.py`만 호출하며, Front 준비가
+끝나면 로그인 페이지를 기본 브라우저로 엽니다. 중복 GUI 실행은 Windows named mutex로
+차단합니다.
+
+안전 종료는 **Front Stop → Nano OFF 확인 → GUI의 `프로세스 종료`** 순서입니다.
+`프로세스 종료`는 인증된 Front Stop 요청을 대신하지 않으며, GUI가 생성한 종료 신호를
+`run_all.py`에 전달해 그 실행기가 소유한 자식 프로세스만 정리합니다. 응답하지 않는 경우에만
+15초 뒤 해당 소유 프로세스 트리를 강제 종료합니다.
+
+EXE는 선택 사항입니다. PyInstaller가 설치된 검증 환경에서만 아래 스크립트로 빌드합니다.
+생성물은 `dist/SOMA_Launcher.exe`이며, 소스 실행과 별도로 `--self-test` 및 GUI 열기 검증 후
+배포해야 합니다.
+
+```powershell
+& .\tools\launcher\build_exe.ps1
+```
+
 ```powershell
 Set-Location C:\project-soma
 

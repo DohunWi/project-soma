@@ -58,6 +58,7 @@ def build_parser():
     parser.add_argument("--nano", action="store_true", help="optional Feedback Nano bridge")
     parser.add_argument("--chair-port", help="override CHAIR_SERIAL_PORT")
     parser.add_argument("--nano-port", help="override FEEDBACK_SERIAL_PORT")
+    parser.add_argument("--camera-index", type=int, help="override WEBCAM_INDEX")
     parser.add_argument("--chair-raw-log", help="new raw Chair JSONL path")
     parser.add_argument("--mock-scenario",
                         choices=("normal", "fatigue", "imbalance", "static", "absent"),
@@ -67,6 +68,11 @@ def build_parser():
     parser.add_argument("--no-web", action="store_true", help="use separately managed Front")
     parser.add_argument("--web-port", type=int, default=5500)
     parser.add_argument("--check-only", action="store_true", help="validate; start nothing")
+    parser.add_argument(
+        "--shutdown-file",
+        type=Path,
+        help="exit cleanly when this launcher-owned file appears",
+    )
     return parser
 
 
@@ -84,7 +90,8 @@ def child_environment(args):
 
 def process_specs(*, real=False, chair_only=False, nano=False, chair_raw_log=None,
                   mock=False, chair=False, vision=False, chair_port=None, nano_port=None,
-                  mock_scenario="normal", static_policy=None, blink_policy=None):
+                  camera_index=None, mock_scenario="normal", static_policy=None,
+                  blink_policy=None):
     """Reuse production producers and integrated Backend feedback."""
     specs = [("server", [PY, "server/app.py", "--source-mode",
                          "chair-only" if chair_only else "all"])]
@@ -104,7 +111,10 @@ def process_specs(*, real=False, chair_only=False, nano=False, chair_raw_log=Non
             command.extend(["--raw-log", chair_raw_log])
         specs.append(("chair", command))
     if vision or (real and not chair_only):
-        specs.append(("vision", [PY, "vision/run.py"]))
+        command = [PY, "vision/run.py"]
+        if camera_index is not None:
+            command.extend(["--cam", str(camera_index)])
+        specs.append(("vision", command))
     if nano:
         command = [PY, "feedback/nano/bridge.py"]
         if nano_port:
@@ -151,6 +161,11 @@ def prepare(args):
         raise LaunchError("--chair-port/--chair-raw-log에는 --chair 또는 --real이 필요합니다.")
     if args.nano_port and not args.nano:
         raise LaunchError("--nano-port에는 --nano가 필요합니다.")
+    has_vision = args.vision or (args.real and args.source_mode != "chair-only")
+    if args.camera_index is not None and not has_vision:
+        raise LaunchError("--camera-index에는 --vision 또는 all source의 --real이 필요합니다.")
+    if args.camera_index is not None and args.camera_index < 0:
+        raise LaunchError("카메라 인덱스는 0 이상이어야 합니다.")
     chair_port = args.chair_port or os.getenv("CHAIR_SERIAL_PORT")
     nano_port = args.nano_port or os.getenv("FEEDBACK_SERIAL_PORT")
     if args.nano and not nano_port:
@@ -174,7 +189,8 @@ def prepare(args):
     return process_specs(real=args.real, chair_only=args.source_mode == "chair-only",
                          nano=args.nano, chair_raw_log=args.chair_raw_log, mock=args.mock,
                          chair=args.chair, vision=args.vision, chair_port=chair_port,
-                          nano_port=nano_port, mock_scenario=args.mock_scenario,
+                          nano_port=nano_port, camera_index=args.camera_index,
+                          mock_scenario=args.mock_scenario,
                           static_policy=args.static_policy,
                           blink_policy=args.blink_policy)
 
@@ -303,6 +319,9 @@ def main(argv=None):
         print(f"종료: {stop_steps} → 이 터미널에서 Ctrl+C", flush=True)
         handled_optional = set()
         while True:
+            if args.shutdown_file is not None and args.shutdown_file.exists():
+                print("GUI 종료 요청을 받아 프로세스를 정리합니다.", flush=True)
+                return 0
             exited = find_core_exit(processes, handled_optional)
             if exited is not None:
                 raise LaunchError(f"[{exited[0]}] 종료됨 (code {exited[1].returncode}).")
