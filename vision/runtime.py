@@ -7,6 +7,7 @@ manage transient socket/camera failures, the frame loop, logging, and cleanup.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable, Sequence
@@ -25,6 +26,12 @@ def _backoff_value(values: Sequence[float], index: int) -> float:
     return values[min(index, len(values) - 1)]
 
 
+def _start_daemon(target: Callable[[], None]) -> threading.Thread:
+    thread = threading.Thread(target=target, daemon=True)
+    thread.start()
+    return thread
+
+
 class VisionSocketTransport:
     """Best-effort realtime transport with no disconnected payload queue."""
 
@@ -37,6 +44,7 @@ class VisionSocketTransport:
         monotonic: Callable[[], float] = time.monotonic,
         retry_backoff_sec: Sequence[float] = SOCKET_RETRY_BACKOFF_SEC,
         logger: logging.Logger = LOG,
+        background_start: Callable[[Callable[[], None]], Any] = _start_daemon,
     ) -> None:
         self._client = client
         self._url = url
@@ -44,8 +52,11 @@ class VisionSocketTransport:
         self._monotonic = monotonic
         self._backoff = tuple(retry_backoff_sec)
         self._logger = logger
+        self._background_start = background_start
+        self._state_lock = threading.Lock()
         self._connected = False
         self._closed = False
+        self._connect_in_progress = False
         self._next_retry_at = 0.0
         self._retry_index = 0
         self._connect_attempts = 0
@@ -57,18 +68,29 @@ class VisionSocketTransport:
 
     @property
     def connected(self) -> bool:
-        return self._connected
+        with self._state_lock:
+            return self._connected
 
     def _on_connect(self, *_: Any) -> None:
-        self._connected = True
-        self._retry_index = 0
+        with self._state_lock:
+            if self._closed:
+                disconnect = True
+            else:
+                self._connected = True
+                self._retry_index = 0
+                disconnect = False
+        if disconnect:
+            self._disconnect_client(log_failure=False)
+            return
         self._logger.info("Vision backend connected")
 
     def _on_disconnect(self, *_: Any) -> None:
-        was_connected = self._connected
-        self._connected = False
-        self._next_retry_at = self._monotonic() + self._backoff[0]
-        self._retry_index = 1
+        with self._state_lock:
+            was_connected = self._connected
+            self._connected = False
+            if not self._closed:
+                self._next_retry_at = self._monotonic() + self._backoff[0]
+                self._retry_index = 1
         if was_connected:
             self._logger.warning("Vision backend disconnected; retry scheduled")
 
@@ -76,35 +98,57 @@ class VisionSocketTransport:
         self.tick(force=True)
 
     def tick(self, *, force: bool = False) -> None:
-        if self._closed or self._connected:
-            return
         now = self._monotonic()
-        if not force and now < self._next_retry_at:
-            return
+        with self._state_lock:
+            if self._closed or self._connected or self._connect_in_progress:
+                return
+            if not force and now < self._next_retry_at:
+                return
+            self._connect_attempts += 1
+            attempt = self._connect_attempts
+            self._connect_in_progress = True
 
-        self._connect_attempts += 1
-        action = "connecting" if self._connect_attempts == 1 else "reconnecting"
-        log_attempt = self._connect_attempts == 1 or self._connect_attempts % 12 == 0
+        action = "connecting" if attempt == 1 else "reconnecting"
+        log_attempt = attempt == 1 or attempt % 12 == 0
         if log_attempt:
             self._logger.info("Vision backend %s: %s", action, self._url)
         try:
+            self._background_start(lambda: self._connect_once(log_attempt))
+        except Exception:
+            with self._state_lock:
+                self._connect_in_progress = False
+                delay = _backoff_value(self._backoff, self._retry_index)
+                self._retry_index += 1
+                self._next_retry_at = self._monotonic() + delay
+            self._logger.exception(
+                "Vision backend connection worker failed; retry in %.1fs", delay
+            )
+
+    def _connect_once(self, log_attempt: bool) -> None:
+        try:
             auth = {"token": self._token} if self._token else None
             self._client.connect(self._url, auth=auth, wait_timeout=1)
-            if getattr(self._client, "connected", False) and not self._connected:
+            if getattr(self._client, "connected", False) and not self.connected:
                 self._on_connect()
         except Exception as exc:
-            delay = _backoff_value(self._backoff, self._retry_index)
-            self._retry_index += 1
-            self._next_retry_at = now + delay
+            with self._state_lock:
+                if self._closed:
+                    return
+                delay = _backoff_value(self._backoff, self._retry_index)
+                self._retry_index += 1
+                self._next_retry_at = self._monotonic() + delay
             if log_attempt:
                 self._logger.warning(
                     "Vision backend unavailable (%s); retry in %.1fs",
                     type(exc).__name__,
                     delay,
                 )
+        finally:
+            with self._state_lock:
+                self._connect_in_progress = False
 
     def send(self, payload: dict[str, Any]) -> bool:
-        if not self._connected:
+        if not self.connected:
             self._record_drop("backend disconnected")
             return False
         try:
@@ -119,9 +163,10 @@ class VisionSocketTransport:
                 self._logger.exception("Vision payload emit failed; reconnect scheduled")
                 self._last_emit_error_log = now
             self._record_drop("emit failure")
-            self._connected = False
-            self._next_retry_at = now + self._backoff[0]
-            self._retry_index = 1
+            with self._state_lock:
+                self._connected = False
+                self._next_retry_at = now + self._backoff[0]
+                self._retry_index = 1
             self._disconnect_client(log_failure=False)
             return False
 
@@ -142,8 +187,9 @@ class VisionSocketTransport:
                 self._logger.exception("Vision socket cleanup failed")
 
     def close(self) -> None:
-        self._closed = True
-        self._connected = False
+        with self._state_lock:
+            self._closed = True
+            self._connected = False
         self._disconnect_client(log_failure=True)
 
 

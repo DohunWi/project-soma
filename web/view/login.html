@@ -41,17 +41,42 @@
   <script type="module">
     import {
       isEmailNotConfirmed, isInvalidCredentials, isNetworkError,
-      login, MAIN_URL, redirectIfAuthenticated,
+      login, MAIN_URL, redirectIfAuthenticated, supabase,
     } from "./auth.js";
+    import { authRedirectNotice, clearAuthRedirectUrl } from "./auth_redirect.mjs";
 
     const form = document.getElementById("loginForm");
     const button = document.getElementById("loginButton");
     const message = document.getElementById("message");
 
-    try {
-      await redirectIfAuthenticated();
-    } catch {
-      message.textContent = "인증 서비스에 연결할 수 없습니다. 네트워크를 확인해주세요.";
+    const redirectNotice = authRedirectNotice();
+    if (redirectNotice) {
+      message.classList.toggle("success", redirectNotice.kind === "success");
+      message.textContent = redirectNotice.message;
+      if (redirectNotice.kind === "success") {
+        try {
+          // Supabase가 PKCE code/hash를 처리할 때까지 URL을 먼저 지우지 않습니다.
+          const { data, error } = await supabase.auth.getSession();
+          if (error) throw error;
+          clearAuthRedirectUrl();
+          if (data.session) {
+            message.textContent = "이메일 인증과 로그인이 완료되었습니다. 대시보드로 이동합니다.";
+            window.setTimeout(() => window.location.replace(MAIN_URL), 900);
+          }
+        } catch {
+          clearAuthRedirectUrl();
+          message.classList.remove("success");
+          message.textContent = "인증 결과를 확인할 수 없습니다. 다시 로그인해주세요.";
+        }
+      } else {
+        clearAuthRedirectUrl();
+      }
+    } else {
+      try {
+        await redirectIfAuthenticated();
+      } catch {
+        message.textContent = "인증 서비스에 연결할 수 없습니다. 네트워크를 확인해주세요.";
+      }
     }
 
     form.addEventListener("submit", async event => {

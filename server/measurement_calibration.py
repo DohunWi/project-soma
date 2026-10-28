@@ -124,6 +124,7 @@ class MeasurementCalibration:
                 sample,
                 occupancy_min=self.occupancy_min,
                 vision_sample_id=sample.get("_vision_sender_t"),
+                collect_vision=self.config.minimum_vision_samples > 0,
             )
             return self._evaluate(float(now))
 
@@ -166,9 +167,10 @@ class MeasurementCalibration:
                 return {}
             evidence = {}
             face = sample.get("face_distance_cm")
-            if _positive_finite(face):
+            face_baseline = self._baselines.face_working_baseline_cm
+            if _positive_finite(face) and _positive_finite(face_baseline):
                 evidence["face_approach_delta_cm"] = (
-                    self._baselines.face_working_baseline_cm - float(face)
+                    float(face_baseline) - float(face)
                 )
             ir = sample.get("ir") or []
             if ir and _nonnegative_finite(ir[0]):
@@ -190,6 +192,7 @@ class MeasurementCalibration:
                 vision_available=(
                     sample.get("face_detected") is True
                     and _positive_finite(face)
+                    and _positive_finite(face_baseline)
                 ),
                 chair_ir_available=(
                     bool(ir) and _nonnegative_finite(ir[0])

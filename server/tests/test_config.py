@@ -12,6 +12,8 @@ from server.config import (  # noqa: E402
     DEMO_PROFILE,
     NORMAL_PROFILE,
     ProfileConfigError,
+    calibration_for_source_mode,
+    load_source_mode,
 )
 
 
@@ -54,6 +56,35 @@ def test_runtime_profiles_select_independent_load_time_scales():
     assert DEMO_PROFILE.load.balance_recovery_sec == 6.0
     assert NORMAL_PROFILE.load.static_recovery_sec == 600.0
     assert NORMAL_PROFILE.load.balance_recovery_sec == 180.0
+
+
+def test_source_mode_defaults_to_all_and_is_explicit(monkeypatch):
+    monkeypatch.delenv("SOMA_SOURCE_MODE", raising=False)
+    assert load_source_mode() == "all"
+    monkeypatch.setenv("SOMA_SOURCE_MODE", "chair-only")
+    app, _ = create_app(testing=True)
+    assert app.extensions["source_mode"] == "chair-only"
+    assert app.extensions["measurement_calibration"].config.minimum_vision_samples == 0
+    app, _ = create_app(testing=True, source_mode="all")
+    assert app.extensions["source_mode"] == "all"
+    assert app.extensions["measurement_calibration"].config.minimum_vision_samples == 5
+
+
+@pytest.mark.parametrize("value", ["", "chair", "ALL", "auto"])
+def test_invalid_source_mode_is_not_silent_fallback(value, monkeypatch):
+    monkeypatch.setenv("SOMA_SOURCE_MODE", value)
+    with pytest.raises(ProfileConfigError, match="Invalid SOMA_SOURCE_MODE"):
+        create_app(testing=True)
+
+
+@pytest.mark.parametrize("profile", [DEMO_PROFILE, NORMAL_PROFILE])
+def test_chair_only_changes_only_vision_requirement(profile):
+    from dataclasses import asdict
+    original = asdict(profile.calibration)
+    selected = asdict(calibration_for_source_mode(profile, "chair-only"))
+    assert selected == {**original, "minimum_vision_samples": 0}
+    assert profile.calibration.minimum_vision_samples in (5, 8)
+    assert calibration_for_source_mode(profile, "all") is profile.calibration
 
 
 @pytest.mark.parametrize("mode,expected", [

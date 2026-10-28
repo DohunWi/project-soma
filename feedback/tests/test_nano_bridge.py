@@ -5,8 +5,16 @@ from feedback.nano.bridge import (
     OFF_COMMAND,
     NanoBridge,
     NanoSerialTransport,
+    build_arg_parser,
     commands_for_decision,
+    commands_for_demo,
 )
+
+
+def test_debug_events_cli_is_opt_in():
+    parser = build_arg_parser()
+    assert parser.parse_args([]).debug_events is False
+    assert parser.parse_args(["--debug-events"]).debug_events is True
 
 
 class Clock:
@@ -106,6 +114,7 @@ class RecordingTransport:
     [
         ({"level": "NORMAL", "transition": False}, ["LEVEL,NORMAL"]),
         ({"level": "NOTICE", "transition": True}, ["LEVEL,NOTICE"]),
+        ({"level": "NOTICE", "transition": False}, ["LEVEL,NOTICE"]),
         (
             {"level": "WARNING", "transition": True},
             ["LEVEL,WARNING", "ALERT,WARNING"],
@@ -129,6 +138,20 @@ def test_command_mapping(decision, expected):
 def test_invalid_decision_is_rejected():
     with pytest.raises(ValueError):
         commands_for_decision({"level": "OFF", "transition": False})
+
+
+@pytest.mark.parametrize(
+    ("level", "expected"),
+    [
+        ("NORMAL", ["LEVEL,NORMAL"]),
+        ("NOTICE", ["LEVEL,NOTICE"]),
+        ("WARNING", ["LEVEL,WARNING", "ALERT,WARNING"]),
+        ("BREAK", ["LEVEL,BREAK", "ALERT,BREAK"]),
+        ("OFF", [OFF_COMMAND]),
+    ],
+)
+def test_demo_command_mapping(level, expected):
+    assert commands_for_demo({"v": 1, "level": level}) == expected
 
 
 def test_initial_open_failure_is_nonfatal_and_ready_resyncs_latest_level():
@@ -236,9 +259,13 @@ def test_backend_failure_and_disconnect_retry_with_device_role_and_handle_events
         {"level": "WARNING", "transition": True},
     )
     socket.trigger("feedback_device_off", {"v": 1})
+    socket.trigger("feedback_device_demo", {"v": 1, "level": "BREAK"})
+    socket.trigger("feedback_device_demo", {"v": 1, "level": "OFF"})
     socket.trigger("feedback_device", {"level": "INVALID", "transition": True})
     assert transport.sent == [
         ["LEVEL,WARNING", "ALERT,WARNING"],
+        [OFF_COMMAND],
+        ["LEVEL,BREAK", "ALERT,BREAK"],
         [OFF_COMMAND],
     ]
 
@@ -251,3 +278,34 @@ def test_backend_failure_and_disconnect_retry_with_device_role_and_handle_events
     bridge.close()
     assert transport.closed is True
     assert socket.disconnected is True
+
+
+def test_debug_events_reports_event_commands_and_never_token(caplog):
+    socket = FakeSocket()
+    transport = RecordingTransport()
+    bridge = NanoBridge(
+        "http://backend",
+        "do-not-log-this-token",
+        transport,
+        socket,
+        debug_events=True,
+    )
+
+    with caplog.at_level("INFO", logger="soma.feedback.nano"):
+        bridge.tick()
+        socket.trigger(
+            "feedback_device",
+            {"level": "WARNING", "transition": True},
+        )
+        socket.trigger("feedback_device_demo", {"v": 1, "level": "BREAK"})
+        socket.trigger("feedback_device_off", {"v": 1})
+        socket.connected = False
+        socket.trigger("disconnect")
+
+    text = caplog.text
+    assert "event=feedback_device level=WARNING transition=True" in text
+    assert "LEVEL,WARNING,ALERT,WARNING" in text
+    assert "event=feedback_device_demo level=BREAK" in text
+    assert "event=feedback_device_off" in text
+    assert "reconnect=pending" in text
+    assert "do-not-log-this-token" not in text

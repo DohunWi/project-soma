@@ -30,9 +30,9 @@ class CalibrationConfig:
 
 @dataclass(frozen=True)
 class WorkingBaselines:
-    face_working_baseline_cm: float
+    face_working_baseline_cm: float | None
     chair_ir_baseline_mm: float
-    face_mad_cm: float
+    face_mad_cm: float | None
     chair_ir_mad_mm: float
     vision_samples: int
     chair_ir_samples: int
@@ -74,6 +74,7 @@ class CalibrationAccumulator:
         *,
         occupancy_min,
         vision_sample_id=None,
+        collect_vision=True,
     ):
         if vision_sample_id is None:
             vision_sample_id = sample.get("_vision_sender_t")
@@ -82,6 +83,9 @@ class CalibrationAccumulator:
         occupied = len(pressure) == 4 and sum(pressure) >= occupancy_min
         if occupied and ir and _finite_at_least(ir[0], 0.0):
             self.chair_ir_distances_mm.append(float(ir[0]))
+
+        if not collect_vision:
+            return
 
         face_distance = sample.get("face_distance_cm")
         face_detected = sample.get("face_detected") is True
@@ -95,6 +99,7 @@ class CalibrationAccumulator:
                 self._vision_sample_ids.add(float(vision_sample_id))
 
     def assess(self, config):
+        vision_required = config.minimum_vision_samples > 0
         vision_count_ready = len(self.face_distances_cm) >= config.minimum_vision_samples
         chair_count_ready = (
             len(self.chair_ir_distances_mm) >= config.minimum_chair_ir_samples
@@ -109,16 +114,20 @@ class CalibrationAccumulator:
             if self.chair_ir_distances_mm
             else None
         )
-        vision_stable = face_mad is not None and face_mad <= config.face_mad_limit_cm
+        vision_stable = not vision_required or (
+            face_mad is not None and face_mad <= config.face_mad_limit_cm
+        )
         chair_stable = (
             chair_mad is not None and chair_mad <= config.chair_ir_mad_limit_mm
         )
         baselines = None
         if vision_count_ready and chair_count_ready and vision_stable and chair_stable:
             baselines = WorkingBaselines(
-                face_working_baseline_cm=float(median(self.face_distances_cm)),
+                face_working_baseline_cm=(
+                    float(median(self.face_distances_cm)) if vision_required else None
+                ),
                 chair_ir_baseline_mm=float(median(self.chair_ir_distances_mm)),
-                face_mad_cm=face_mad,
+                face_mad_cm=face_mad if vision_required else None,
                 chair_ir_mad_mm=chair_mad,
                 vision_samples=len(self.face_distances_cm),
                 chair_ir_samples=len(self.chair_ir_distances_mm),

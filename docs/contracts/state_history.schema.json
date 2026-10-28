@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "state_history",
-  "description": "public.state_logs → Backend GET /api/state/history → Front. Supabase access token의 sub와 Backend의 현재 ACTIVE session으로 조회 범위를 정하며 Front는 Supabase에 직접 접근하지 않습니다.",
+  "description": "public.state_logs → Backend → Front. GET /api/state/history는 현재 ACTIVE session 전용입니다. GET /api/state/history/sessions/<session_id>는 저장된 session을 JWT sub + session_id로 소유권 확인하여 조회합니다. 두 API는 동일한 snapshot 형식을 사용하며 Front는 Supabase에 직접 접근하지 않습니다.",
   "type": "object",
   "required": ["v", "status", "stream", "period", "states"],
   "additionalProperties": false,

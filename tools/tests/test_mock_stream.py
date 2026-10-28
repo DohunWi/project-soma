@@ -11,9 +11,9 @@ def test_finite_socket_stream_disconnects_after_last_emit(monkeypatch):
     class FakeClient:
         connected = False
 
-        def connect(self, url, auth=None):
+        def connect(self, url, auth=None, transports=None):
             self.connected = True
-            actions.append(("connect", url, auth))
+            actions.append(("connect", url, auth, transports))
 
         def emit(self, event, payload):
             actions.append(("emit", event, payload))
@@ -48,6 +48,7 @@ def test_finite_socket_stream_disconnects_after_last_emit(monkeypatch):
 
     assert [action[0] for action in actions] == ["connect", "emit", "disconnect"]
     assert actions[0][2] == {"token": "sensor-token"}
+    assert actions[0][3] == ["polling"]
     assert actions[1][1] == "sensor_data"
     assert actions[1][2]["source"] == "chair"
     assert client.connected is False

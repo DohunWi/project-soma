@@ -28,6 +28,7 @@ from pathlib import Path
 
 SCENARIOS = ("normal", "fatigue", "imbalance", "static", "absent")
 SOURCES = ("all", "chair", "vision")
+SOCKET_TRANSPORTS = ("polling",)
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -120,7 +121,11 @@ def main():
                      "또는 --stdout 으로 서버 없이 실행하세요.")
         sio = socketio.Client()
         auth_token = os.getenv("SOCKET_AUTH_TOKEN")
-        sio.connect(args.url, auth={"token": auth_token} if auth_token else None)
+        sio.connect(
+            args.url,
+            auth={"token": auth_token} if auth_token else None,
+            transports=list(SOCKET_TRANSPORTS),
+        )
         emit = lambda ev: sio.emit("sensor_data", ev)
         print(f"연결됨: {args.url}  시나리오={args.scenario}  {args.speed}배속",
               file=sys.stderr)

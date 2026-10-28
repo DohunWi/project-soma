@@ -35,15 +35,15 @@
       <button id="loginButton" type="submit">로그인</button>
       <p id="message" role="status" aria-live="polite"></p>
     </form>
-    <p class="login">계정이 없나요? <a href="./signup.html">회원가입</a></p>
+    <p class="login">계정이 없나요? <a href="../signup.html">회원가입</a></p>
   </main>
 
   <script type="module">
     import {
       isEmailNotConfirmed, isInvalidCredentials, isNetworkError,
       login, MAIN_URL, redirectIfAuthenticated, supabase,
-    } from "./auth.js";
-    import { authRedirectNotice, clearAuthRedirectUrl } from "./auth_redirect.mjs";
+    } from "../auth.js";
+    import { authRedirectNotice, clearAuthRedirectUrl } from "../auth_redirect.mjs";
 
     const form = document.getElementById("loginForm");
     const button = document.getElementById("loginButton");

@@ -16,6 +16,12 @@ ALERT,BREAK
 Nano는 부팅 후 `READY`를 보내며 bridge는 마지막 `LEVEL`만 다시 보냅니다. `ALERT`는
 재연결 후 재생하지 않습니다.
 
+Production BREAK는 최초 3초 이상 파란 `LEVEL,BREAK`와 `ALERT,BREAK` 1회로 표시합니다.
+Front의 logical BREAK 권고가 계속 유지되더라도 이후 Nano steady LED는 Backend의 device-only
+projection에 따라 현재 Fusion state의 `NORMAL`(초록), `NOTICE`(노랑), `WARNING`(빨강)으로
+복귀합니다. 이 후속 LEVEL은 `transition=false`이므로 진동을 다시 만들지 않습니다.
+`ABSENT`, measurement Stop, 마지막 owner disconnect의 `LEVEL,OFF`는 즉시 우선합니다.
+
 ## 실행
 
 `.env`에 실제 Nano 포트와 shared device token을 지정합니다.
@@ -28,6 +34,14 @@ SOCKET_AUTH_TOKEN=...
 
 ```bash
 python feedback/nano/bridge.py
+```
+
+실제 이벤트와 Serial 전달 경로를 진단할 때만 `--debug-events`를 추가합니다.
+일반 실행 로그는 그대로 유지하며, 이 옵션은 수신 이벤트명·level·transition, 전송할
+Serial command, 동일 LEVEL 여부와 연결/재연결 상태만 출력하고 token은 출력하지 않습니다.
+
+```powershell
+.\.venv-clean\Scripts\python.exe feedback\nano\bridge.py --port COM4 --debug-events
 ```
 
 generic COM 자동 선택은 사용하지 않습니다. Chair UNO와 Nano 포트를 명시적으로

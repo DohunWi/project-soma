@@ -173,26 +173,28 @@ def test_break_latches_without_repeating_transition():
     assert held["transition"] is False
 
 
-def test_brief_absence_preserves_break_and_work_period():
+def test_confirmed_absence_ends_seated_interval_and_clears_break_latch():
     state, _ = advance(
         FeedbackPolicyState(),
         fusion("DANGER"),
         1000.0,
         10,
     )
-    work_before = state.work_period_sec
     state, absent = continue_for(state, fusion("ABSENT"), 1011.0, 4)
 
     assert state.absence_sec == 4.0
-    assert state.work_period_sec == work_before
-    assert state.break_active is True
+    assert state.work_period_sec == 0.0
+    assert state.break_active is False
     assert state.danger_hold_sec == 0.0
     assert state.low_score_hold_sec == 0.0
-    assert absent["level"] == "BREAK"
+    assert state.cooldown_remaining_sec == 0.0
+    assert state.absence_started_after_work is True
+    assert absent["level"] == "NORMAL"
+    assert absent["reason"] == "ABSENT"
 
     state, returned = step(state, fusion(), 1015.0, SESSION_ID)
-    assert state.work_period_sec == work_before + 1.0
-    assert returned["level"] == "BREAK"
+    assert state.work_period_sec == 1.0
+    assert returned["level"] == "NORMAL"
 
 
 def test_effective_break_clears_latch_resets_work_and_starts_cooldown():
@@ -202,7 +204,8 @@ def test_effective_break_clears_latch_resets_work_and_starts_cooldown():
         1000.0,
         10,
     )
-    state, decision = continue_for(state, fusion("ABSENT"), 1011.0, 10)
+    state, first_absent = step(state, fusion("ABSENT"), 1011.0, SESSION_ID)
+    state, decision = continue_for(state, fusion("ABSENT"), 1012.0, 9)
 
     assert state.absence_sec == 10.0
     assert state.break_active is False
@@ -212,7 +215,8 @@ def test_effective_break_clears_latch_resets_work_and_starts_cooldown():
     assert state.cooldown_remaining_sec == 30.0
     assert decision["level"] == "NORMAL"
     assert decision["reason"] == "ABSENT"
-    assert decision["transition"] is True
+    assert first_absent["transition"] is True
+    assert decision["transition"] is False
 
 
 def test_effective_absence_resets_work_even_without_active_break():

@@ -1,5 +1,6 @@
 """Read authenticated measurement history without touching realtime state."""
 import os
+import uuid
 from datetime import datetime, timedelta, timezone
 
 
@@ -13,6 +14,21 @@ class HistoryRequestError(ValueError):
 
 class HistoryUnavailable(RuntimeError):
     """The history database could not serve the request."""
+
+
+class HistorySessionNotFound(LookupError):
+    """No recorded snapshots exist for this authenticated user/session pair."""
+
+
+def parse_session_id(value):
+    """Accept canonical UUIDs only; identity still comes exclusively from JWT sub."""
+    try:
+        parsed = uuid.UUID(value)
+    except (ValueError, TypeError, AttributeError) as error:
+        raise HistoryRequestError("session_id는 UUID 형식이어야 합니다.") from error
+    if str(parsed) != value.lower():
+        raise HistoryRequestError("session_id는 UUID 형식이어야 합니다.")
+    return parsed
 
 
 def resolve_history_period(start_value, end_value, *, now=None):
@@ -89,12 +105,55 @@ SELECT measured_at, state, score, confidence, reasons, balance,
  ORDER BY measured_at ASC, id ASC
 """
 
+SESSION_LIST_SQL = """
+SELECT session_id, MIN(measured_at), MAX(measured_at), COUNT(*)
+  FROM public.state_logs
+ WHERE user_id = %s AND session_id IS NOT NULL
+ GROUP BY session_id
+ ORDER BY MAX(measured_at) DESC, session_id DESC
+"""
+
+SESSION_SQL = """
+SELECT session_id, MIN(measured_at), MAX(measured_at), COUNT(*)
+  FROM public.state_logs
+ WHERE user_id = %s AND session_id = %s
+ GROUP BY session_id
+"""
+
 
 class StateHistoryReader:
     """Fetch one authenticated session's measured-at-bounded snapshots."""
 
     def __init__(self, connection_factory=None):
         self._connection_factory = connection_factory
+
+    def list_sessions(self, user_id):
+        """Recorded sessions, newest snapshot first; not actual Start/Stop times."""
+        return [_session_from_row(row) for row in self._session_rows(
+            SESSION_LIST_SQL, (str(user_id),),
+        )]
+
+    def get_session(self, user_id, session_id):
+        """Resolve ownership from stored rows, independently of runtime registry."""
+        rows = self._session_rows(SESSION_SQL, (str(user_id), str(session_id)))
+        if not rows:
+            raise HistorySessionNotFound("recorded session not found")
+        return _session_from_row(rows[0])
+
+    def _session_rows(self, sql, params):
+        connection = cursor = None
+        try:
+            connection = self._connect()
+            cursor = connection.cursor()
+            cursor.execute(sql, params)
+            return cursor.fetchall()
+        except Exception as error:
+            raise HistoryUnavailable("recorded session query failed") from error
+        finally:
+            if cursor is not None:
+                cursor.close()
+            if connection is not None:
+                connection.close()
 
     def fetch(self, user_id, session_id, start, end):
         """Read a period in one DB statement and return API-ready snapshots."""
@@ -180,3 +239,12 @@ def _snapshot_from_row(row):
     if metrics:
         snapshot["metrics"] = metrics
     return snapshot
+
+
+def _session_from_row(row):
+    return {
+        "session_id": str(row[0]),
+        "first_measured_at": utc_iso8601(row[1]),
+        "last_measured_at": utc_iso8601(row[2]),
+        "snapshot_count": row[3],
+    }

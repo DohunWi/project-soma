@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "measurement_phase",
-  "description": "Backend → authenticated user room. Measurement runtime lifecycle; this is separate from Fusion state.",
+  "description": "Backend → authenticated user room. Measurement runtime lifecycle; this is separate from Fusion state. Explicit Chair-only mode reports vision valid/required samples as 0/0 and readiness.vision=true (not required); progress still uses duration and Chair IR requirements. Internal nullable face baselines are not public fields.",
   "type": "object",
   "required": ["v", "t", "active", "phase"],
   "properties": {

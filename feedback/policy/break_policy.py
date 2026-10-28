@@ -34,6 +34,7 @@ class FeedbackPolicyState:
     danger_hold_sec: float = 0.0
     low_score_hold_sec: float = 0.0
     absence_sec: float = 0.0
+    absence_started_after_work: bool = False
     break_active: bool = False
     break_reason: Optional[str] = None
     cooldown_remaining_sec: float = 0.0
@@ -57,14 +58,22 @@ def step(
         raise ValueError(f"unsupported Fusion state: {fusion_state!r}")
 
     seated = fusion_state != "ABSENT"
-    cooldown = max(previous.cooldown_remaining_sec - dt, 0.0)
+    # Cooldown is seated-time protection after an interval ends.  Time spent
+    # away from the chair must not consume it before the user returns.
+    cooldown = (
+        max(previous.cooldown_remaining_sec - dt, 0.0)
+        if seated
+        else previous.cooldown_remaining_sec
+    )
     break_active = previous.break_active
     break_reason = previous.break_reason
     work_period = previous.work_period_sec
     recommended_reached = previous.recommended_break_reached
+    absence_started_after_work = previous.absence_started_after_work
 
     if seated:
         absence = 0.0
+        absence_started_after_work = False
         recommended_reached = False
         work_period += dt
         danger_hold = (
@@ -86,15 +95,21 @@ def step(
             recommended_reached or absence >= config.recommended_break_sec
         )
 
+        # Fusion emits ABSENT only after its pressure-loss grace has confirmed
+        # that the seated interval ended.  Do not carry a BREAK latch or work
+        # accumulation into the next seated interval within the same DB session.
+        if previous.absence_sec == 0.0:
+            had_work = work_period > 0.0 or break_active
+            absence_started_after_work = had_work
+            work_period = 0.0
+            break_active = False
+            break_reason = None
+
         effective_just_reached = (
             previous.absence_sec < config.effective_break_sec <= absence
         )
         if effective_just_reached:
-            had_work = work_period > 0.0 or break_active
-            work_period = 0.0
-            break_active = False
-            break_reason = None
-            if had_work:
+            if absence_started_after_work:
                 cooldown = config.break_cooldown_sec
 
     if seated and not break_active and cooldown <= 0.0:
@@ -119,6 +134,7 @@ def step(
         danger_hold_sec=danger_hold,
         low_score_hold_sec=low_score_hold,
         absence_sec=absence,
+        absence_started_after_work=absence_started_after_work,
         break_active=break_active,
         break_reason=break_reason,
         cooldown_remaining_sec=cooldown,

@@ -10,6 +10,7 @@ MEASURING일 때만 fresh Vision과 병합한 값을 새 ``FusionState`` 에 반
 History DB 조회는 해당 HTTP 요청에서만 수행하므로, DB 설정이나 인터넷 연결이 없어도
 Chair → Front 경로는 계속 동작합니다.
 """
+import argparse
 import hmac
 import logging
 import os
@@ -17,6 +18,7 @@ import sys
 import threading
 import time
 from functools import wraps
+from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, jsonify, request
@@ -29,6 +31,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from fusion.state import OCCUPANCY_MIN, FusionState, step  # noqa: E402
+from fusion.load import score_integer  # noqa: E402
 from feedback.config import feedback_config_for_mode  # noqa: E402
 from server.auth import (  # noqa: E402
     AuthenticationError,
@@ -40,10 +43,14 @@ from server.config import (  # noqa: E402
     DEFAULT_SENSOR_MERGE_POLICY,
     DEMO_PROFILE,
     RuntimeProfile,
+    SOURCE_MODES,
+    calibration_for_source_mode,
+    load_source_mode,
     load_runtime_profile,
 )
 from server.db_writer import DBWriter  # noqa: E402
 from server.feedback_coordinator import FeedbackCoordinator  # noqa: E402
+from server.feedback_device_projection import FeedbackDeviceProjector  # noqa: E402
 from server.measurement_sessions import (  # noqa: E402
     MeasurementInUse,
     MeasurementSessionRegistry,
@@ -55,10 +62,18 @@ from server.measurement_calibration import (  # noqa: E402
 )
 from server.state_history import (  # noqa: E402
     HistoryRequestError,
+    HistorySessionNotFound,
     HistoryUnavailable,
     StateHistoryReader,
+    parse_session_id,
     resolve_history_period,
     utc_iso8601,
+)
+from server.session_report import (  # noqa: E402
+    SessionReportNotFound,
+    SessionReportReader,
+    SessionReportUnavailable,
+    build_session_report,
 )
 from server.state_persistence import StatePersistence  # noqa: E402
 from server.sensor_merge import SessionSensorCache  # noqa: E402
@@ -71,15 +86,35 @@ except ImportError:
     pass
 
 log = logging.getLogger("soma.server")
+fusion_debug_log = logging.getLogger("soma.server.fusion_debug")
+
+
+def _enable_fusion_debug_logging():
+    """Enable the opt-in per-Chair-tick diagnostic stream exactly once."""
+    fusion_debug_log.setLevel(logging.INFO)
+    fusion_debug_log.propagate = False
+    if any(
+        getattr(handler, "_soma_fusion_debug", False)
+        for handler in fusion_debug_log.handlers
+    ):
+        return
+    handler = logging.StreamHandler()
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    handler._soma_fusion_debug = True
+    fusion_debug_log.addHandler(handler)
 
 SENSOR_SCHEMA_PATH = ROOT / "docs" / "contracts" / "sensor_data.schema.json"
 STATE_SCHEMA_PATH = ROOT / "docs" / "contracts" / "state.schema.json"
 STATE_HISTORY_SCHEMA_PATH = ROOT / "docs" / "contracts" / "state_history.schema.json"
+HISTORY_SESSIONS_SCHEMA_PATH = ROOT / "docs" / "contracts" / "history_sessions.schema.json"
+SESSION_REPORT_SCHEMA_PATH = ROOT / "docs" / "contracts" / "session_report.schema.json"
 MEASUREMENT_PHASE_SCHEMA_PATH = (
     ROOT / "docs" / "contracts" / "measurement_phase.schema.json"
 )
 _AUTO_PERSISTENCE = object()
 _AUTO_HISTORY_READER = object()
+_AUTO_SESSION_REPORT_READER = object()
 FEEDBACK_DEVICE_ROOM = "feedback_devices"
 FEEDBACK_DEVICE_ROLE = "feedback_device"
 CROSS_VALIDATION_EVENT = "cross_validation_observation"
@@ -141,6 +176,8 @@ def _load_validator(path):
 SENSOR_VALIDATOR = _load_validator(SENSOR_SCHEMA_PATH)
 STATE_VALIDATOR = _load_validator(STATE_SCHEMA_PATH)
 STATE_HISTORY_VALIDATOR = _load_validator(STATE_HISTORY_SCHEMA_PATH)
+HISTORY_SESSIONS_VALIDATOR = _load_validator(HISTORY_SESSIONS_SCHEMA_PATH)
+SESSION_REPORT_VALIDATOR = _load_validator(SESSION_REPORT_SCHEMA_PATH)
 MEASUREMENT_PHASE_VALIDATOR = _load_validator(MEASUREMENT_PHASE_SCHEMA_PATH)
 
 
@@ -179,6 +216,11 @@ class ChairPipeline:
     @property
     def sensor_cache(self):
         return self._sensor_cache
+
+    def debug_state(self):
+        """Return the immutable Fusion checkpoint for opt-in diagnostics."""
+        with self._lock:
+            return self._state
 
     def validate(self, payload):
         """Validate sensor_data without advancing Fusion state."""
@@ -274,6 +316,7 @@ def create_app(
     runtime_profile: RuntimeProfile | None = None,
     state_persistence=_AUTO_PERSISTENCE,
     history_reader=_AUTO_HISTORY_READER,
+    session_report_reader=_AUTO_SESSION_REPORT_READER,
     history_now=None,
     auth_verifier=None,
     session_registry=None,
@@ -284,9 +327,16 @@ def create_app(
     calibration_monotonic=None,
     calibration_wall_clock=None,
     calibration_timer_factory=None,
+    source_mode=None,
+    debug_fusion=False,
+    feedback_device_monotonic=None,
     _skip_calibration_for_testing=False,
 ):
+    if debug_fusion:
+        _enable_fusion_debug_logging()
     profile = runtime_profile or load_runtime_profile()
+    selected_source_mode = load_source_mode(source_mode)
+    calibration_config = calibration_for_source_mode(profile, selected_source_mode)
     app = Flask(__name__)
     app.config["TESTING"] = testing
     CORS(app, origins=_cors_origins())
@@ -309,8 +359,10 @@ def create_app(
     feedback = feedback_coordinator or FeedbackCoordinator(
         feedback_config_for_mode(profile.name)
     )
+    feedback_device_projector = FeedbackDeviceProjector()
+    feedback_device_monotonic = feedback_device_monotonic or time.monotonic
     calibration = MeasurementCalibration(
-        profile.calibration,
+        calibration_config,
         occupancy_min=OCCUPANCY_MIN,
         distance_evidence_timing=profile.distance_evidence_timing,
     )
@@ -345,16 +397,22 @@ def create_app(
     app.extensions["chair_pipeline"] = pipeline
     app.extensions["sensor_cache"] = pipeline.sensor_cache
     app.extensions["runtime_profile"] = profile
+    app.extensions["source_mode"] = selected_source_mode
     app.extensions["state_persistence"] = persistence
     app.extensions["db_writer"] = db_writer
     app.extensions["auth_verifier"] = verifier
     app.extensions["measurement_sessions"] = sessions
     app.extensions["feedback_coordinator"] = feedback
+    app.extensions["feedback_device_projector"] = feedback_device_projector
     app.extensions["measurement_calibration"] = calibration
     app.extensions["latest_device_feedback"] = latest_device_feedback
+    app.extensions["debug_fusion"] = bool(debug_fusion)
     if history_reader is _AUTO_HISTORY_READER:
         history_reader = StateHistoryReader()
     app.extensions["state_history_reader"] = history_reader
+    if session_report_reader is _AUTO_SESSION_REPORT_READER:
+        session_report_reader = SessionReportReader()
+    app.extensions["session_report_reader"] = session_report_reader
 
     def token_required(function):
         @wraps(function)
@@ -389,6 +447,7 @@ def create_app(
             log.warning("feedback device OFF 전송 실패 (%s)", type(error).__name__)
 
     def reset_device_feedback():
+        feedback_device_projector.reset()
         with device_feedback_lock:
             latest_device_feedback["decision"] = None
         emit_device_off()
@@ -577,6 +636,85 @@ def create_app(
             }), 500
         return jsonify(response)
 
+    def history_error(status, code, message):
+        return jsonify({
+            "v": 1, "status": "error", "error": {"code": code, "message": message},
+        }), status
+
+    def checked_history_response(payload, validator):
+        if _validation_message(validator, payload):
+            return history_error(500, "invalid_history_response", "기록 응답을 만들 수 없습니다.")
+        return jsonify(payload)
+
+    @app.get("/api/state/history/sessions")
+    @token_required
+    def get_recorded_sessions(user_id):
+        if request.args:
+            return history_error(400, "invalid_request", "지원하지 않는 query parameter입니다.")
+        try:
+            recorded = history_reader.list_sessions(user_id)
+        except HistoryUnavailable:
+            return history_error(503, "history_unavailable", "저장된 기록을 불러올 수 없습니다.")
+        return checked_history_response({
+            "v": 1, "status": "success", "user_id": str(user_id), "sessions": recorded,
+        }, HISTORY_SESSIONS_VALIDATOR)
+
+    @app.get("/api/state/history/sessions/<session_id>")
+    @token_required
+    def get_recorded_session_history(user_id, session_id):
+        try:
+            selected_id = parse_session_id(session_id)
+        except HistoryRequestError as error:
+            return history_error(400, "invalid_session_id", str(error))
+        if set(request.args) - {"start", "end"} or any(
+            len(request.args.getlist(key)) != 1 for key in request.args
+        ):
+            return history_error(400, "invalid_request", "지원하지 않는 query parameter입니다.")
+        try:
+            # Ownership is DB-backed, not the in-memory ACTIVE registry. No measurement lock.
+            recorded = history_reader.get_session(user_id, selected_id)
+            start, end = resolve_history_period(
+                request.args.get("start"), request.args.get("end"),
+                now=datetime.fromisoformat(recorded["last_measured_at"].replace("Z", "+00:00")),
+            )
+            baseline, states = history_reader.fetch(user_id, selected_id, start, end)
+        except HistorySessionNotFound:
+            return history_error(404, "session_not_found", "저장된 측정 기록을 찾을 수 없습니다.")
+        except HistoryRequestError as error:
+            return history_error(400, "invalid_time_range", str(error))
+        except HistoryUnavailable:
+            return history_error(503, "history_unavailable", "저장된 기록을 불러올 수 없습니다.")
+        payload = {
+            "v": 1, "status": "success",
+            "stream": {"user_id": str(user_id), "session_id": str(selected_id)},
+            "period": {"start": utc_iso8601(start), "end": utc_iso8601(end)},
+            "states": states,
+        }
+        if baseline is not None:
+            payload["baseline"] = baseline
+        return checked_history_response(payload, STATE_HISTORY_VALIDATOR)
+
+    @app.get("/api/state/history/sessions/<session_id>/report")
+    @token_required
+    def get_recorded_session_report(user_id, session_id):
+        try:
+            selected_id = parse_session_id(session_id)
+        except HistoryRequestError as error:
+            return history_error(400, "invalid_session_id", str(error))
+        if request.args:
+            return history_error(400, "invalid_request", "지원하지 않는 query parameter입니다.")
+        try:
+            snapshots = session_report_reader.fetch(user_id, selected_id)
+            payload = build_session_report(user_id, selected_id, snapshots)
+        except SessionReportNotFound:
+            return history_error(404, "session_not_found", "저장된 측정 기록을 찾을 수 없습니다.")
+        except SessionReportUnavailable:
+            return history_error(503, "history_unavailable", "세션 보고서를 불러올 수 없습니다.")
+        except (KeyError, TypeError, ValueError):
+            log.warning("session report 계산에 사용할 수 없는 snapshot이 있습니다")
+            return history_error(500, "invalid_report_data", "세션 보고서를 만들 수 없습니다.")
+        return checked_history_response(payload, SESSION_REPORT_VALIDATOR)
+
     @app.post("/api/measurement/start")
     @token_required
     def start_measurement(user_id):
@@ -652,6 +790,38 @@ def create_app(
             "measurement": measurement.as_dict(),
             "already_stopped": already_stopped,
         })
+
+    @app.post("/api/feedback/demo")
+    @token_required
+    def demo_feedback(_user_id):
+        """Drive only the optional Nano while no measurement is active."""
+        payload = request.get_json(silent=True)
+        level = payload.get("level") if isinstance(payload, dict) else None
+        if level not in {"NORMAL", "NOTICE", "WARNING", "BREAK", "OFF"}:
+            return jsonify({
+                "v": 1,
+                "status": "error",
+                "error": {
+                    "code": "invalid_feedback_demo",
+                    "message": "지원하지 않는 시연 단계입니다.",
+                },
+            }), 400
+        with measurement_lock:
+            if sessions.active() is not None:
+                return jsonify({
+                    "v": 1,
+                    "status": "error",
+                    "error": {
+                        "code": "feedback_demo_unavailable",
+                        "message": "측정 중에는 피드백 시연을 사용할 수 없습니다.",
+                    },
+                }), 409
+            socketio.emit(
+                "feedback_device_demo",
+                {"v": 1, "level": level},
+                to=FEEDBACK_DEVICE_ROOM,
+            )
+        return jsonify({"v": 1, "status": "success", "level": level})
 
     @app.get("/api/report/weekly")
     @token_required
@@ -850,6 +1020,7 @@ def create_app(
                 if sample is None:
                     return
                 sample.update(calibration.relative_evidence(sample, now=payload["t"]))
+                debug_before = pipeline.debug_state() if debug_fusion else None
                 decision = pipeline.process_prepared(
                     payload,
                     sample,
@@ -864,6 +1035,51 @@ def create_app(
                     decision,
                     to=f"user:{measurement.user_id}",
                 )
+                if debug_before is not None:
+                    debug_after = pipeline.debug_state()
+                    pressure = list(sample.get("pressure") or [])
+                    occupied = len(pressure) == 4 and sum(pressure) >= OCCUPANCY_MIN
+                    remaining = (
+                        max(
+                            profile.fusion.reseat_stable_sec
+                            - debug_after.reseat_stable_sec,
+                            0.0,
+                        )
+                        if debug_after.reseat_stabilizing
+                        else 0.0
+                    )
+                    fusion_debug_log.info(
+                        "[fusion-debug] t=%.3f pressure=%s occupied=%s "
+                        "absence_grace=%s absence_sec=%.3f stabilization=%s "
+                        "stabilization_remaining=%.3f state=%s "
+                        "score_before=%d score_after=%d static_penalty=%.3f "
+                        "balance_penalty=%.3f static_recovery_delta=%.3f "
+                        "balance_recovery_delta=%.3f last_pressure=%s front_score=%d",
+                        payload["t"],
+                        pressure,
+                        occupied,
+                        debug_after.absence_candidate_sec > 0.0,
+                        debug_after.absence_candidate_sec,
+                        debug_after.reseat_stabilizing,
+                        remaining,
+                        decision["state"],
+                        score_integer(debug_before.load),
+                        decision["score"],
+                        debug_after.load.static_penalty,
+                        debug_after.load.balance_penalty,
+                        max(
+                            debug_before.load.static_penalty
+                            - debug_after.load.static_penalty,
+                            0.0,
+                        ),
+                        max(
+                            debug_before.load.balance_penalty
+                            - debug_after.load.balance_penalty,
+                            0.0,
+                        ),
+                        list(debug_after._last_pressure),
+                        decision["score"],
+                    )
                 if has_cross_validation_observer(measurement.user_id):
                     try:
                         socketio.emit(
@@ -906,12 +1122,27 @@ def create_app(
                             "user feedback 전송 실패 (%s)",
                             type(error).__name__,
                         )
+                # Logical BREAK may remain latched during a break, but an
+                # unoccupied chair must always make the physical device OFF.
+                if decision["state"] == "ABSENT":
+                    feedback_device_projector.reset()
                     with device_feedback_lock:
-                        latest_device_feedback["decision"] = feedback_decision
+                        was_active = latest_device_feedback["decision"] is not None
+                        latest_device_feedback["decision"] = None
+                    if was_active:
+                        emit_device_off()
+                elif feedback_decision is not None:
                     try:
+                        device_decision = feedback_device_projector.project(
+                            feedback_decision,
+                            decision,
+                            feedback_device_monotonic(),
+                        )
+                        with device_feedback_lock:
+                            latest_device_feedback["decision"] = device_decision
                         socketio.emit(
                             "feedback_device",
-                            feedback_decision,
+                            device_decision,
                             to=FEEDBACK_DEVICE_ROOM,
                         )
                     except Exception as error:  # noqa: BLE001
@@ -939,13 +1170,33 @@ def create_app(
     return app, socketio
 
 
-app, socketio = create_app()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="SOMA Backend")
+    parser.add_argument("--source-mode", choices=SOURCE_MODES, default=None,
+                        help="calibration sources (default: SOMA_SOURCE_MODE or all)")
+    parser.add_argument(
+        "--debug-fusion",
+        action="store_true",
+        help="Chair/Fusion score transitions without credentials",
+    )
+    _args = parser.parse_args()
+    _source_mode = _args.source_mode
+    _debug_fusion = _args.debug_fusion
+else:
+    _source_mode = None
+    _debug_fusion = False
+
+app, socketio = create_app(
+    source_mode=_source_mode,
+    debug_fusion=_debug_fusion,
+)
 
 
 if __name__ == "__main__":
     host = os.getenv("SERVER_HOST", "0.0.0.0")
     port = int(os.getenv("SERVER_PORT", "5000"))
     print(f"Project Soma backend: http://{host}:{port}")
+    print(f"Measurement source mode: {app.extensions['source_mode']}")
     try:
         socketio.run(app, host=host, port=port, allow_unsafe_werkzeug=True)
     finally:

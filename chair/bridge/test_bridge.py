@@ -11,6 +11,7 @@ from chair.bridge.bridge import (
     dispatch_sample,
     emit_sensor_data,
     format_monitor_line,
+    normalize_ir_distance,
     parse_line,
     raw_log_row,
 )
@@ -38,6 +39,18 @@ def test_raw_log_has_named_physical_channels_and_timestamp():
         "br": 404,
         "ir": 505,
     }
+
+
+@pytest.mark.parametrize(
+    ("raw_ir", "expected"),
+    [(128, 128), (-1, -1), (8190, 8190), (8191, -1), (9000, -1)],
+)
+def test_out_of_range_ir_is_invalid_for_payload_but_raw_value_remains_observable(
+    raw_ir, expected
+):
+    assert normalize_ir_distance(raw_ir) == expected
+    assert raw_log_row(1000.0, [1, 2, 3, 4], raw_ir)["ir"] == raw_ir
+    assert f"IR= {raw_ir}mm" in format_monitor_line([1, 2, 3, 4], raw_ir)
 
 
 def test_debug_emit_uses_sensor_event_without_exposing_authentication():

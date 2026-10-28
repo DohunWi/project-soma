@@ -2,6 +2,8 @@
 // index.html 과 signup.html 이 같은 클라이언트를 쓰도록 여기 한 곳에서 만듭니다.
 // ES module 이라 file:// 로 열면 import 가 막힙니다. http 서버로 띄우세요.
 import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
+import { createAuthenticatedFetch } from "./measurement_runtime.mjs";
+import { confirmationRedirectUrl } from "./auth_redirect.mjs";
 
 const SUPABASE_URL = "https://dzkionspeweesqwlrxex.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImR6a2lvbnNwZXdlZXNxd2xyeGV4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkzNzkzNjAsImV4cCI6MjA5NDk1NTM2MH0.VoYhfIg7h1PGpm72NYPTe3sXGqk0pt54k_UCsNcQxVI";
@@ -11,6 +13,8 @@ const PASSWORD_MIN_LENGTH = 8;
 export const MAIN_URL = "./index.html";
 export const LOGIN_URL = "./login.html";
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Backend ownership comes from token.sub; never send a client-selected user_id.
+export const authenticatedFetch = createAuthenticatedFetch(supabase.auth);
 
 // 이미 로그인돼 있으면 가입 화면을 보여줄 이유가 없습니다
 export async function redirectIfAuthenticated() {
@@ -29,7 +33,11 @@ export async function signup(email, password, confirmation) {
     }
     if (password !== confirmation) throw new Error("비밀번호가 일치하지 않습니다.");
 
-    const { data, error } = await supabase.auth.signUp({ email, password });
+    const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { emailRedirectTo: confirmationRedirectUrl() },
+    });
     if (error) throw error;
 
     // 이메일 인증이 꺼져 있으면 가입과 동시에 세션이 나옵니다
